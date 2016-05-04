@@ -1,0 +1,36 @@
+require 'test_helper'
+
+class MiniRacerTest < Minitest::Test
+  def test_that_it_has_a_version_number
+    refute_nil ::MiniRacer::VERSION
+  end
+
+  def test_it_can_eval_int
+    context = MiniRacer::Context.new
+    assert_equal 2, context.eval('1+1')
+  end
+
+  def test_it_can_eval_string
+    context = MiniRacer::Context.new
+    assert_equal "1+1", context.eval('"1+1"')
+  end
+
+  def test_it_returns_useful_errors
+    context = MiniRacer::Context.new
+    assert_raises do
+      context.eval('var x=function(){boom;}; x()')
+    end
+  end
+
+  def test_floats
+    context = MiniRacer::Context.new
+    assert_equal 1.2, context.eval('1.2')
+  end
+
+  def test_it_remembers_stuff_in_context
+    context = MiniRacer::Context.new
+    context.eval('var x = function(){return 22;}')
+    assert_equal 22, context.eval('x()')
+  end
+
+end
