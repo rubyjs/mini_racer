@@ -1,10 +1,28 @@
 #include <stdio.h>
 #include <ruby.h>
+#include <ruby/thread.h>
 #include <v8.h>
 #include <libplatform/libplatform.h>
 #include <ruby/encoding.h>
 
 using namespace v8;
+
+typedef struct {
+    Isolate* isolate;
+    Persistent<Context>* context;
+} ContextInfo;
+
+typedef struct {
+    bool parsed;
+    bool executed;
+    Persistent<Value>* value;
+} EvalResult;
+
+typedef struct {
+    ContextInfo* context_info;
+    Local<String>* eval;
+    EvalResult* result;
+} EvalParams;
 
 class ArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
  public:
@@ -19,7 +37,6 @@ class ArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
 
 Platform* current_platform = NULL;
 ArrayBufferAllocator* allocator = NULL;
-Isolate* isolate = NULL;
 
 static void init_v8() {
     if (current_platform == NULL) {
@@ -27,12 +44,6 @@ static void init_v8() {
 	current_platform = platform::CreateDefaultPlatform();
 	V8::InitializePlatform(current_platform);
 	V8::Initialize();
-	allocator = new ArrayBufferAllocator();
-
-	Isolate::CreateParams create_params;
-	create_params.array_buffer_allocator = allocator;
-	isolate = Isolate::New(create_params);
-
     }
 }
 
@@ -41,70 +52,145 @@ void shutdown_v8() {
 
 }
 
-static VALUE rb_context_eval(VALUE self, VALUE str) {
-    init_v8();
+void*
+nogvl_context_eval(void* arg) {
+    EvalParams* eval_params = (EvalParams*)arg;
+    EvalResult* result = eval_params->result;
 
-    Isolate::Scope isolate_scope(isolate);
-    HandleScope handle_scope(isolate);
-    Persistent<Context>* persistent_context;
+    Isolate::Scope isolate_scope(eval_params->context_info->isolate);
+    HandleScope handle_scope(eval_params->context_info->isolate);
 
-    Data_Get_Struct(self, Persistent<Context>, persistent_context);
-    Local<v8::Context> context = Local<Context>::New(isolate, *persistent_context);
-
+    Local<v8::Context> context = Local<Context>::New(eval_params->context_info->isolate,
+						     *eval_params->context_info->context);
     Context::Scope context_scope(context);
 
-    Local<String> eval = String::NewFromUtf8(isolate, RSTRING_PTR(str),
+    MaybeLocal<Script> parsed_script = Script::Compile(context, *eval_params->eval);
+    result->parsed = !parsed_script.IsEmpty();
+    result->executed = false;
+    result->value = NULL;
+
+    if (result->parsed) {
+	MaybeLocal<Value> maybe_value = parsed_script.ToLocalChecked()->Run(context);
+	result->executed = !maybe_value.IsEmpty();
+
+	if (result->executed) {
+	    Persistent<Value>* persistent = new Persistent<Value>();
+	    persistent->Reset(eval_params->context_info->isolate, maybe_value.ToLocalChecked());
+	    result->value = persistent;
+	}
+    }
+
+    return NULL;
+}
+
+static VALUE convert_v8_to_ruby(Local<Value> &value) {
+
+    if (value->IsNull() || value->IsUndefined()){
+	return Qnil;
+    }
+
+    if (value->IsInt32()) {
+     return INT2FIX(value->Int32Value());
+    }
+
+    if (value->IsNumber()) {
+      return rb_float_new(value->NumberValue());
+    }
+
+    Local<String> rstr = value->ToString();
+    return rb_enc_str_new(*v8::String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
+}
+
+static VALUE rb_context_eval(VALUE self, VALUE str) {
+    EvalParams eval_params;
+    EvalResult eval_result;
+    ContextInfo* context_info;
+    VALUE result;
+
+    Data_Get_Struct(self, ContextInfo, context_info);
+
+    Locker lock(context_info->isolate);
+    Isolate::Scope isolate_scope(context_info->isolate);
+    HandleScope handle_scope(context_info->isolate);
+
+    Local<String> eval = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(str),
 					      NewStringType::kNormal, (int)RSTRING_LEN(str)).ToLocalChecked();
 
-    Local<Script> script = Script::Compile(context, eval).ToLocalChecked();
+    eval_params.context_info = context_info;
+    eval_params.eval = &eval;
+    eval_params.result = &eval_result;
 
+    rb_thread_call_without_gvl(nogvl_context_eval, &eval_params, RUBY_UBF_IO, 0);
 
-    MaybeLocal<Value> initial_result = script->Run(context);
+    if (!eval_result.parsed) {
+	// exception report about what happened
+	rb_raise(rb_eStandardError, "Error Parsing JS");
+    }
 
-    if (initial_result.IsEmpty()) {
+    if (!eval_result.executed) {
 	// exception report about what happened
 	rb_raise(rb_eStandardError, "JavaScript Error");
     }
 
-    Local<Value> result = initial_result.ToLocalChecked();
+    Local<Value> tmp = Local<Value>::New(context_info->isolate, *eval_result.value);
+    //Local<String> rstr = tmp->ToString();
+    //result = rb_enc_str_new(*v8::String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
 
-    if (result->IsNull() || result->IsUndefined()){
-	return Qnil;
-    }
+    result = convert_v8_to_ruby(tmp);
 
-    if (result->IsInt32()) {
-	return INT2FIX(result->Int32Value());
-    }
+    eval_result.value->Reset();
+    delete eval_result.value;
 
-    if (result->IsNumber()) {
-	return rb_float_new(result->NumberValue());
-    }
-
-    Local<String> rstr = result->ToString();
-    return rb_enc_str_new(*v8::String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
+    return result;
 }
 
-void deallocate(void * context) {
-    Isolate::Scope isolate_scope(isolate);
-    HandleScope handle_scope(isolate);
+void deallocate(void * data) {
+    ContextInfo* context_info = (ContextInfo*)data;
+    {
+	Locker lock(context_info->isolate);
+	Isolate::Scope isolate_scope(context_info->isolate);
+	HandleScope handle_scope(context_info->isolate);
+	context_info->context->Reset();
+    }
 
-    Persistent<Context>* cast_context = context;
+    {
+	delete context_info->context;
+	// FIXME
+	//context_info->isolate->Dispose();
+    }
 
-    cast_context->Reset();
-    delete cast_context;
+    xfree(context_info);
+
 }
+
 
 VALUE allocate(VALUE klass) {
     init_v8();
 
-    Isolate::Scope isolate_scope(isolate);
-    HandleScope handle_scope(isolate);
-    Local<Context> context = Context::New(isolate);
+    ContextInfo* context_info = ALLOC(ContextInfo);
 
-    Persistent<Context>* persistent_context = new Persistent<Context>();
-    persistent_context->Reset(isolate, context);
+    allocator = new ArrayBufferAllocator();
+    Isolate::CreateParams create_params;
+    create_params.array_buffer_allocator = allocator;
+    context_info->isolate = Isolate::New(create_params);
 
-    return Data_Wrap_Struct(klass, NULL, deallocate, (void*)persistent_context);
+
+    Locker lock(context_info->isolate);
+    Isolate::Scope isolate_scope(context_info->isolate);
+    HandleScope handle_scope(context_info->isolate);
+    Local<Context> context = Context::New(context_info->isolate);
+
+    context_info->context = new Persistent<Context>();
+    context_info->context->Reset(context_info->isolate, context);
+
+    return Data_Wrap_Struct(klass, NULL, deallocate, (void*)context_info);
+}
+
+static VALUE
+rb_context_stop(VALUE self) {
+    ContextInfo* context_info;
+    Data_Get_Struct(self, ContextInfo, context_info);
+    V8::TerminateExecution(context_info->isolate);
 }
 
 static VALUE
@@ -121,6 +207,7 @@ extern "C" {
 	VALUE rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);
 	rb_define_method(rb_cContext, "eval", rb_context_eval, 1);
 	rb_define_method(rb_cContext, "initialize", rb_context_init, 0);
+	rb_define_method(rb_cContext, "stop", rb_context_stop, 0);
 	rb_define_alloc_func(rb_cContext, allocate);
     }
 

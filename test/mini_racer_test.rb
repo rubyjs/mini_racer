@@ -22,6 +22,24 @@ class MiniRacerTest < Minitest::Test
     end
   end
 
+  def test_it_can_stop
+    context = MiniRacer::Context.new
+    assert_raises do
+      Thread.new do
+        sleep 0.001
+        context.stop
+      end
+      context.eval('while(true){}')
+    end
+  end
+
+  def test_it_handles_malformed_js
+    context = MiniRacer::Context.new
+    assert_raises do
+      context.eval('I am not JavaScript {')
+    end
+  end
+
   def test_floats
     context = MiniRacer::Context.new
     assert_equal 1.2, context.eval('1.2')
