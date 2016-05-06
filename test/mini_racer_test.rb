@@ -33,6 +33,14 @@ class MiniRacerTest < Minitest::Test
     end
   end
 
+  def test_it_can_automatically_time_out_context
+    # 2 millisecs is a very short timeout but we don't want test running forever
+    context = MiniRacer::Context.new(timeout: 2)
+    assert_raises do
+      context.eval('while(true){}')
+    end
+  end
+
   def test_it_handles_malformed_js
     context = MiniRacer::Context.new
     assert_raises do

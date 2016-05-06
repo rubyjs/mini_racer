@@ -4,6 +4,7 @@
 #include <v8.h>
 #include <libplatform/libplatform.h>
 #include <ruby/encoding.h>
+#include <pthread.h>
 
 using namespace v8;
 
@@ -21,6 +22,7 @@ typedef struct {
 typedef struct {
     ContextInfo* context_info;
     Local<String>* eval;
+    long timeout;
     EvalResult* result;
 } EvalParams;
 
@@ -52,6 +54,14 @@ void shutdown_v8() {
 
 }
 
+void* breaker(void *d) {
+  EvalParams* data = (EvalParams*)d;
+  usleep(data->timeout*1000);
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+  V8::TerminateExecution(data->context_info->isolate);
+  return NULL;
+}
+
 void*
 nogvl_context_eval(void* arg) {
     EvalParams* eval_params = (EvalParams*)arg;
@@ -70,7 +80,20 @@ nogvl_context_eval(void* arg) {
     result->value = NULL;
 
     if (result->parsed) {
+
+	pthread_t breaker_thread;
+
+	if (eval_params->timeout > 0) {
+	   pthread_create(&breaker_thread, NULL, breaker, (void*)eval_params);
+	}
+
 	MaybeLocal<Value> maybe_value = parsed_script.ToLocalChecked()->Run(context);
+
+	if (eval_params->timeout > 0) {
+	    pthread_cancel(breaker_thread);
+	    pthread_join(breaker_thread, NULL);
+	}
+
 	result->executed = !maybe_value.IsEmpty();
 
 	if (result->executed) {
@@ -119,6 +142,11 @@ static VALUE rb_context_eval(VALUE self, VALUE str) {
     eval_params.context_info = context_info;
     eval_params.eval = &eval;
     eval_params.result = &eval_result;
+    eval_params.timeout = 0;
+    VALUE timeout = rb_iv_get(self, "@timeout");
+    if (timeout != Qnil) {
+	eval_params.timeout = NUM2LONG(timeout);
+    }
 
     rb_thread_call_without_gvl(nogvl_context_eval, &eval_params, RUBY_UBF_IO, 0);
 
@@ -133,9 +161,6 @@ static VALUE rb_context_eval(VALUE self, VALUE str) {
     }
 
     Local<Value> tmp = Local<Value>::New(context_info->isolate, *eval_result.value);
-    //Local<String> rstr = tmp->ToString();
-    //result = rb_enc_str_new(*v8::String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
-
     result = convert_v8_to_ruby(tmp);
 
     eval_result.value->Reset();
@@ -193,12 +218,6 @@ rb_context_stop(VALUE self) {
     V8::TerminateExecution(context_info->isolate);
 }
 
-static VALUE
-rb_context_init(VALUE self) {
-
-    return self;
-}
-
 extern "C" {
 
     void Init_mini_racer_extension ( void )
@@ -206,7 +225,6 @@ extern "C" {
 	VALUE rb_mMiniRacer = rb_define_module("MiniRacer");
 	VALUE rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);
 	rb_define_method(rb_cContext, "eval", rb_context_eval, 1);
-	rb_define_method(rb_cContext, "initialize", rb_context_init, 0);
 	rb_define_method(rb_cContext, "stop", rb_context_stop, 0);
 	rb_define_alloc_func(rb_cContext, allocate);
     }
