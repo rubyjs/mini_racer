@@ -169,6 +169,33 @@ static VALUE rb_context_eval(VALUE self, VALUE str) {
     return result;
 }
 
+static void RubyCallback(const v8::FunctionCallbackInfo<v8::Value>& args) {
+    HandleScope scope(args.GetIsolate());
+    printf("I WAS CALLED\n");
+}
+
+static VALUE rb_context_notify(VALUE self, VALUE str) {
+
+    ContextInfo* context_info;
+
+    Data_Get_Struct(self, ContextInfo, context_info);
+
+    Locker lock(context_info->isolate);
+    Isolate::Scope isolate_scope(context_info->isolate);
+    HandleScope handle_scope(context_info->isolate);
+
+    Local<String> v8_str = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(str),
+					      NewStringType::kNormal, (int)RSTRING_LEN(str)).ToLocalChecked();
+
+    Local<ObjectTemplate> global = ObjectTemplate::New(context_info->isolate);
+
+    global->Set(v8_str, FunctionTemplate::New(context_info->isolate, RubyCallback));
+
+    Context::New(context_info->isolate, NULL, global);
+
+    return Qnil;
+}
+
 void deallocate(void * data) {
     ContextInfo* context_info = (ContextInfo*)data;
     {
@@ -227,6 +254,8 @@ extern "C" {
 	rb_define_method(rb_cContext, "eval", rb_context_eval, 1);
 	rb_define_method(rb_cContext, "stop", rb_context_stop, 0);
 	rb_define_alloc_func(rb_cContext, allocate);
+
+	rb_define_private_method(rb_cContext, "notify", rb_context_notify, 1);
     }
 
 }

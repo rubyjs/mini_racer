@@ -59,4 +59,10 @@ class MiniRacerTest < Minitest::Test
     assert_equal 22, context.eval('x()')
   end
 
+  def test_can_attach_functions
+    context = MiniRacer::Context.new
+    context.attach("adder", proc{|a,b| a+b})
+    assert_equal 3, context.eval('adder(1,2)')
+  end
+
 end
