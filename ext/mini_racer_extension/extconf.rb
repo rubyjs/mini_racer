@@ -33,12 +33,17 @@ LIBV8_COMPATIBILITY = '~> 5.0.71.35.0'
 #
 # Libv8.configure_makefile
 
-NODE_PATH = "/home/sam/Source/libv8"
+#NODE_PATH = "/home/sam/Source/libv8"
+NODE_PATH = "/Users/sam/Source/libv8"
 NODE_INCLUDE = NODE_PATH + "/vendor/v8/include"
-NODE_LIBS = NODE_PATH + "/vendor/v8/out/x64.release/obj.target/tools/gyp"
+#NODE_LIBS = NODE_PATH + "/vendor/v8/out/x64.release/obj.target/tools/gyp"
+NODE_LIBS = NODE_PATH + "/vendor/v8/out/x64.release"
 
 $INCFLAGS.insert 0, "-I#{NODE_INCLUDE} -I#{NODE_PATH}/vendor/v8 "
 $LDFLAGS.insert 0, " #{NODE_LIBS}/libv8_base.a #{NODE_LIBS}/libv8_libbase.a #{NODE_LIBS}/libv8_snapshot.a #{NODE_LIBS}/libv8_libplatform.a "
+
+# new change to mavrick means we need to link with libstdc++ instead of libc++ (the new default)
+$LDFLAGS.insert 0, " -stdlib=libstdc++ " if RUBY_PLATFORM =~ /darwin/
 
 dir_config('v8')
 find_header('v8.h')

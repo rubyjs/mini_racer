@@ -22,7 +22,7 @@ typedef struct {
 typedef struct {
     ContextInfo* context_info;
     Local<String>* eval;
-    long timeout;
+    useconds_t timeout;
     EvalResult* result;
 } EvalParams;
 
@@ -145,7 +145,7 @@ static VALUE rb_context_eval(VALUE self, VALUE str) {
     eval_params.timeout = 0;
     VALUE timeout = rb_iv_get(self, "@timeout");
     if (timeout != Qnil) {
-	eval_params.timeout = NUM2LONG(timeout);
+	eval_params.timeout = (useconds_t)NUM2LONG(timeout);
     }
 
     rb_thread_call_without_gvl(nogvl_context_eval, &eval_params, RUBY_UBF_IO, 0);
@@ -243,6 +243,7 @@ rb_context_stop(VALUE self) {
     ContextInfo* context_info;
     Data_Get_Struct(self, ContextInfo, context_info);
     V8::TerminateExecution(context_info->isolate);
+    return Qnil;
 }
 
 extern "C" {
@@ -251,11 +252,11 @@ extern "C" {
     {
 	VALUE rb_mMiniRacer = rb_define_module("MiniRacer");
 	VALUE rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);
-	rb_define_method(rb_cContext, "eval", rb_context_eval, 1);
-	rb_define_method(rb_cContext, "stop", rb_context_stop, 0);
+	rb_define_method(rb_cContext, "eval",(VALUE(*)(...))&rb_context_eval, 1);
+	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
 	rb_define_alloc_func(rb_cContext, allocate);
 
-	rb_define_private_method(rb_cContext, "notify", rb_context_notify, 1);
+	rb_define_private_method(rb_cContext, "notify", (VALUE(*)(...))&rb_context_notify, 1);
     }
 
 }
