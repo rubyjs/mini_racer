@@ -8,3 +8,4 @@
 /spec/reports/
 /tmp/
 lib/mini_racer_extension.so
+*.bundle
