@@ -138,8 +138,7 @@ static VALUE convert_v8_to_ruby(Handle<Value> &value) {
 
 static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
     EscapableHandleScope scope(isolate);
-
-
+    Local<String> result = String::NewFromUtf8(isolate, "hello");
     return scope.Escape(result);
 }
 
@@ -211,9 +210,9 @@ gvl_ruby_callback(void* data) {
 	ruby_args[i] = convert_v8_to_ruby(value);
     }
 
-    //VALUE result = rb_funcall(callback, rb_intern("call"), length, ruby_args);
-    Handle<Value> result = convert_ruby_to_v8(args->GetIsolate(), result);
-    args.GetReturnValue().Set(result);
+    VALUE result = rb_funcall(callback, rb_intern("call"), length, ruby_args);
+    Handle<Value> v8_result = convert_ruby_to_v8(args->GetIsolate(), result);
+    args->GetReturnValue().Set(v8_result);
 
     if (length > 0) {
 	xfree(ruby_args);
