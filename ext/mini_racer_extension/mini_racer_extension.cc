@@ -8,9 +8,20 @@
 
 using namespace v8;
 
+class ArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
+ public:
+  virtual void* Allocate(size_t length) {
+    void* data = AllocateUninitialized(length);
+    return data == NULL ? data : memset(data, 0, length);
+  }
+  virtual void* AllocateUninitialized(size_t length) { return malloc(length); }
+  virtual void Free(void* data, size_t) { free(data); }
+};
+
 typedef struct {
     Isolate* isolate;
     Persistent<Context>* context;
+    ArrayBufferAllocator* allocator;
     Persistent<ObjectTemplate>* globals;
 } ContextInfo;
 
@@ -27,19 +38,14 @@ typedef struct {
     EvalResult* result;
 } EvalParams;
 
-class ArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
- public:
-  virtual void* Allocate(size_t length) {
-    void* data = AllocateUninitialized(length);
-    return data == NULL ? data : memset(data, 0, length);
-  }
-  virtual void* AllocateUninitialized(size_t length) { return malloc(length); }
-  virtual void Free(void* data, size_t) { free(data); }
-};
+typedef struct {
+    ContextInfo* context_info;
+    VALUE self;
+    VALUE name;
+} InvokeInfo;
 
 
 Platform* current_platform = NULL;
-ArrayBufferAllocator* allocator = NULL;
 
 static void init_v8() {
     if (current_platform == NULL) {
@@ -71,14 +77,19 @@ nogvl_context_eval(void* arg) {
     Isolate::Scope isolate_scope(eval_params->context_info->isolate);
     HandleScope handle_scope(eval_params->context_info->isolate);
 
-    Local<v8::Context> context = Local<Context>::New(eval_params->context_info->isolate,
-						     *eval_params->context_info->context);
+
+    //Local<Context> context = eval_params->context_info->context->Get(eval_params->context_info->isolate);
+
+    Local<Context> context = Context::New(eval_params->context_info->isolate, NULL,
+	 				  eval_params->context_info->globals->Get(eval_params->context_info->isolate));
+
     Context::Scope context_scope(context);
 
     MaybeLocal<Script> parsed_script = Script::Compile(context, *eval_params->eval);
     result->parsed = !parsed_script.IsEmpty();
     result->executed = false;
     result->value = NULL;
+
 
     if (result->parsed) {
 
@@ -107,7 +118,7 @@ nogvl_context_eval(void* arg) {
     return NULL;
 }
 
-static VALUE convert_v8_to_ruby(Local<Value> &value) {
+static VALUE convert_v8_to_ruby(Handle<Value> &value) {
 
     if (value->IsNull() || value->IsUndefined()){
 	return Qnil;
@@ -125,7 +136,15 @@ static VALUE convert_v8_to_ruby(Local<Value> &value) {
     return rb_enc_str_new(*v8::String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
 }
 
+static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
+    EscapableHandleScope scope(isolate);
+
+
+    return scope.Escape(result);
+}
+
 static VALUE rb_context_eval(VALUE self, VALUE str) {
+
     EvalParams eval_params;
     EvalResult eval_result;
     ContextInfo* context_info;
@@ -170,26 +189,68 @@ static VALUE rb_context_eval(VALUE self, VALUE str) {
     return result;
 }
 
-static void RubyCallback(const v8::FunctionCallbackInfo<v8::Value>& args) {
-    HandleScope scope(args.GetIsolate());
-    printf("I WAS CALLED\n");
+void*
+gvl_ruby_callback(void* data) {
+
+    FunctionCallbackInfo<Value>* args = (FunctionCallbackInfo<Value>*)data;
+
+    HandleScope scope(args->GetIsolate());
+
+    Local<External> external = args->Data();
+    VALUE* self_pointer = external->Value();
+    VALUE callback = rb_iv_get(*self_pointer, "@callback");
+
+    int length = args->Length();
+    VALUE* ruby_args;
+    if (length > 0) {
+	ruby_args = ALLOC_N(VALUE, length);
+    }
+
+    for (int i = 0; i < length; i++) {
+	Local<Value> value = args[i].This();
+	ruby_args[i] = convert_v8_to_ruby(value);
+    }
+
+    //VALUE result = rb_funcall(callback, rb_intern("call"), length, ruby_args);
+    Handle<Value> result = convert_ruby_to_v8(args->GetIsolate(), result);
+    args.GetReturnValue().Set(result);
+
+    if (length > 0) {
+	xfree(ruby_args);
+    }
+
+    return Qnil;
 }
 
-static VALUE rb_context_notify(VALUE self, VALUE str) {
+static void ruby_callback(const FunctionCallbackInfo<Value>& args) {
+   rb_thread_call_with_gvl(gvl_ruby_callback, &args);
+}
+
+
+static VALUE rb_external_function_notify_v8(VALUE self) {
 
     ContextInfo* context_info;
+    InvokeInfo* invoke_info;
 
-    Data_Get_Struct(self, ContextInfo, context_info);
+    VALUE parent = rb_iv_get(self, "@parent");
+    VALUE name = rb_iv_get(self, "@name");
+
+    Data_Get_Struct(parent, ContextInfo, context_info);
 
     Locker lock(context_info->isolate);
     Isolate::Scope isolate_scope(context_info->isolate);
     HandleScope handle_scope(context_info->isolate);
 
-    Local<String> v8_str = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(str),
-					      NewStringType::kNormal, (int)RSTRING_LEN(str)).ToLocalChecked();
+    Local<String> v8_str = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(name),
+					      NewStringType::kNormal, (int)RSTRING_LEN(name)).ToLocalChecked();
 
 
-    context_info->globals->Set(v8_str, FunctionTemplate::New(context_info->isolate, RubyCallback));
+    VALUE* self_copy;
+    Data_Get_Struct(self, VALUE, self_copy);
+    *self_copy = self;
+
+    Local<ObjectTemplate> globals = context_info->globals->Get(context_info->isolate);
+    globals->Set(v8_str, FunctionTemplate::New(context_info->isolate, ruby_callback, External::New(context_info->isolate, self_copy)));
 
     return Qnil;
 }
@@ -205,12 +266,24 @@ void deallocate(void * data) {
 
     {
 	delete context_info->context;
-	// FIXME
+    }
+
+    {
+	//TODO: SEGFAULT
 	//context_info->isolate->Dispose();
     }
 
+    delete context_info->allocator;
     xfree(context_info);
+}
 
+VALUE deallocate_external_function(void * data) {
+    xfree(data);
+}
+
+VALUE allocate_external_function(VALUE klass) {
+    VALUE* self = ALLOC(VALUE);
+    return Data_Wrap_Struct(klass, NULL, deallocate_external_function, (void*)self);
 }
 
 
@@ -219,9 +292,10 @@ VALUE allocate(VALUE klass) {
 
     ContextInfo* context_info = ALLOC(ContextInfo);
 
-    allocator = new ArrayBufferAllocator();
+    context_info->allocator = new ArrayBufferAllocator();
+
     Isolate::CreateParams create_params;
-    create_params.array_buffer_allocator = allocator;
+    create_params.array_buffer_allocator = context_info->allocator;
     context_info->isolate = Isolate::New(create_params);
 
     Locker lock(context_info->isolate);
@@ -229,16 +303,13 @@ VALUE allocate(VALUE klass) {
     HandleScope handle_scope(context_info->isolate);
 
     Local<ObjectTemplate> globals = ObjectTemplate::New(context_info->isolate);
-    Persistent<ObjectTemplate> persistent_globals;
-    Persistent<Context> persistent_context;
+    context_info->globals = new Persistent<ObjectTemplate>();
+    context_info->globals->Reset(context_info->isolate, globals);
 
     Local<Context> context = Context::New(context_info->isolate, NULL, globals);
 
-    persistent_globals.Reset(context_info->isolate, globals);
-    persistent_context.Reset(context_info->isolate, context);
-
-    context_info->globals = &persistent_globals;
-    context_info->context = &persistent_context;
+    context_info->context = new Persistent<Context>();
+    context_info->context->Reset(context_info->isolate, context);
 
     return Data_Wrap_Struct(klass, NULL, deallocate, (void*)context_info);
 }
@@ -257,11 +328,13 @@ extern "C" {
     {
 	VALUE rb_mMiniRacer = rb_define_module("MiniRacer");
 	VALUE rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);
+	VALUE rb_cExternalFunction = rb_define_class_under(rb_cContext, "ExternalFunction", rb_cObject);
 	rb_define_method(rb_cContext, "eval",(VALUE(*)(...))&rb_context_eval, 1);
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
 	rb_define_alloc_func(rb_cContext, allocate);
 
-	rb_define_private_method(rb_cContext, "notify", (VALUE(*)(...))&rb_context_notify, 1);
+	rb_define_private_method(rb_cExternalFunction, "notify_v8", (VALUE(*)(...))&rb_external_function_notify_v8, 0);
+	rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);
     }
 
 }
