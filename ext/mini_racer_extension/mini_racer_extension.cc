@@ -11,6 +11,7 @@ using namespace v8;
 typedef struct {
     Isolate* isolate;
     Persistent<Context>* context;
+    Persistent<ObjectTemplate>* globals;
 } ContextInfo;
 
 typedef struct {
@@ -187,11 +188,8 @@ static VALUE rb_context_notify(VALUE self, VALUE str) {
     Local<String> v8_str = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(str),
 					      NewStringType::kNormal, (int)RSTRING_LEN(str)).ToLocalChecked();
 
-    Local<ObjectTemplate> global = ObjectTemplate::New(context_info->isolate);
 
-    global->Set(v8_str, FunctionTemplate::New(context_info->isolate, RubyCallback));
-
-    Context::New(context_info->isolate, NULL, global);
+    context_info->globals->Set(v8_str, FunctionTemplate::New(context_info->isolate, RubyCallback));
 
     return Qnil;
 }
@@ -226,14 +224,21 @@ VALUE allocate(VALUE klass) {
     create_params.array_buffer_allocator = allocator;
     context_info->isolate = Isolate::New(create_params);
 
-
     Locker lock(context_info->isolate);
     Isolate::Scope isolate_scope(context_info->isolate);
     HandleScope handle_scope(context_info->isolate);
-    Local<Context> context = Context::New(context_info->isolate);
 
-    context_info->context = new Persistent<Context>();
-    context_info->context->Reset(context_info->isolate, context);
+    Local<ObjectTemplate> globals = ObjectTemplate::New(context_info->isolate);
+    Persistent<ObjectTemplate> persistent_globals;
+    Persistent<Context> persistent_context;
+
+    Local<Context> context = Context::New(context_info->isolate, NULL, globals);
+
+    persistent_globals.Reset(context_info->isolate, globals);
+    persistent_context.Reset(context_info->isolate, context);
+
+    context_info->globals = &persistent_globals;
+    context_info->context = &persistent_context;
 
     return Data_Wrap_Struct(klass, NULL, deallocate, (void*)context_info);
 }
