@@ -19,7 +19,7 @@ puts context.eval 'adder(20,22)'
 # => 42
 ```
 
-### Attach global Ruby function to your JavaScript context
+### Attach global Ruby functions to your JavaScript context
 
 You can attach one or many ruby proc that can be accessed via JavaScript
 
