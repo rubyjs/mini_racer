@@ -14,8 +14,9 @@ if CONFIG['warnflags']
   CONFIG['warnflags'].gsub!('-Wdeclaration-after-statement', '')
   CONFIG['warnflags'].gsub!('-Wimplicit-function-declaration', '')
 end
+
 if enable_config('debug')
-  $CFLAGS += " -O0 -ggdb3"
+  CONFIG['debugflags'] << ' -ggdb3 -O0'
 end
 
 LIBV8_COMPATIBILITY = '~> 5.0.71.35.0'
@@ -33,8 +34,8 @@ LIBV8_COMPATIBILITY = '~> 5.0.71.35.0'
 #
 # Libv8.configure_makefile
 
-NODE_PATH = "/home/sam/Source/libv8"
-#NODE_PATH = "/Users/sam/Source/libv8"
+#NODE_PATH = "/home/sam/Source/libv8"
+NODE_PATH = "/Users/sam/Source/libv8"
 #
 NODE_LIBS = NODE_PATH + "/vendor/v8/out/x64.release"
 NODE_INCLUDE = NODE_PATH + "/vendor/v8/include"

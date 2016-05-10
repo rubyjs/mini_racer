@@ -38,13 +38,6 @@ typedef struct {
     EvalResult* result;
 } EvalParams;
 
-typedef struct {
-    ContextInfo* context_info;
-    VALUE self;
-    VALUE name;
-} InvokeInfo;
-
-
 Platform* current_platform = NULL;
 
 static void init_v8() {
@@ -78,10 +71,10 @@ nogvl_context_eval(void* arg) {
     HandleScope handle_scope(eval_params->context_info->isolate);
 
 
-    //Local<Context> context = eval_params->context_info->context->Get(eval_params->context_info->isolate);
+    Local<Context> context = eval_params->context_info->context->Get(eval_params->context_info->isolate);
 
-    Local<Context> context = Context::New(eval_params->context_info->isolate, NULL,
-	 				  eval_params->context_info->globals->Get(eval_params->context_info->isolate));
+    // Local<Context> context = Context::New(eval_params->context_info->isolate, NULL,
+//	 				  eval_params->context_info->globals->Get(eval_params->context_info->isolate));
 
     Context::Scope context_scope(context);
 
@@ -195,8 +188,10 @@ gvl_ruby_callback(void* data) {
 
     HandleScope scope(args->GetIsolate());
 
-    Local<External> external = args->Data();
-    VALUE* self_pointer = external->Value();
+    Handle<External> external = Handle<External>::Cast(args->Data());
+
+
+    VALUE* self_pointer = (VALUE*)(external->Value());
     VALUE callback = rb_iv_get(*self_pointer, "@callback");
 
     int length = args->Length();
@@ -205,10 +200,13 @@ gvl_ruby_callback(void* data) {
 	ruby_args = ALLOC_N(VALUE, length);
     }
 
+
     for (int i = 0; i < length; i++) {
-	Local<Value> value = args[i].This();
+	Local<Value> value = ((*args)[i]).As<Value>();
 	ruby_args[i] = convert_v8_to_ruby(value);
     }
+
+    return NULL;
 
     VALUE result = rb_funcall(callback, rb_intern("call"), length, ruby_args);
     Handle<Value> v8_result = convert_ruby_to_v8(args->GetIsolate(), result);
@@ -218,18 +216,17 @@ gvl_ruby_callback(void* data) {
 	xfree(ruby_args);
     }
 
-    return Qnil;
+    return NULL;
 }
 
 static void ruby_callback(const FunctionCallbackInfo<Value>& args) {
-   rb_thread_call_with_gvl(gvl_ruby_callback, &args);
+   rb_thread_call_with_gvl(gvl_ruby_callback, (void*)(&args));
 }
 
 
 static VALUE rb_external_function_notify_v8(VALUE self) {
 
     ContextInfo* context_info;
-    InvokeInfo* invoke_info;
 
     VALUE parent = rb_iv_get(self, "@parent");
     VALUE name = rb_iv_get(self, "@name");
@@ -249,7 +246,8 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
     *self_copy = self;
 
     Local<ObjectTemplate> globals = context_info->globals->Get(context_info->isolate);
-    globals->Set(v8_str, FunctionTemplate::New(context_info->isolate, ruby_callback, External::New(context_info->isolate, self_copy)));
+    Local<Value> external = External::New(context_info->isolate, self_copy);
+    globals->Set(v8_str, FunctionTemplate::New(context_info->isolate, ruby_callback, external));
 
     return Qnil;
 }
@@ -260,15 +258,21 @@ void deallocate(void * data) {
 	Locker lock(context_info->isolate);
 	Isolate::Scope isolate_scope(context_info->isolate);
 	HandleScope handle_scope(context_info->isolate);
-	context_info->context->Reset();
+
+
+	Local<Context> context = context_info->context->Get(context_info->isolate);
+	Local<String> source = String::NewFromUtf8(context_info->isolate, "for(;;);");
+ 	MaybeLocal<Script> script = Script::Compile(context, source);
+ 	//V8::TerminateExecution(context_info->isolate);
+ 	//script.ToLocalChecked()->Run();
     }
 
     {
+	context_info->context->Reset();
 	delete context_info->context;
     }
 
     {
-	//TODO: SEGFAULT
 	//context_info->isolate->Dispose();
     }
 
@@ -276,7 +280,7 @@ void deallocate(void * data) {
     xfree(context_info);
 }
 
-VALUE deallocate_external_function(void * data) {
+void deallocate_external_function(void * data) {
     xfree(data);
 }
 
