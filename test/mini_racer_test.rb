@@ -68,4 +68,9 @@ class MiniRacerTest < Minitest::Test
     assert_equal 3, context.eval('adder(1,2)')
   end
 
+  def test_es6_arrow_functions
+    context = MiniRacer::Context.new
+    assert_equal 42, context.eval('a=()=>42; a();')
+  end
+
 end
