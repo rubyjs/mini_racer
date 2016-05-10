@@ -22,7 +22,6 @@ typedef struct {
     Isolate* isolate;
     Persistent<Context>* context;
     ArrayBufferAllocator* allocator;
-    Persistent<ObjectTemplate>* globals;
 } ContextInfo;
 
 typedef struct {
@@ -49,11 +48,6 @@ static void init_v8() {
     }
 }
 
-
-void shutdown_v8() {
-
-}
-
 void* breaker(void *d) {
   EvalParams* data = (EvalParams*)d;
   usleep(data->timeout*1000);
@@ -70,11 +64,9 @@ nogvl_context_eval(void* arg) {
     Isolate::Scope isolate_scope(eval_params->context_info->isolate);
     HandleScope handle_scope(eval_params->context_info->isolate);
 
+    TryCatch trycatch(eval_params->context_info->isolate);
 
     Local<Context> context = eval_params->context_info->context->Get(eval_params->context_info->isolate);
-
-    // Local<Context> context = Context::New(eval_params->context_info->isolate, NULL,
-//	 				  eval_params->context_info->globals->Get(eval_params->context_info->isolate));
 
     Context::Scope context_scope(context);
 
@@ -83,6 +75,15 @@ nogvl_context_eval(void* arg) {
     result->executed = false;
     result->value = NULL;
 
+    if (!result->parsed) {
+	Local<Value> exception = trycatch.Exception();
+	String::Utf8Value exception_str(exception);
+
+	Local<Value> stack = trycatch.StackTrace();
+	String::Utf8Value stack_str(stack);
+
+	printf("\nCan not Parse Exception: %s\n%s\n\n", *exception_str , *stack_str);
+    }
 
     if (result->parsed) {
 
@@ -100,6 +101,16 @@ nogvl_context_eval(void* arg) {
 	}
 
 	result->executed = !maybe_value.IsEmpty();
+
+	if (!result->executed) {
+	    Local<Value> exception = trycatch.Exception();
+	    String::Utf8Value exception_str(exception);
+
+	    Local<Value> stack = trycatch.StackTrace();
+	    String::Utf8Value stack_str(stack);
+
+	    printf("\nRuntime err: %s\n%s\n\n", *exception_str , *stack_str);
+	}
 
 	if (result->executed) {
 	    Persistent<Value>* persistent = new Persistent<Value>();
@@ -131,8 +142,40 @@ static VALUE convert_v8_to_ruby(Handle<Value> &value) {
 
 static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
     EscapableHandleScope scope(isolate);
-    Local<String> result = String::NewFromUtf8(isolate, "hello");
-    return scope.Escape(result);
+
+    switch (TYPE(value)) {
+    case T_FIXNUM:
+	return scope.Escape(Integer::New(isolate, NUM2INT(value)));
+    case T_FLOAT:
+	return scope.Escape(Number::New(isolate, NUM2DBL(value)));
+    case T_STRING:
+	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, (int)RSTRING_LEN(value)).ToLocalChecked());
+    case T_NIL:
+	return scope.Escape(Null(isolate));
+    case T_TRUE:
+	return scope.Escape(True(isolate));
+    case T_FALSE:
+	return scope.Escape(False(isolate));
+    case T_DATA:
+    case T_OBJECT:
+    case T_CLASS:
+    case T_ICLASS:
+    case T_MODULE:
+    case T_REGEXP:
+    case T_MATCH:
+    case T_ARRAY:
+    case T_HASH:
+    case T_STRUCT:
+    case T_BIGNUM:
+    case T_FILE:
+    case T_SYMBOL:
+    case T_UNDEF:
+    case T_NODE:
+    default:
+     // rb_warn("unknown conversion to V8 for: %s", RSTRING_PTR(rb_inspect(value)));
+      return scope.Escape(String::NewFromUtf8(isolate, "Undefined Conversion"));
+    }
+
 }
 
 static VALUE rb_context_eval(VALUE self, VALUE str) {
@@ -144,24 +187,28 @@ static VALUE rb_context_eval(VALUE self, VALUE str) {
 
     Data_Get_Struct(self, ContextInfo, context_info);
 
-    Locker lock(context_info->isolate);
-    Isolate::Scope isolate_scope(context_info->isolate);
-    HandleScope handle_scope(context_info->isolate);
+    {
+	Locker lock(context_info->isolate);
+	Isolate::Scope isolate_scope(context_info->isolate);
+	HandleScope handle_scope(context_info->isolate);
 
-    Local<String> eval = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(str),
-					      NewStringType::kNormal, (int)RSTRING_LEN(str)).ToLocalChecked();
+	Local<String> eval = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(str),
+						  NewStringType::kNormal, (int)RSTRING_LEN(str)).ToLocalChecked();
 
-    eval_params.context_info = context_info;
-    eval_params.eval = &eval;
-    eval_params.result = &eval_result;
-    eval_params.timeout = 0;
-    VALUE timeout = rb_iv_get(self, "@timeout");
-    if (timeout != Qnil) {
-	eval_params.timeout = (useconds_t)NUM2LONG(timeout);
+	eval_params.context_info = context_info;
+	eval_params.eval = &eval;
+	eval_params.result = &eval_result;
+	eval_params.timeout = 0;
+	VALUE timeout = rb_iv_get(self, "@timeout");
+	if (timeout != Qnil) {
+	    eval_params.timeout = (useconds_t)NUM2LONG(timeout);
+	}
+
+	rb_thread_call_without_gvl(nogvl_context_eval, &eval_params, RUBY_UBF_IO, 0);
     }
 
-    rb_thread_call_without_gvl(nogvl_context_eval, &eval_params, RUBY_UBF_IO, 0);
-
+    // NOTE: this is very important, we can not do an rb_raise from within
+    // a v8 scope, if we do the scope is never cleaned up properly and we leak
     if (!eval_result.parsed) {
 	// exception report about what happened
 	rb_raise(rb_eStandardError, "Error Parsing JS");
@@ -172,11 +219,18 @@ static VALUE rb_context_eval(VALUE self, VALUE str) {
 	rb_raise(rb_eStandardError, "JavaScript Error");
     }
 
-    Local<Value> tmp = Local<Value>::New(context_info->isolate, *eval_result.value);
-    result = convert_v8_to_ruby(tmp);
+    // New scope for return value
+    {
+	Locker lock(context_info->isolate);
+	Isolate::Scope isolate_scope(context_info->isolate);
+	HandleScope handle_scope(context_info->isolate);
 
-    eval_result.value->Reset();
-    delete eval_result.value;
+	Local<Value> tmp = Local<Value>::New(context_info->isolate, *eval_result.value);
+	result = convert_v8_to_ruby(tmp);
+
+	eval_result.value->Reset();
+	delete eval_result.value;
+    }
 
     return result;
 }
@@ -185,32 +239,36 @@ void*
 gvl_ruby_callback(void* data) {
 
     FunctionCallbackInfo<Value>* args = (FunctionCallbackInfo<Value>*)data;
-
-    HandleScope scope(args->GetIsolate());
-
-    Handle<External> external = Handle<External>::Cast(args->Data());
-
-
-    VALUE* self_pointer = (VALUE*)(external->Value());
-    VALUE callback = rb_iv_get(*self_pointer, "@callback");
-
-    int length = args->Length();
     VALUE* ruby_args;
-    if (length > 0) {
-	ruby_args = ALLOC_N(VALUE, length);
+    int length = args->Length();
+    VALUE callback;
+
+    {
+	HandleScope scope(args->GetIsolate());
+	Handle<External> external = Handle<External>::Cast(args->Data());
+
+	VALUE* self_pointer = (VALUE*)(external->Value());
+	callback = rb_iv_get(*self_pointer, "@callback");
+
+	if (length > 0) {
+	    ruby_args = ALLOC_N(VALUE, length);
+	}
+
+
+	for (int i = 0; i < length; i++) {
+	    Local<Value> value = ((*args)[i]).As<Value>();
+	    ruby_args[i] = convert_v8_to_ruby(value);
+	}
     }
 
+    // may raise exception stay clear of handle scope
+    VALUE result = rb_funcall2(callback, rb_intern("call"), length, ruby_args);
 
-    for (int i = 0; i < length; i++) {
-	Local<Value> value = ((*args)[i]).As<Value>();
-	ruby_args[i] = convert_v8_to_ruby(value);
+    {
+	HandleScope scope(args->GetIsolate());
+	Handle<Value> v8_result = convert_ruby_to_v8(args->GetIsolate(), result);
+	args->GetReturnValue().Set(v8_result);
     }
-
-    return NULL;
-
-    VALUE result = rb_funcall(callback, rb_intern("call"), length, ruby_args);
-    Handle<Value> v8_result = convert_ruby_to_v8(args->GetIsolate(), result);
-    args->GetReturnValue().Set(v8_result);
 
     if (length > 0) {
 	xfree(ruby_args);
@@ -220,7 +278,7 @@ gvl_ruby_callback(void* data) {
 }
 
 static void ruby_callback(const FunctionCallbackInfo<Value>& args) {
-   rb_thread_call_with_gvl(gvl_ruby_callback, (void*)(&args));
+    rb_thread_call_with_gvl(gvl_ruby_callback, (void*)(&args));
 }
 
 
@@ -237,17 +295,20 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
     Isolate::Scope isolate_scope(context_info->isolate);
     HandleScope handle_scope(context_info->isolate);
 
+    Local<Context> context = context_info->context->Get(context_info->isolate);
+    Context::Scope context_scope(context);
+
     Local<String> v8_str = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(name),
 					      NewStringType::kNormal, (int)RSTRING_LEN(name)).ToLocalChecked();
 
 
+    // copy self so we can access from v8 external
     VALUE* self_copy;
     Data_Get_Struct(self, VALUE, self_copy);
     *self_copy = self;
 
-    Local<ObjectTemplate> globals = context_info->globals->Get(context_info->isolate);
     Local<Value> external = External::New(context_info->isolate, self_copy);
-    globals->Set(v8_str, FunctionTemplate::New(context_info->isolate, ruby_callback, external));
+    context->Global()->Set(v8_str, FunctionTemplate::New(context_info->isolate, ruby_callback, external)->GetFunction());
 
     return Qnil;
 }
@@ -256,15 +317,6 @@ void deallocate(void * data) {
     ContextInfo* context_info = (ContextInfo*)data;
     {
 	Locker lock(context_info->isolate);
-	Isolate::Scope isolate_scope(context_info->isolate);
-	HandleScope handle_scope(context_info->isolate);
-
-
-	Local<Context> context = context_info->context->Get(context_info->isolate);
-	Local<String> source = String::NewFromUtf8(context_info->isolate, "for(;;);");
- 	MaybeLocal<Script> script = Script::Compile(context, source);
- 	//V8::TerminateExecution(context_info->isolate);
- 	//script.ToLocalChecked()->Run();
     }
 
     {
@@ -273,7 +325,7 @@ void deallocate(void * data) {
     }
 
     {
-	//context_info->isolate->Dispose();
+	context_info->isolate->Dispose();
     }
 
     delete context_info->allocator;
@@ -305,11 +357,7 @@ VALUE allocate(VALUE klass) {
     Isolate::Scope isolate_scope(context_info->isolate);
     HandleScope handle_scope(context_info->isolate);
 
-    Local<ObjectTemplate> globals = ObjectTemplate::New(context_info->isolate);
-    context_info->globals = new Persistent<ObjectTemplate>();
-    context_info->globals->Reset(context_info->isolate, globals);
-
-    Local<Context> context = Context::New(context_info->isolate, NULL, globals);
+    Local<Context> context = Context::New(context_info->isolate);
 
     context_info->context = new Persistent<Context>();
     context_info->context->Reset(context_info->isolate, context);

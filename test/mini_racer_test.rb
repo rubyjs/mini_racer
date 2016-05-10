@@ -1,6 +1,7 @@
 require 'test_helper'
 
 class MiniRacerTest < Minitest::Test
+
   def test_that_it_has_a_version_number
     refute_nil ::MiniRacer::VERSION
   end
@@ -20,6 +21,8 @@ class MiniRacerTest < Minitest::Test
     assert_raises do
       context.eval('var x=function(){boom;}; x()')
     end
+    # context should not be dead
+    assert_equal 2, context.eval('1+1')
   end
 
   def test_it_can_stop
