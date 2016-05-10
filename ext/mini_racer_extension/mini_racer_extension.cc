@@ -235,6 +235,24 @@ static VALUE rb_context_eval(VALUE self, VALUE str) {
     return result;
 }
 
+typedef struct {
+    VALUE callback;
+    int length;
+    VALUE* args;
+} protected_callback_data;
+
+VALUE protected_callback(VALUE rdata) {
+    protected_callback_data* data = (protected_callback_data*)rdata;
+    VALUE result;
+
+    if (data->length > 0) {
+	result = rb_funcall2(data->callback, rb_intern("call"), data->length, data->args);
+    } else {
+	result = rb_funcall(data->callback, rb_intern("call"), 0);
+    }
+    return result;
+}
+
 void*
 gvl_ruby_callback(void* data) {
 
@@ -242,6 +260,7 @@ gvl_ruby_callback(void* data) {
     VALUE* ruby_args;
     int length = args->Length();
     VALUE callback;
+    VALUE result;
 
     {
 	HandleScope scope(args->GetIsolate());
@@ -262,9 +281,18 @@ gvl_ruby_callback(void* data) {
     }
 
     // may raise exception stay clear of handle scope
-    VALUE result = rb_funcall2(callback, rb_intern("call"), length, ruby_args);
+    int state = 0;
+    protected_callback_data callback_data;
+    callback_data.length = length;
+    callback_data.callback = callback;
+    callback_data.args = ruby_args;
 
-    {
+    result = rb_protect(protected_callback, (VALUE)(&callback_data), &state);
+
+    if(state) {
+	args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Ruby exception"));
+    }
+    else {
 	HandleScope scope(args->GetIsolate());
 	Handle<Value> v8_result = convert_ruby_to_v8(args->GetIsolate(), result);
 	args->GetReturnValue().Set(v8_result);

@@ -73,4 +73,14 @@ class MiniRacerTest < Minitest::Test
     assert_equal 42, context.eval('a=()=>42; a();')
   end
 
+  def test_attached_exceptions
+
+    context = MiniRacer::Context.new
+    context.attach("adder", proc{raise StandardError})
+    assert_raises do
+      context.eval('adder(1,2,3)')
+    end
+
+  end
+
 end
