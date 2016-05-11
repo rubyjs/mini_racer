@@ -151,12 +151,30 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
     if (value->IsArray()) {
       VALUE rb_array = rb_ary_new();
       Local<Array> arr = Local<Array>::Cast(value);
-      for(int i=0; i<arr->Length(); i++) {
+      for(uint32_t i=0; i < arr->Length(); i++) {
 	  Local<Value> element = arr->Get(i);
 	  VALUE rb_elem = convert_v8_to_ruby(isolate, element);
           rb_ary_push(rb_array, rb_elem);
       }
       return rb_array;
+    }
+
+    if (value->IsObject()) {
+	VALUE rb_hash = rb_hash_new();
+	Local<Context> context = Context::New(isolate);
+	Local<Object> object = value->ToObject();
+	MaybeLocal<Array> maybe_props = object->GetOwnPropertyNames(context);
+	if (!maybe_props.IsEmpty()) {
+	    Local<Array> props = maybe_props.ToLocalChecked();
+	    for(uint32_t i=0; i < props->Length(); i++) {
+	     Local<Value> key = props->Get(i);
+	     VALUE rb_key = convert_v8_to_ruby(isolate, key);
+	     Local<Value> value = object->Get(key);
+	     VALUE rb_value = convert_v8_to_ruby(isolate, value);
+	     rb_hash_aset(rb_hash, rb_key, rb_value);
+	    }
+	}
+	return rb_hash;
     }
 
     Local<String> rstr = value->ToString();
@@ -273,7 +291,8 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 		rb_raise(rb_eJavaScriptError, "Unknown JavaScript Error during execution");
 	    }
 	} else {
-	    rb_raise(CLASS_OF(ruby_exception), RSTRING_PTR(rb_funcall(ruby_exception, rb_intern("to_s"), 0)));
+            VALUE rb_str = rb_funcall(ruby_exception, rb_intern("to_s"), 0);
+	    rb_raise(CLASS_OF(ruby_exception), RSTRING_PTR(rb_str));
 	}
     }
 
@@ -356,8 +375,8 @@ gvl_ruby_callback(void* data) {
     callback_data.args = ruby_args;
     callback_data.failed = false;
 
-    result = rb_rescue(protected_callback, (VALUE)(&callback_data),
-			rescue_callback, (VALUE)(&callback_data));
+    result = rb_rescue((VALUE(*)(...))&protected_callback, (VALUE)(&callback_data),
+			(VALUE(*)(...))&rescue_callback, (VALUE)(&callback_data));
 
     if(callback_data.failed) {
 	VALUE parent = rb_iv_get(self, "@parent");

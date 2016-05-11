@@ -22,6 +22,12 @@ class MiniRacerTest < Minitest::Test
     assert_equal [1,"two"], context.eval('[1,"two"]')
   end
 
+  def test_object
+    context = MiniRacer::Context.new
+    # remember JavaScript is quirky {"1" : 1} magically turns to {1: 1} cause magic
+    assert_equal({1 => 2, "two" => "two"}, context.eval('a={"1" : 2, "two" : "two"}'))
+  end
+
   def test_it_returns_runtime_error
     context = MiniRacer::Context.new
     exp = nil
