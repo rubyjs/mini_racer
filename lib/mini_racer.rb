@@ -41,9 +41,13 @@ module MiniRacer
     def initialize(options = nil)
       @functions = {}
       @lock = Mutex.new
+      @timeout = nil
+      @current_exception = nil
+
       if options
         @timeout = options[:timeout]
       end
+
     end
 
     def eval(str)
