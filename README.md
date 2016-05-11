@@ -2,7 +2,7 @@
 
 Minimal, modern embedded V8 for Ruby.
 
-MiniRacer provides a minimal complete bridge to the V8 JavaScript engine from Ruby.
+MiniRacer provides a minimal two way bridge between the V8 JavaScript engine and Ruby.
 
 It was created as an alternative to the excellent [therubyracer](https://github.com/cowboyd/therubyracer). Unlike therubyracer, mini_racer only implements a minimal (yet complete) bridge. This reduces the surface area making upgrading v8 much simpler and exahustive testing simpler.
 
@@ -57,6 +57,26 @@ context.eval 'while(true){}'
 # => exception is raised
 ```
 
+### Threadsafe
+
+Context usage is threadsafe
+
+```ruby
+
+context = MiniRacer::Context.new
+context.eval('counter=0; plus=()=>counter++;')
+
+(1..10).map do
+  Thread.new {
+    context.eval("plus()")
+  }
+end.each(&:join)
+
+puts context.eval("counter")
+# => 10
+
+```
+
 ## Installation
 
 **Currently gem is in alpha development and can not be installed until libv8 is released**
@@ -75,10 +95,63 @@ Or install it yourself as:
 
     $ gem install mini_racer
 
-## Usage
+## Similar Projects
+
+###therubyracer
+
+- https://github.com/cowboyd/therubyracer
+
+- Most comprehensive bridge available
+
+- Provides the ability to "eval" JavaScript
+
+- Provides the ability to invoke Ruby code from JavaScript
+
+- Hold refrences to JavaScript objects and methods in your Ruby code
+
+- Hold refrences to Ruby objects and methods in JavaScript code
+
+- Uses libv8, so installation is fast
+
+- Supports timeouts for JavaScript execution
+
+- Does not release global interpreter lock, so performance is constrained to a single thread
+
+- Currently (May 2016) only supports v8 version 3.16.14 (Released approx November 2013), plans to upgrade by July 2016
 
 
-## Development
+###v8eval
+
+- https://github.com/sony/v8eval
+
+- Provides the ability to "eval" JavaScript using the latest V8 engine
+
+- Does not depend on the [libv8](https://github.com/cowboyd/libv8) gem, installation can take 10-20 mins as V8 needs to be downloaded and compiled.
+
+- Does not release global interpreter lock when executing JavaScript
+
+- Does not allow you to invoke Ruby code from JavaScript
+
+- Multi runtime support due to SWIG based bindings
+
+- Supports a JavaScript debugger
+
+- Does not support timeouts for JavaScript execution
+
+
+###therubyrhino
+
+- https://github.com/cowboyd/therubyrhino
+
+- API compatible with therubyracer
+
+- Uses Mozilla's Rhino engine https://github.com/mozilla/rhino
+
+- Requires JRuby
+
+- Support for timeouts for JavaScript execution
+
+- Concurrent cause .... JRuby
 
 
 ## Contributing
