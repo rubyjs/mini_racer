@@ -6,14 +6,20 @@ class MiniRacerTest < Minitest::Test
     refute_nil ::MiniRacer::VERSION
   end
 
-  def test_it_can_eval_int
+  def test_types
     context = MiniRacer::Context.new
-    assert_equal 2, context.eval('1+1')
+    assert_equal 2, context.eval('2')
+    assert_equal "two", context.eval('"two"')
+    assert_equal 2.1, context.eval('2.1')
+    assert_equal true, context.eval('true')
+    assert_equal false, context.eval('false')
+    assert_equal nil, context.eval('null')
+    assert_equal nil, context.eval('undefined')
   end
 
-  def test_it_can_eval_string
+  def test_array
     context = MiniRacer::Context.new
-    assert_equal "1+1", context.eval('"1+1"')
+    assert_equal [1,"two"], context.eval('[1,"two"]')
   end
 
   def test_it_returns_runtime_error
@@ -68,11 +74,6 @@ class MiniRacerTest < Minitest::Test
     assert_raises do
       context.eval('I am not JavaScript {')
     end
-  end
-
-  def test_floats
-    context = MiniRacer::Context.new
-    assert_equal 1.2, context.eval('1.2')
   end
 
   def test_it_remembers_stuff_in_context

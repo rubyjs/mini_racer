@@ -124,7 +124,9 @@ nogvl_context_eval(void* arg) {
     return NULL;
 }
 
-static VALUE convert_v8_to_ruby(Handle<Value> &value) {
+static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
+
+    HandleScope scope(isolate);
 
     if (value->IsNull() || value->IsUndefined()){
 	return Qnil;
@@ -136,6 +138,25 @@ static VALUE convert_v8_to_ruby(Handle<Value> &value) {
 
     if (value->IsNumber()) {
       return rb_float_new(value->NumberValue());
+    }
+
+    if (value->IsTrue()) {
+      return Qtrue;
+    }
+
+    if (value->IsFalse()) {
+      return Qfalse;
+    }
+
+    if (value->IsArray()) {
+      VALUE rb_array = rb_ary_new();
+      Local<Array> arr = Local<Array>::Cast(value);
+      for(int i=0; i<arr->Length(); i++) {
+	  Local<Value> element = arr->Get(i);
+	  VALUE rb_elem = convert_v8_to_ruby(isolate, element);
+          rb_ary_push(rb_array, rb_elem);
+      }
+      return rb_array;
     }
 
     Local<String> rstr = value->ToString();
@@ -216,14 +237,14 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 
 	if (eval_result.message != NULL) {
 	    Local<Value> tmp = Local<Value>::New(context_info->isolate, *eval_result.message);
-	    message = convert_v8_to_ruby(tmp);
+	    message = convert_v8_to_ruby(context_info->isolate, tmp);
 	    eval_result.message->Reset();
 	    delete eval_result.message;
 	}
 
 	if (eval_result.backtrace != NULL) {
 	    Local<Value> tmp = Local<Value>::New(context_info->isolate, *eval_result.backtrace);
-	    backtrace = convert_v8_to_ruby(tmp);
+	    backtrace = convert_v8_to_ruby(context_info->isolate, tmp);
 	    eval_result.backtrace->Reset();
 	    delete eval_result.backtrace;
 	}
@@ -263,7 +284,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 	HandleScope handle_scope(context_info->isolate);
 
 	Local<Value> tmp = Local<Value>::New(context_info->isolate, *eval_result.value);
-	result = convert_v8_to_ruby(tmp);
+	result = convert_v8_to_ruby(context_info->isolate, tmp);
 
 	eval_result.value->Reset();
 	delete eval_result.value;
@@ -324,7 +345,7 @@ gvl_ruby_callback(void* data) {
 
 	for (int i = 0; i < length; i++) {
 	    Local<Value> value = ((*args)[i]).As<Value>();
-	    ruby_args[i] = convert_v8_to_ruby(value);
+	    ruby_args[i] = convert_v8_to_ruby(args->GetIsolate(), value);
 	}
     }
 
