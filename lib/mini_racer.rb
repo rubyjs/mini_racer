@@ -1,5 +1,6 @@
 require "mini_racer/version"
 require "mini_racer_extension"
+require "thread"
 
 module MiniRacer
   class JavaScriptError < StandardError; end
@@ -18,14 +19,23 @@ module MiniRacer
 
     def initialize(options = nil)
       @functions = {}
+      @lock = Mutex.new
       if options
         @timeout = options[:timeout]
       end
     end
 
+    def eval(str)
+      @lock.synchronize do
+        eval_unsafe(str)
+      end
+    end
+
     def attach(name, callback)
-      external = ExternalFunction.new(name, callback, self)
-      @functions[name.to_s] = external
+      @lock.synchronize do
+        external = ExternalFunction.new(name, callback, self)
+        @functions[name.to_s] = external
+      end
     end
 
   end

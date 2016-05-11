@@ -73,14 +73,25 @@ class MiniRacerTest < Minitest::Test
     assert_equal 42, context.eval('adder=(x,y)=>x+y; adder(21,21);')
   end
 
-  def test_attached_exceptions
+  def test_concurrent_access
+    context = MiniRacer::Context.new
+    context.eval('counter=0; plus=()=>counter++;')
 
+    (1..10).map do
+      Thread.new {
+        context.eval("plus()")
+      }
+    end.each(&:join)
+
+    assert_equal 10, context.eval("counter")
+  end
+
+  def test_attached_exceptions
     context = MiniRacer::Context.new
     context.attach("adder", proc{raise StandardError})
     assert_raises do
       context.eval('adder(1,2,3)')
     end
-
   end
 
 end

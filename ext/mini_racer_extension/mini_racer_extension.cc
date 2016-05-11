@@ -178,7 +178,7 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
 
 }
 
-static VALUE rb_context_eval(VALUE self, VALUE str) {
+static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 
     EvalParams eval_params;
     EvalResult eval_result;
@@ -408,10 +408,10 @@ extern "C" {
 	VALUE rb_mMiniRacer = rb_define_module("MiniRacer");
 	VALUE rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);
 	VALUE rb_cExternalFunction = rb_define_class_under(rb_cContext, "ExternalFunction", rb_cObject);
-	rb_define_method(rb_cContext, "eval",(VALUE(*)(...))&rb_context_eval, 1);
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
 	rb_define_alloc_func(rb_cContext, allocate);
 
+	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 1);
 	rb_define_private_method(rb_cExternalFunction, "notify_v8", (VALUE(*)(...))&rb_external_function_notify_v8, 0);
 	rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);
     }
