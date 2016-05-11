@@ -16,24 +16,43 @@ class MiniRacerTest < Minitest::Test
     assert_equal "1+1", context.eval('"1+1"')
   end
 
-  def test_it_returns_useful_errors
+  def test_it_returns_runtime_error
     context = MiniRacer::Context.new
-    assert_raises do
-      context.eval('var x=function(){boom;}; x()')
+    exp = nil
+
+    begin
+      context.eval('var foo=function(){boom;}; foo()')
+    rescue => e
+      exp = e
     end
+
+    assert_equal MiniRacer::JavaScriptError, exp.class
+
+    assert_match(/boom/, exp.message)
+    assert_match(/foo/, exp.backtrace[0])
+    assert_match(/mini_racer/, exp.backtrace[2])
+
     # context should not be dead
     assert_equal 2, context.eval('1+1')
   end
 
   def test_it_can_stop
     context = MiniRacer::Context.new
-    assert_raises do
+    exp = nil
+
+    begin
       Thread.new do
         sleep 0.001
         context.stop
       end
       context.eval('while(true){}')
+    rescue => e
+      exp = e
     end
+
+    assert_equal MiniRacer::JavaScriptError, exp.class
+    assert_match(/terminated/, exp.message)
+
   end
 
   def test_it_can_automatically_time_out_context

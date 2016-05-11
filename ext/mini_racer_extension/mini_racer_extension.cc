@@ -28,6 +28,8 @@ typedef struct {
     bool parsed;
     bool executed;
     Persistent<Value>* value;
+    Persistent<Value>* message;
+    Persistent<Value>* backtrace;
 } EvalResult;
 
 typedef struct {
@@ -38,6 +40,7 @@ typedef struct {
 } EvalParams;
 
 Platform* current_platform = NULL;
+static VALUE rb_eJavaScriptError;
 
 static void init_v8() {
     if (current_platform == NULL) {
@@ -60,13 +63,13 @@ void*
 nogvl_context_eval(void* arg) {
     EvalParams* eval_params = (EvalParams*)arg;
     EvalResult* result = eval_params->result;
+    Isolate* isolate = eval_params->context_info->isolate;
+    Isolate::Scope isolate_scope(isolate);
+    HandleScope handle_scope(isolate);
 
-    Isolate::Scope isolate_scope(eval_params->context_info->isolate);
-    HandleScope handle_scope(eval_params->context_info->isolate);
+    TryCatch trycatch(isolate);
 
-    TryCatch trycatch(eval_params->context_info->isolate);
-
-    Local<Context> context = eval_params->context_info->context->Get(eval_params->context_info->isolate);
+    Local<Context> context = eval_params->context_info->context->Get(isolate);
 
     Context::Scope context_scope(context);
 
@@ -76,16 +79,9 @@ nogvl_context_eval(void* arg) {
     result->value = NULL;
 
     if (!result->parsed) {
-	Local<Value> exception = trycatch.Exception();
-	String::Utf8Value exception_str(exception);
-
-	Local<Value> stack = trycatch.StackTrace();
-	String::Utf8Value stack_str(stack);
-
-	printf("\nCan not Parse Exception: %s\n%s\n\n", *exception_str , *stack_str);
-    }
-
-    if (result->parsed) {
+	result->message = new Persistent<Value>();
+	result->message->Reset(isolate, trycatch.Exception());
+    } else {
 
 	pthread_t breaker_thread;
 
@@ -103,18 +99,24 @@ nogvl_context_eval(void* arg) {
 	result->executed = !maybe_value.IsEmpty();
 
 	if (!result->executed) {
-	    Local<Value> exception = trycatch.Exception();
-	    String::Utf8Value exception_str(exception);
+	    if (trycatch.HasCaught()) {
+		if (!trycatch.Exception()->IsNull()) {
+		    result->message = new Persistent<Value>();
+		    result->message->Reset(isolate, trycatch.Exception()->ToString());
+		} else if(trycatch.HasTerminated()) {
+		    result->message = new Persistent<Value>();
+		    Local<String> tmp = String::NewFromUtf8(isolate, "JavaScript was terminated (either by timeout or explicitly)");
+		    result->message->Reset(isolate, tmp);
+		}
 
-	    Local<Value> stack = trycatch.StackTrace();
-	    String::Utf8Value stack_str(stack);
-
-	    printf("\nRuntime err: %s\n%s\n\n", *exception_str , *stack_str);
-	}
-
-	if (result->executed) {
+		if (!trycatch.StackTrace().IsEmpty()) {
+		    result->backtrace = new Persistent<Value>();
+		    result->backtrace->Reset(isolate, trycatch.StackTrace()->ToString());
+		}
+	    }
+	} else {
 	    Persistent<Value>* persistent = new Persistent<Value>();
-	    persistent->Reset(eval_params->context_info->isolate, maybe_value.ToLocalChecked());
+	    persistent->Reset(isolate, maybe_value.ToLocalChecked());
 	    result->value = persistent;
 	}
     }
@@ -185,6 +187,9 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
     ContextInfo* context_info;
     VALUE result;
 
+    VALUE message = Qnil;
+    VALUE backtrace = Qnil;
+
     Data_Get_Struct(self, ContextInfo, context_info);
 
     {
@@ -204,19 +209,45 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 	    eval_params.timeout = (useconds_t)NUM2LONG(timeout);
 	}
 
+	eval_result.message = NULL;
+	eval_result.backtrace = NULL;
+
 	rb_thread_call_without_gvl(nogvl_context_eval, &eval_params, RUBY_UBF_IO, 0);
+
+	if (eval_result.message != NULL) {
+	    Local<Value> tmp = Local<Value>::New(context_info->isolate, *eval_result.message);
+	    message = convert_v8_to_ruby(tmp);
+	    eval_result.message->Reset();
+	    delete eval_result.message;
+	}
+
+	if (eval_result.backtrace != NULL) {
+	    Local<Value> tmp = Local<Value>::New(context_info->isolate, *eval_result.backtrace);
+	    backtrace = convert_v8_to_ruby(tmp);
+	    eval_result.backtrace->Reset();
+	    delete eval_result.backtrace;
+	}
     }
 
     // NOTE: this is very important, we can not do an rb_raise from within
     // a v8 scope, if we do the scope is never cleaned up properly and we leak
     if (!eval_result.parsed) {
-	// exception report about what happened
-	rb_raise(rb_eStandardError, "Error Parsing JS");
+	if(TYPE(message) == T_STRING) {
+	    rb_raise(rb_eJavaScriptError, "%s", RSTRING_PTR(message));
+	} else {
+	    rb_raise(rb_eJavaScriptError, "Unknown JavaScript Error during parse");
+	}
     }
 
     if (!eval_result.executed) {
 	// exception report about what happened
-	rb_raise(rb_eStandardError, "JavaScript Error");
+	if(TYPE(message) == T_STRING && TYPE(backtrace) == T_STRING) {
+	    rb_raise(rb_eJavaScriptError, "%s/n%s", RSTRING_PTR(message), RSTRING_PTR(backtrace));
+	} else if(TYPE(message) == T_STRING) {
+	    rb_raise(rb_eJavaScriptError, "%s", RSTRING_PTR(message));
+	} else {
+	    rb_raise(rb_eJavaScriptError, "Unknown JavaScript Error during execution");
+	}
     }
 
     // New scope for return value
@@ -407,6 +438,7 @@ extern "C" {
     {
 	VALUE rb_mMiniRacer = rb_define_module("MiniRacer");
 	VALUE rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);
+	rb_eJavaScriptError = rb_define_class_under(rb_mMiniRacer, "JavaScriptError", rb_eStandardError);
 	VALUE rb_cExternalFunction = rb_define_class_under(rb_cContext, "ExternalFunction", rb_cObject);
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
 	rb_define_alloc_func(rb_cContext, allocate);

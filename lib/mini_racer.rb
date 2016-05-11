@@ -3,7 +3,28 @@ require "mini_racer_extension"
 require "thread"
 
 module MiniRacer
-  class JavaScriptError < StandardError; end
+  class JavaScriptError < StandardError
+    def initialize(message)
+      message, js_backtrace = message.split("\n", 2)
+      if js_backtrace && !js_backtrace.empty?
+        @js_backtrace = js_backtrace.split("\n")
+        @js_backtrace.map!{|f| "JavaScript #{f.strip}"}
+      end
+
+      super(message)
+    end
+
+    def backtrace
+      val = super
+      return unless val
+      if @js_backtrace
+        @js_backtrace + val
+      else
+        val
+      end
+    end
+
+  end
 
   # eval is defined in the C class
   class Context
