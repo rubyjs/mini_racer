@@ -240,13 +240,19 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
     }
 
     if (!eval_result.executed) {
-	// exception report about what happened
-	if(TYPE(message) == T_STRING && TYPE(backtrace) == T_STRING) {
-	    rb_raise(rb_eJavaScriptError, "%s/n%s", RSTRING_PTR(message), RSTRING_PTR(backtrace));
-	} else if(TYPE(message) == T_STRING) {
-	    rb_raise(rb_eJavaScriptError, "%s", RSTRING_PTR(message));
+
+	VALUE ruby_exception = rb_iv_get(self, "@current_exception");
+	if (ruby_exception == Qnil) {
+	    // exception report about what happened
+	    if(TYPE(message) == T_STRING && TYPE(backtrace) == T_STRING) {
+		rb_raise(rb_eJavaScriptError, "%s/n%s", RSTRING_PTR(message), RSTRING_PTR(backtrace));
+	    } else if(TYPE(message) == T_STRING) {
+		rb_raise(rb_eJavaScriptError, "%s", RSTRING_PTR(message));
+	    } else {
+		rb_raise(rb_eJavaScriptError, "Unknown JavaScript Error during execution");
+	    }
 	} else {
-	    rb_raise(rb_eJavaScriptError, "Unknown JavaScript Error during execution");
+	    rb_raise(CLASS_OF(ruby_exception), RSTRING_PTR(rb_funcall(ruby_exception, rb_intern("to_s"), 0)));
 	}
     }
 
@@ -270,8 +276,10 @@ typedef struct {
     VALUE callback;
     int length;
     VALUE* args;
+    bool failed;
 } protected_callback_data;
 
+static
 VALUE protected_callback(VALUE rdata) {
     protected_callback_data* data = (protected_callback_data*)rdata;
     VALUE result;
@@ -284,6 +292,13 @@ VALUE protected_callback(VALUE rdata) {
     return result;
 }
 
+static
+VALUE rescue_callback(VALUE rdata, VALUE exception) {
+    protected_callback_data* data = (protected_callback_data*)rdata;
+    data->failed = true;
+    return exception;
+}
+
 void*
 gvl_ruby_callback(void* data) {
 
@@ -292,13 +307,15 @@ gvl_ruby_callback(void* data) {
     int length = args->Length();
     VALUE callback;
     VALUE result;
+    VALUE self;
 
     {
 	HandleScope scope(args->GetIsolate());
 	Handle<External> external = Handle<External>::Cast(args->Data());
 
 	VALUE* self_pointer = (VALUE*)(external->Value());
-	callback = rb_iv_get(*self_pointer, "@callback");
+	self = *self_pointer;
+	callback = rb_iv_get(self, "@callback");
 
 	if (length > 0) {
 	    ruby_args = ALLOC_N(VALUE, length);
@@ -312,15 +329,18 @@ gvl_ruby_callback(void* data) {
     }
 
     // may raise exception stay clear of handle scope
-    int state = 0;
     protected_callback_data callback_data;
     callback_data.length = length;
     callback_data.callback = callback;
     callback_data.args = ruby_args;
+    callback_data.failed = false;
 
-    result = rb_protect(protected_callback, (VALUE)(&callback_data), &state);
+    result = rb_rescue(protected_callback, (VALUE)(&callback_data),
+			rescue_callback, (VALUE)(&callback_data));
 
-    if(state) {
+    if(callback_data.failed) {
+	VALUE parent = rb_iv_get(self, "@parent");
+	rb_iv_set(parent, "@current_exception", result);
 	args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Ruby exception"));
     }
     else {

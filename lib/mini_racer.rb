@@ -48,6 +48,7 @@ module MiniRacer
 
     def eval(str)
       @lock.synchronize do
+        @current_exception = nil
         eval_unsafe(str)
       end
     end

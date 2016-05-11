@@ -105,11 +105,25 @@ class MiniRacerTest < Minitest::Test
     assert_equal 10, context.eval("counter")
   end
 
+  class FooError < StandardError
+    def initialize(message)
+      super(message)
+    end
+  end
+
   def test_attached_exceptions
     context = MiniRacer::Context.new
-    context.attach("adder", proc{raise StandardError})
+    context.attach("adder", proc{ raise FooError, "I like foos" })
     assert_raises do
-      context.eval('adder(1,2,3)')
+      begin
+raise FooError, "I like foos"
+        context.eval('adder()')
+      rescue => e
+        assert_equal FooError, e.class
+        assert_match( /I like foos/, e.message)
+        # TODO backtrace splicing so js frames are injected
+        raise
+      end
     end
   end
 
