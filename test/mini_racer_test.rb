@@ -75,6 +75,11 @@ class MiniRacerTest < Minitest::Test
     end
   end
 
+  def test_returns_javascript_function
+    context = MiniRacer::Context.new
+    assert_equal MiniRacer::JavaScriptFunction, context.eval("a = function(){}").class
+  end
+
   def test_it_handles_malformed_js
     context = MiniRacer::Context.new
     assert_raises MiniRacer::ParseError do

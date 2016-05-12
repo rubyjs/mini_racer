@@ -43,6 +43,7 @@ typedef struct {
 static VALUE rb_eScriptTerminatedError;
 static VALUE rb_eParseError;
 static VALUE rb_eScriptRuntimeError;
+static VALUE rb_cJavaScriptFunction;
 
 static Platform* current_platform = NULL;
 
@@ -163,6 +164,10 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
           rb_ary_push(rb_array, rb_elem);
       }
       return rb_array;
+    }
+
+    if (value->IsFunction()){
+	return rb_funcall(rb_cJavaScriptFunction, rb_intern("new"), 0);
     }
 
     if (value->IsObject()) {
@@ -510,6 +515,7 @@ extern "C" {
 	rb_eScriptTerminatedError = rb_define_class_under(rb_mMiniRacer, "ScriptTerminatedError", rb_eEvalError);
 	rb_eParseError = rb_define_class_under(rb_mMiniRacer, "ParseError", rb_eEvalError);
 	rb_eScriptRuntimeError = rb_define_class_under(rb_mMiniRacer, "RuntimeError", rb_eEvalError);
+	rb_cJavaScriptFunction = rb_define_class_under(rb_mMiniRacer, "JavaScriptFunction", rb_cObject);
 
 	VALUE rb_cExternalFunction = rb_define_class_under(rb_cContext, "ExternalFunction", rb_cObject);
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);

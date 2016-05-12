@@ -32,6 +32,13 @@ module MiniRacer
 
   end
 
+  # helper class returned
+  class JavaScriptFunction
+    def to_s
+      "JavaScript Function"
+    end
+  end
+
   # eval is defined in the C class
   class Context
 
