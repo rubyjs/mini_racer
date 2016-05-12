@@ -6,6 +6,8 @@ MiniRacer provides a minimal two way bridge between the V8 JavaScript engine and
 
 It was created as an alternative to the excellent [therubyracer](https://github.com/cowboyd/therubyracer). Unlike therubyracer, mini_racer only implements a minimal bridge. This reduces the surface area making upgrading v8 much simpler and exahustive testing simpler.
 
+MiniRacer has an adapter for [execjs](https://github.com/sstephenson/execjs) so it can be used directly with Rails projects to minify assets, run babel or compile CoffeeScript.
+
 ## Features
 
 ### Simple eval for JavaScript
@@ -77,6 +79,34 @@ puts context.eval("counter")
 
 ```
 
+## Performance
+
+The `bench` folder contains benchmark.
+
+### Benchmark minification of Discourse application.js (both minified and unminified)
+
+MiniRacer version 0.1
+therubyracer version 0.12.2
+
+```
+$ ruby bench_uglify.rb
+Benching with MiniRacer
+MiniRacer minify discourse_app.js 13813.36ms
+MiniRacer minify discourse_app_minified.js 18271.19ms
+MiniRacer minify discourse_app.js twice (2 threads) 13587.21ms
+```
+
+```
+Benching with therubyracer
+MiniRacer minify discourse_app.js 151467.164ms
+MiniRacer minify discourse_app_minified.js 158172.097ms
+MiniRacer minify discourse_app.js twice (2 threads) - DOES NOT FINISH
+```
+
+The huge performance disparity (MiniRacer is 10x faster) is due to MiniRacer running latest version of V8. In July 2016 there is a queued upgrade to therubyracer which should bring some of the perf inline.
+
+Note how the global interpreter lock release leads to 2 threads doing the same work taking the same wall time as 1 thread.
+
 ## Installation
 
 **Currently gem is in alpha development and can not be installed until libv8 is released**
@@ -109,6 +139,7 @@ Or install it yourself as:
 - Supports timeouts for JavaScript execution
 - Does not release global interpreter lock, so performance is constrained to a single thread
 - Currently (May 2016) only supports v8 version 3.16.14 (Released approx November 2013), plans to upgrade by July 2016
+- Supports execjs
 
 
 ###v8eval
@@ -121,6 +152,7 @@ Or install it yourself as:
 - Multi runtime support due to SWIG based bindings
 - Supports a JavaScript debugger
 - Does not support timeouts for JavaScript execution
+- No support for execjs (can not be used with Rails uglifier and coffeescript gems)
 
 
 ###therubyrhino
@@ -131,6 +163,7 @@ Or install it yourself as:
 - Requires JRuby
 - Support for timeouts for JavaScript execution
 - Concurrent cause .... JRuby
+- Supports execjs
 
 
 ## Contributing
