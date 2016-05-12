@@ -38,7 +38,7 @@ class MiniRacerTest < Minitest::Test
       exp = e
     end
 
-    assert_equal MiniRacer::JavaScriptError, exp.class
+    assert_equal MiniRacer::RuntimeError, exp.class
 
     assert_match(/boom/, exp.message)
     assert_match(/foo/, exp.backtrace[0])
@@ -62,7 +62,7 @@ class MiniRacerTest < Minitest::Test
       exp = e
     end
 
-    assert_equal MiniRacer::JavaScriptError, exp.class
+    assert_equal MiniRacer::ScriptTerminatedError, exp.class
     assert_match(/terminated/, exp.message)
 
   end
@@ -77,7 +77,7 @@ class MiniRacerTest < Minitest::Test
 
   def test_it_handles_malformed_js
     context = MiniRacer::Context.new
-    assert_raises do
+    assert_raises MiniRacer::ParseError do
       context.eval('I am not JavaScript {')
     end
   end

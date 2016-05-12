@@ -3,7 +3,13 @@ require "mini_racer_extension"
 require "thread"
 
 module MiniRacer
-  class JavaScriptError < StandardError
+
+  class EvalError < StandardError; end
+
+  class ScriptTerminatedError < EvalError; end
+  class ParseError < EvalError; end
+
+  class RuntimeError < EvalError
     def initialize(message)
       message, js_backtrace = message.split("\n", 2)
       if js_backtrace && !js_backtrace.empty?

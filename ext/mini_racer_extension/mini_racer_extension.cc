@@ -27,6 +27,7 @@ typedef struct {
 typedef struct {
     bool parsed;
     bool executed;
+    bool terminated;
     Persistent<Value>* value;
     Persistent<Value>* message;
     Persistent<Value>* backtrace;
@@ -39,8 +40,11 @@ typedef struct {
     EvalResult* result;
 } EvalParams;
 
-Platform* current_platform = NULL;
-static VALUE rb_eJavaScriptError;
+static VALUE rb_eScriptTerminatedError;
+static VALUE rb_eParseError;
+static VALUE rb_eScriptRuntimeError;
+
+static Platform* current_platform = NULL;
 
 static void init_v8() {
     if (current_platform == NULL) {
@@ -76,6 +80,7 @@ nogvl_context_eval(void* arg) {
     MaybeLocal<Script> parsed_script = Script::Compile(context, *eval_params->eval);
     result->parsed = !parsed_script.IsEmpty();
     result->executed = false;
+    result->terminated = false;
     result->value = NULL;
 
     if (!result->parsed) {
@@ -104,6 +109,7 @@ nogvl_context_eval(void* arg) {
 		    result->message = new Persistent<Value>();
 		    result->message->Reset(isolate, trycatch.Exception()->ToString());
 		} else if(trycatch.HasTerminated()) {
+		    result->terminated = true;
 		    result->message = new Persistent<Value>();
 		    Local<String> tmp = String::NewFromUtf8(isolate, "JavaScript was terminated (either by timeout or explicitly)");
 		    result->message->Reset(isolate, tmp);
@@ -272,9 +278,9 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
     // a v8 scope, if we do the scope is never cleaned up properly and we leak
     if (!eval_result.parsed) {
 	if(TYPE(message) == T_STRING) {
-	    rb_raise(rb_eJavaScriptError, "%s", RSTRING_PTR(message));
+	    rb_raise(rb_eParseError, "%s", RSTRING_PTR(message));
 	} else {
-	    rb_raise(rb_eJavaScriptError, "Unknown JavaScript Error during parse");
+	    rb_raise(rb_eParseError, "Unknown JavaScript Error during parse");
 	}
     }
 
@@ -282,13 +288,14 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 
 	VALUE ruby_exception = rb_iv_get(self, "@current_exception");
 	if (ruby_exception == Qnil) {
+	    ruby_exception = eval_result.terminated ? rb_eScriptTerminatedError : rb_eScriptRuntimeError;
 	    // exception report about what happened
 	    if(TYPE(message) == T_STRING && TYPE(backtrace) == T_STRING) {
-		rb_raise(rb_eJavaScriptError, "%s/n%s", RSTRING_PTR(message), RSTRING_PTR(backtrace));
+		rb_raise(ruby_exception, "%s/n%s", RSTRING_PTR(message), RSTRING_PTR(backtrace));
 	    } else if(TYPE(message) == T_STRING) {
-		rb_raise(rb_eJavaScriptError, "%s", RSTRING_PTR(message));
+		rb_raise(ruby_exception, "%s", RSTRING_PTR(message));
 	    } else {
-		rb_raise(rb_eJavaScriptError, "Unknown JavaScript Error during execution");
+		rb_raise(ruby_exception, "Unknown JavaScript Error during execution");
 	    }
 	} else {
             VALUE rb_str = rb_funcall(ruby_exception, rb_intern("to_s"), 0);
@@ -498,7 +505,12 @@ extern "C" {
     {
 	VALUE rb_mMiniRacer = rb_define_module("MiniRacer");
 	VALUE rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);
-	rb_eJavaScriptError = rb_define_class_under(rb_mMiniRacer, "JavaScriptError", rb_eStandardError);
+
+	VALUE rb_eEvalError = rb_define_class_under(rb_mMiniRacer, "EvalError", rb_eStandardError);
+	rb_eScriptTerminatedError = rb_define_class_under(rb_mMiniRacer, "ScriptTerminatedError", rb_eEvalError);
+	rb_eParseError = rb_define_class_under(rb_mMiniRacer, "ParseError", rb_eEvalError);
+	rb_eScriptRuntimeError = rb_define_class_under(rb_mMiniRacer, "RuntimeError", rb_eEvalError);
+
 	VALUE rb_cExternalFunction = rb_define_class_under(rb_cContext, "ExternalFunction", rb_cObject);
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
 	rb_define_alloc_func(rb_cContext, allocate);
