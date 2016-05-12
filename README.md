@@ -101,6 +101,8 @@ Benching with therubyracer
 MiniRacer minify discourse_app.js 151467.164ms
 MiniRacer minify discourse_app_minified.js 158172.097ms
 MiniRacer minify discourse_app.js twice (2 threads) - DOES NOT FINISH
+
+Killed: 9
 ```
 
 The huge performance disparity (MiniRacer is 10x faster) is due to MiniRacer running latest version of V8. In July 2016 there is a queued upgrade to therubyracer which should bring some of the perf inline.
