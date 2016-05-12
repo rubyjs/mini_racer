@@ -304,7 +304,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 	    }
 	} else {
             VALUE rb_str = rb_funcall(ruby_exception, rb_intern("to_s"), 0);
-	    rb_raise(CLASS_OF(ruby_exception), RSTRING_PTR(rb_str));
+	    rb_raise(CLASS_OF(ruby_exception), "%s", RSTRING_PTR(rb_str));
 	}
     }
 
@@ -471,7 +471,6 @@ VALUE allocate_external_function(VALUE klass) {
     VALUE* self = ALLOC(VALUE);
     return Data_Wrap_Struct(klass, NULL, deallocate_external_function, (void*)self);
 }
-
 
 VALUE allocate(VALUE klass) {
     init_v8();
