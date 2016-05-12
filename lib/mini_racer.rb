@@ -15,6 +15,8 @@ module MiniRacer
       if js_backtrace && !js_backtrace.empty?
         @js_backtrace = js_backtrace.split("\n")
         @js_backtrace.map!{|f| "JavaScript #{f.strip}"}
+      else
+        @js_backtrace = nil
       end
 
       super(message)
@@ -32,7 +34,7 @@ module MiniRacer
 
   end
 
-  # helper class returned
+  # helper class returned when we have a JavaScript function
   class JavaScriptFunction
     def to_s
       "JavaScript Function"
