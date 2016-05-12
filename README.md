@@ -85,8 +85,8 @@ The `bench` folder contains benchmark.
 
 ### Benchmark minification of Discourse application.js (both minified and unminified)
 
-MiniRacer version 0.1
-therubyracer version 0.12.2
+- MiniRacer version 0.1 (unreleased)
+- therubyracer version 0.12.2
 
 ```
 $ ruby bench_uglify.rb
