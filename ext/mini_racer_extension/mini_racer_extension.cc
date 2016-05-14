@@ -5,6 +5,7 @@
 #include <include/libplatform/libplatform.h>
 #include <ruby/encoding.h>
 #include <pthread.h>
+#include <unistd.h>
 
 using namespace v8;
 
