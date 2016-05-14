@@ -1,4 +1,6 @@
 language: ruby
+env:
+  - CXX=g++-4.8
 rvm:
   - 2.0
   - 2.1
@@ -13,3 +15,4 @@ addons:
       - ubuntu-toolchain-r-test
     packages:
       - gcc-4.8
+      - g++-4.8

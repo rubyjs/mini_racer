@@ -127,6 +127,9 @@ Or install it yourself as:
 
     $ gem install mini_racer
 
+
+**Note** v8.h seems to require gcc version 4.8 and up, if you are having issues installing try upgrading gcc
+
 ## Similar Projects
 
 ###therubyracer
