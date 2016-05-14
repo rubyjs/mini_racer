@@ -10,6 +10,11 @@ $CPPFLAGS += " -fPIC" unless $CPPFLAGS.split.include? "-rdynamic" or RUBY_PLATFO
 $CPPFLAGS += " -std=c++0x"
 $CPPFLAGS += " -fpermissive"
 
+if ENV['CXX']
+  puts "SETTING CXX"
+  CONFIG['CXX'] = ENV['CXX']
+end
+
 CONFIG['LDSHARED'] = '$(CXX) -shared' unless RUBY_PLATFORM =~ /darwin/
 if CONFIG['warnflags']
   CONFIG['warnflags'].gsub!('-Wdeclaration-after-statement', '')
