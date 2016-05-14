@@ -8,6 +8,7 @@ matrix:
   include:
     - rvm: 2.2
       os: osx
+      osx_image: xcode7.3
 dist: trusty
 sudo: true
 before_install:
