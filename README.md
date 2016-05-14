@@ -128,7 +128,7 @@ Or install it yourself as:
     $ gem install mini_racer
 
 
-**Note** v8.h seems to require gcc version 4.8 and up, if you are having issues installing try upgrading gcc
+**Note** using v8.h and compiling MiniRacer requires a C++11 standard compiler, more specifically clang 3.5 (or later) or gcc 4.8 (or later).
 
 ## Similar Projects
 
