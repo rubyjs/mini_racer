@@ -1,20 +1,25 @@
-engine = ARGV[0] == "therubyracer" ? "therubyracer" : "MiniRacer"
+require 'execjs'
 
-if ARGV[0] == "rubyracer"
-  require 'therubyracer'
-  puts "Benching with therubyracer"
-else
-  require 'mini_racer'
-  puts "Benching with MiniRacer"
+engines = {
+   mini_racer: ExecJS::Runtimes::MiniRacer,
+   rubyracer: ExecJS::Runtimes::RubyRacer,
+   duktape: ExecJS::Runtimes::Duktape,
+   node: ExecJS::Runtimes::Node
+}
+
+engine = ARGV[0]
+unless engine && (runtime = engines[engine.to_sym])
+  STDERR.puts "Unknown engine try #{engines.keys.join(',')}"
+  exit 1
 end
 
+unless engine == "node"
+  require engine
+end
+puts "Benching with #{engine}"
 require 'uglifier'
 
-if ARGV[0] == "rubyracer"
-  ExecJS.runtime = ExecJS::RubyRacerRuntime.new
-else
-  ExecJS.runtime = ExecJS::MiniRacerRuntime.new
-end
+ExecJS.runtime = runtime
 
 start = Time.new
 Uglifier.compile(File.read("discourse_app.js"))
