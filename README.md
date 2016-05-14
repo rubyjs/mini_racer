@@ -1,5 +1,7 @@
 # MiniRacer
 
+[![Build Status](https://travis-ci.org/discourse/mini_racer.svg?branch=master)](https://travis-ci.org/discourse/mini_racer)
+
 Minimal, modern embedded V8 for Ruby.
 
 MiniRacer provides a minimal two way bridge between the V8 JavaScript engine and Ruby.
