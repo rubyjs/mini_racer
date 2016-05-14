@@ -1,7 +1,6 @@
 language: ruby
 env:
-  - CXX=g++-4.8
-  - CC=gcc-4.8
+  - CXX=g++-4.8 CC=gcc-4.8
 rvm:
   - 2.0
   - 2.1
