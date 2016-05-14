@@ -8,7 +8,7 @@ Rake::TestTask.new(:test) do |t|
   t.test_files = FileList['test/**/*_test.rb']
 end
 
-task :default => :test
+task :default => [:compile, :test]
 
 gem = Gem::Specification.load( File.dirname(__FILE__) + '/mini_racer.gemspec' )
 Rake::ExtensionTask.new( 'mini_racer_extension', gem )
