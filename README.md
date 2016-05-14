@@ -111,8 +111,6 @@ Note how the global interpreter lock release leads to 2 threads doing the same w
 
 ## Installation
 
-**Currently gem is in alpha development and can not be installed until libv8 is released**
-
 Add this line to your application's Gemfile:
 
 ```ruby
