@@ -5,6 +5,3 @@ if ENV['RR']
 else
   gem 'mini_racer', path: '../../'
 end
-
-gem 'execjs', github: 'rails/execjs'
-gem 'uglifier'

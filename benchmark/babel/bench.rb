@@ -1,6 +1,6 @@
 unless defined? Bundler
   system 'bundle'
-  exec 'bundle exec bench.rb'
+  exec 'bundle exec ruby bench.rb'
 end
 
 require 'mini_racer'
