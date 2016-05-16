@@ -23,6 +23,7 @@ typedef struct {
     Isolate* isolate;
     Persistent<Context>* context;
     ArrayBufferAllocator* allocator;
+    bool interrupted;
 } ContextInfo;
 
 typedef struct {
@@ -231,6 +232,12 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
 
 }
 
+static void unblock_eval(void *ptr) {
+    EvalParams* eval = (EvalParams*)ptr;
+    eval->context_info->interrupted = true;
+}
+
+
 static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 
     EvalParams eval_params;
@@ -263,7 +270,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 	eval_result.message = NULL;
 	eval_result.backtrace = NULL;
 
-	rb_thread_call_without_gvl(nogvl_context_eval, &eval_params, RUBY_UBF_IO, 0);
+	rb_thread_call_without_gvl(nogvl_context_eval, &eval_params, unblock_eval, &eval_params);
 
 	if (eval_result.message != NULL) {
 	    Local<Value> tmp = Local<Value>::New(context_info->isolate, *eval_result.message);
@@ -457,7 +464,11 @@ void deallocate(void * data) {
     }
 
     {
-	context_info->isolate->Dispose();
+	if (context_info->interrupted) {
+	    fprintf(stderr, "WARNING: V8 isolate was interrupted by Ruby, it can not be disposed and memory will not be reclaimed till the Ruby process exits.");
+	} else {
+	    context_info->isolate->Dispose();
+	}
     }
 
     delete context_info->allocator;
@@ -478,6 +489,7 @@ VALUE allocate(VALUE klass) {
 
     ContextInfo* context_info = ALLOC(ContextInfo);
     context_info->allocator = new ArrayBufferAllocator();
+    context_info->interrupted = false;
     Isolate::CreateParams create_params;
     create_params.array_buffer_allocator = context_info->allocator;
 
