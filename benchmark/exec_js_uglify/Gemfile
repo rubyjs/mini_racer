@@ -1,0 +1,10 @@
+source 'https://rubygems.org'
+
+if ENV['RR']
+  gem 'therubyracer'
+else
+  gem 'mini_racer', path: '../../'
+end
+
+gem 'execjs', github: 'rails/execjs'
+gem 'uglifier'

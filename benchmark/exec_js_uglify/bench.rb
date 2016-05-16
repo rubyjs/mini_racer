@@ -12,6 +12,16 @@ unless engine && (execjs_engine = engines[engine.to_sym])
   exit 1
 end
 
+unless defined? Bundler
+  if engine == "therubyracer"
+    system 'RR=1 bundle'
+    exec "RR=1 bundle exec ruby bench.rb #{ARGV[0]}"
+  else
+    system 'bundle'
+    exec "bundle exec ruby bench.rb #{ARGV[0]}"
+  end
+end
+
 unless engine == "node"
   require engine
 end
@@ -22,17 +32,17 @@ require 'uglifier'
 ExecJS.runtime = execjs_engine.call
 
 start = Time.new
-Uglifier.compile(File.read("discourse_app.js"))
+Uglifier.compile(File.read("helper_files/discourse_app.js"))
 puts "#{engine} minify discourse_app.js #{(Time.new - start)*1000}ms"
 
 start = Time.new
-Uglifier.compile(File.read("discourse_app_minified.js"))
+Uglifier.compile(File.read("helper_files/discourse_app_minified.js"))
 puts "#{engine} minify discourse_app_minified.js #{(Time.new - start)*1000}ms"
 
 start = Time.new
 (0..1).map do
   Thread.new do
-    Uglifier.compile(File.read("discourse_app.js"))
+    Uglifier.compile(File.read("helper_files/discourse_app.js"))
   end
 end.each(&:join)
 
