@@ -1,14 +1,13 @@
-require 'execjs'
-
 engines = {
-   mini_racer: ExecJS::Runtimes::MiniRacer,
-   rubyracer: ExecJS::Runtimes::RubyRacer,
-   duktape: ExecJS::Runtimes::Duktape,
-   node: ExecJS::Runtimes::Node
+   mini_racer: proc { ExecJS::MiniRacerRuntime.new },
+   therubyracer: proc { ExecJS::RubyRacerRuntime.new },
+   rhino: proc { ExecJS::RubyRhinoRuntime.new },
+   duktape: proc { ExecJS::DuktapeRuntime.new},
+   node: proc { ExecJS::Runtimes::Node }
 }
 
 engine = ARGV[0]
-unless engine && (runtime = engines[engine.to_sym])
+unless engine && (execjs_engine = engines[engine.to_sym])
   STDERR.puts "Unknown engine try #{engines.keys.join(',')}"
   exit 1
 end
@@ -16,10 +15,11 @@ end
 unless engine == "node"
   require engine
 end
+
 puts "Benching with #{engine}"
 require 'uglifier'
 
-ExecJS.runtime = runtime
+ExecJS.runtime = execjs_engine.call
 
 start = Time.new
 Uglifier.compile(File.read("discourse_app.js"))

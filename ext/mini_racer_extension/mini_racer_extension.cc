@@ -477,11 +477,10 @@ VALUE allocate(VALUE klass) {
     init_v8();
 
     ContextInfo* context_info = ALLOC(ContextInfo);
-
     context_info->allocator = new ArrayBufferAllocator();
-
     Isolate::CreateParams create_params;
     create_params.array_buffer_allocator = context_info->allocator;
+
     context_info->isolate = Isolate::New(create_params);
 
     Locker lock(context_info->isolate);
