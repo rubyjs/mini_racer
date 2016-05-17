@@ -46,9 +46,13 @@ module MiniRacer
 
     class ExternalFunction
       def initialize(name, callback, parent)
-        @name = name
+        unless String === name
+          raise ArgumentError, "parent_object must be a String"
+        end
+        parent_object, _ , @name = name.rpartition(".")
         @callback = callback
         @parent = parent
+        @parent_object = parent_object.empty? ? nil : parent_object
         notify_v8
       end
     end
@@ -79,7 +83,7 @@ module MiniRacer
     def attach(name, callback)
       @lock.synchronize do
         external = ExternalFunction.new(name, callback, self)
-        @functions[name.to_s] = external
+        @functions["#{name}"] = external
       end
     end
 

@@ -427,27 +427,64 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
 
     VALUE parent = rb_iv_get(self, "@parent");
     VALUE name = rb_iv_get(self, "@name");
+    VALUE parent_object = rb_iv_get(self, "@parent_object");
+
+    bool parse_error = false;
+    bool attach_error = false;
 
     Data_Get_Struct(parent, ContextInfo, context_info);
 
-    Locker lock(context_info->isolate);
-    Isolate::Scope isolate_scope(context_info->isolate);
-    HandleScope handle_scope(context_info->isolate);
+    {
+	Locker lock(context_info->isolate);
+	Isolate::Scope isolate_scope(context_info->isolate);
+	HandleScope handle_scope(context_info->isolate);
 
-    Local<Context> context = context_info->context->Get(context_info->isolate);
-    Context::Scope context_scope(context);
+	Local<Context> context = context_info->context->Get(context_info->isolate);
+	Context::Scope context_scope(context);
 
-    Local<String> v8_str = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(name),
-					      NewStringType::kNormal, (int)RSTRING_LEN(name)).ToLocalChecked();
+	Local<String> v8_str = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(name),
+						  NewStringType::kNormal, (int)RSTRING_LEN(name)).ToLocalChecked();
 
+	// copy self so we can access from v8 external
+	VALUE* self_copy;
+	Data_Get_Struct(self, VALUE, self_copy);
+	*self_copy = self;
 
-    // copy self so we can access from v8 external
-    VALUE* self_copy;
-    Data_Get_Struct(self, VALUE, self_copy);
-    *self_copy = self;
+	Local<Value> external = External::New(context_info->isolate, self_copy);
 
-    Local<Value> external = External::New(context_info->isolate, self_copy);
-    context->Global()->Set(v8_str, FunctionTemplate::New(context_info->isolate, ruby_callback, external)->GetFunction());
+	if (parent_object == Qnil) {
+	    context->Global()->Set(v8_str, FunctionTemplate::New(context_info->isolate, ruby_callback, external)->GetFunction());
+	} else {
+
+	    Local<String> eval = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(parent_object),
+						      NewStringType::kNormal, (int)RSTRING_LEN(parent_object)).ToLocalChecked();
+
+	    MaybeLocal<Script> parsed_script = Script::Compile(context, eval);
+	    if (parsed_script.IsEmpty()) {
+		parse_error = true;
+	    } else {
+		MaybeLocal<Value> maybe_value = parsed_script.ToLocalChecked()->Run(context);
+		attach_error = true;
+
+		if (!maybe_value.IsEmpty()) {
+		    Local<Value> value = maybe_value.ToLocalChecked();
+		    if (value->IsObject()){
+			value.As<Object>()->Set(v8_str, FunctionTemplate::New(context_info->isolate, ruby_callback, external)->GetFunction());
+			attach_error = false;
+		    }
+		}
+	    }
+	}
+    }
+
+    // always raise out of V8 context
+    if (parse_error) {
+	rb_raise(rb_eParseError, "Invalid object %s", RSTRING_PTR(parent_object));
+    }
+
+    if (attach_error) {
+	rb_raise(rb_eParseError, "Was expecting %s to be an object", RSTRING_PTR(parent_object));
+    }
 
     return Qnil;
 }

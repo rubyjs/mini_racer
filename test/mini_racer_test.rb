@@ -139,6 +139,20 @@ raise FooError, "I like foos"
     end
   end
 
+  def test_attached_on_object
+    context = MiniRacer::Context.new
+    context.eval("var minion = {}")
+    context.attach("minion.speak", proc{"banana"})
+    assert_equal "banana", context.eval("minion.speak()")
+  end
+
+  def test_attached_on_nested_object
+    context = MiniRacer::Context.new
+    context.eval("var minion = {kevin: {}}")
+    context.attach("minion.kevin.speak", proc{"banana"})
+    assert_equal "banana", context.eval("minion.kevin.speak()")
+  end
+
   def test_load
     context = MiniRacer::Context.new
     context.load(File.dirname(__FILE__) + "/file.js")
