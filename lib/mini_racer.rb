@@ -62,7 +62,11 @@ module MiniRacer
       if options
         @timeout = options[:timeout]
       end
+    end
 
+    def load(filename)
+      # TODO do this native cause no need to allocate VALUE here
+      eval(File.read(filename))
     end
 
     def eval(str)

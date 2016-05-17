@@ -139,4 +139,13 @@ raise FooError, "I like foos"
     end
   end
 
+  def test_load
+    context = MiniRacer::Context.new
+    context.load(File.dirname(__FILE__) + "/file.js")
+    assert_equal "world", context.eval("hello")
+    assert_raises do
+      context.load(File.dirname(__FILE__) + "/missing.js")
+    end
+  end
+
 end
