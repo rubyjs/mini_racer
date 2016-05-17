@@ -1,3 +1,11 @@
+
+17-05-2016
+
+- 0.0.2
+
+  - Gemspec specifies minimal version of Ruby (2.0)
+  - Implement #load on Context to load files
+
 17-05-2016
 
 - 0.0.1
