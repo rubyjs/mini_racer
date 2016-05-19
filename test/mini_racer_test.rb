@@ -141,16 +141,29 @@ raise FooError, "I like foos"
 
   def test_attached_on_object
     context = MiniRacer::Context.new
-    context.eval("var minion = {}")
     context.attach("minion.speak", proc{"banana"})
     assert_equal "banana", context.eval("minion.speak()")
   end
 
   def test_attached_on_nested_object
     context = MiniRacer::Context.new
-    context.eval("var minion = {kevin: {}}")
     context.attach("minion.kevin.speak", proc{"banana"})
     assert_equal "banana", context.eval("minion.kevin.speak()")
+  end
+
+  def test_attach_error
+    context = MiniRacer::Context.new
+    context.eval("minion = 2")
+    assert_raises do
+      begin
+        context.attach("minion.kevin.speak", proc{"banana"})
+      rescue => e
+        assert_equal MiniRacer::ParseError, e.class
+        assert_match(/expecting minion.kevin/, e.message)
+        raise
+      end
+    end
+
   end
 
   def test_load

@@ -428,6 +428,7 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
     VALUE parent = rb_iv_get(self, "@parent");
     VALUE name = rb_iv_get(self, "@name");
     VALUE parent_object = rb_iv_get(self, "@parent_object");
+    VALUE parent_object_eval = rb_iv_get(self, "@parent_object_eval");
 
     bool parse_error = false;
     bool attach_error = false;
@@ -456,8 +457,8 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
 	    context->Global()->Set(v8_str, FunctionTemplate::New(context_info->isolate, ruby_callback, external)->GetFunction());
 	} else {
 
-	    Local<String> eval = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(parent_object),
-						      NewStringType::kNormal, (int)RSTRING_LEN(parent_object)).ToLocalChecked();
+	    Local<String> eval = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(parent_object_eval),
+						      NewStringType::kNormal, (int)RSTRING_LEN(parent_object_eval)).ToLocalChecked();
 
 	    MaybeLocal<Script> parsed_script = Script::Compile(context, eval);
 	    if (parsed_script.IsEmpty()) {

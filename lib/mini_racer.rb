@@ -52,7 +52,27 @@ module MiniRacer
         parent_object, _ , @name = name.rpartition(".")
         @callback = callback
         @parent = parent
-        @parent_object = parent_object.empty? ? nil : parent_object
+        @parent_object_eval = nil
+        @parent_object = nil
+
+        unless parent_object.empty?
+          @parent_object = parent_object
+
+          @parent_object_eval = ""
+          prev = ""
+          first = true
+          parent_object.split(".").each do |obj|
+            prev << obj
+            if first
+              @parent_object_eval << "if (typeof #{prev} === 'undefined') { #{prev} = {} };\n"
+            else
+              @parent_object_eval << "#{prev} = #{prev} || {};\n"
+            end
+            prev << "."
+            first = false
+          end
+          @parent_object_eval << "#{parent_object};"
+        end
         notify_v8
       end
     end
