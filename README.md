@@ -29,9 +29,16 @@ You can attach one or many ruby proc that can be accessed via JavaScript
 
 ```ruby
 context = MiniRacer::Context.new
-context.attach("adder", proc{|a,b| a+b})
-puts context.eval 'adder(20,22)'
+context.attach("math.adder", proc{|a,b| a+b})
+puts context.eval 'math.adder(20,22)'
 # => 42
+```
+
+```ruby
+context = MiniRacer::Context.new
+context.attach("array_and_hash", proc{{a: 1, b: [1, {a: 1}]}})
+puts context.eval 'array_and_hash()'
+# => {"a" => 1, "b" => [1, {"a" => 1}]}
 ```
 
 ### GIL free JavaScript execution
