@@ -151,6 +151,30 @@ raise FooError, "I like foos"
     assert_equal "banana", context.eval("minion.kevin.speak()")
   end
 
+  def test_return_arrays
+    context = MiniRacer::Context.new
+    context.attach("nose.type", proc{["banana",["nose"]]})
+    assert_equal ["banana", ["nose"]], context.eval("nose.type()")
+  end
+
+  def test_return_hash
+    context = MiniRacer::Context.new
+    context.attach("test", proc{{banana: :nose, "inner" => {42 => 42}}})
+    assert_equal({"banana" => "nose", "inner" => {42 => 42}}, context.eval("test()"))
+  end
+
+  module Echo
+    def self.say(thing)
+      thing
+    end
+  end
+
+  def test_can_attach_method
+    context = MiniRacer::Context.new
+    context.attach("Echo.say", Echo.method(:say))
+    assert_equal "hello", context.eval("Echo.say('hello')")
+  end
+
   def test_attach_error
     context = MiniRacer::Context.new
     context.eval("minion = 2")

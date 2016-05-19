@@ -197,6 +197,12 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
 static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
     EscapableHandleScope scope(isolate);
 
+    Local<Array> array;
+    Local<Object> object;
+    VALUE hash_as_array;
+    VALUE pair;
+    int length,i;
+
     switch (TYPE(value)) {
     case T_FIXNUM:
 	return scope.Escape(Integer::New(isolate, NUM2INT(value)));
@@ -210,6 +216,26 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
 	return scope.Escape(True(isolate));
     case T_FALSE:
 	return scope.Escape(False(isolate));
+    case T_ARRAY:
+	length = RARRAY_LEN(value);
+	array = Array::New(isolate, length);
+	for(i=0; i<length; i++) {
+	    array->Set(i, convert_ruby_to_v8(isolate, rb_ary_entry(value, i)));
+	}
+	return scope.Escape(array);
+    case T_HASH:
+	object = Object::New(isolate);
+	hash_as_array = rb_funcall(value, rb_intern("to_a"), 0);
+	length = RARRAY_LEN(hash_as_array);
+	for(i=0; i<length; i++) {
+	    pair = rb_ary_entry(hash_as_array, i);
+	    object->Set(convert_ruby_to_v8(isolate, rb_ary_entry(pair, 0)),
+			convert_ruby_to_v8(isolate, rb_ary_entry(pair, 1)));
+	}
+	return scope.Escape(object);
+    case T_SYMBOL:
+	value = rb_funcall(value, rb_intern("to_s"), 0);
+	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, (int)RSTRING_LEN(value)).ToLocalChecked());
     case T_DATA:
     case T_OBJECT:
     case T_CLASS:
@@ -217,16 +243,12 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
     case T_MODULE:
     case T_REGEXP:
     case T_MATCH:
-    case T_ARRAY:
-    case T_HASH:
     case T_STRUCT:
     case T_BIGNUM:
     case T_FILE:
-    case T_SYMBOL:
     case T_UNDEF:
     case T_NODE:
     default:
-     // rb_warn("unknown conversion to V8 for: %s", RSTRING_PTR(rb_inspect(value)));
       return scope.Escape(String::NewFromUtf8(isolate, "Undefined Conversion"));
     }
 
