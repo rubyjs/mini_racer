@@ -11,7 +11,7 @@ Gem::Specification.new do |spec|
 
   spec.summary       = %q{Minimal embedded v8 for Ruby}
   spec.description   = %q{Minimal embedded v8 engine for Ruby}
-  spec.homepage      = ""
+  spec.homepage      = "https://github.com/discourse/mini_racer"
   spec.license       = "MIT"
 
 
