@@ -167,7 +167,12 @@ raise FooError, "I like foos"
     context = MiniRacer::Context.new
     test_time = Time.new
     context.attach("test", proc{{time: test_time}})
-    assert_equal(test_time.to_i, context.eval("var result = test(); result.getTime();"))
+    
+    # check that marshalling to JS creates a date object (getTime())
+    assert_equal((test_time.to_f*1000).to_i, context.eval("var result = test(); result.time.getTime();").to_i)
+    
+    # check that marshalling to RB creates a Time object
+    assert_equal(test_time.to_i, context.eval("var result = test(); result.time;").to_i)
   end
 
   module Echo

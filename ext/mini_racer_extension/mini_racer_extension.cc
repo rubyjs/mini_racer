@@ -172,6 +172,11 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
 	return rb_funcall(rb_cJavaScriptFunction, rb_intern("new"), 0);
     }
 
+    if (value->IsDate()){
+        double ts = Local<Date>::Cast(value)->ValueOf();
+        return rb_time_new(ts/1000, 0);
+    }
+
     if (value->IsObject()) {
 	VALUE rb_hash = rb_hash_new();
 	Local<Context> context = Context::New(isolate);
@@ -236,9 +241,11 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
     case T_SYMBOL:
 	value = rb_funcall(value, rb_intern("to_s"), 0);
 	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, (int)RSTRING_LEN(value)).ToLocalChecked());
-    case T_DATA:
-    case T_OBJECT:
     case T_CLASS:
+    case T_DATA:
+    value = rb_funcall(value, rb_intern("to_f"), 0);
+    return scope.Escape(Date::New(isolate, NUM2DBL(value) * 1000));
+    case T_OBJECT:
     case T_ICLASS:
     case T_MODULE:
     case T_REGEXP:
