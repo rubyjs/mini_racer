@@ -174,7 +174,10 @@ raise FooError, "I like foos"
     # check that marshalling to RB creates a Time object
     result = context.eval("test()")
     assert_equal(test_time.class, result.class)
-    assert_equal(test_time.to_i, result.to_i)
+    assert_equal(test_time.tv_sec, result.tv_sec)
+    
+    # check that no precision is lost in the marshalling (js only stores milliseconds)
+    assert_equal((test_time.tv_usec/1000.0).floor, (result.tv_usec/1000.0).floor)
   end
 
   def test_return_unknown

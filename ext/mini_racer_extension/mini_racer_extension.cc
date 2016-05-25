@@ -174,7 +174,10 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
 
     if (value->IsDate()){
         double ts = Local<Date>::Cast(value)->ValueOf();
-        return rb_time_new(ts/1000, 0);
+        double secs = ts/1000;
+        long nanos = round((secs - floor(secs)) * 1000000);
+
+        return rb_time_new(secs, nanos);
     }
 
     if (value->IsObject()) {
