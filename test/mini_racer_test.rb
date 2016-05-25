@@ -166,13 +166,22 @@ raise FooError, "I like foos"
   def test_return_date
     context = MiniRacer::Context.new
     test_time = Time.new
-    context.attach("test", proc{{time: test_time}})
+    context.attach("test", proc{test_time})
     
     # check that marshalling to JS creates a date object (getTime())
-    assert_equal((test_time.to_f*1000).to_i, context.eval("var result = test(); result.time.getTime();").to_i)
+    assert_equal((test_time.to_f*1000).to_i, context.eval("var result = test(); result.getTime();").to_i)
     
     # check that marshalling to RB creates a Time object
-    assert_equal(test_time.to_i, context.eval("var result = test(); result.time;").to_i)
+    result = context.eval("test()")
+    assert_equal(test_time.class, result.class)
+    assert_equal(test_time.to_i, result.to_i)
+  end
+
+  def test_return_unknown
+    context = MiniRacer::Context.new
+    test_unknown = DateTime.new # hits T_DATA in convert_ruby_to_v8
+    context.attach("test", proc{test_unknown})
+    assert_equal("Undefined Conversion", context.eval("test()"))
   end
 
   module Echo

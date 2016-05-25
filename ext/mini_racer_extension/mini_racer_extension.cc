@@ -207,6 +207,8 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
     VALUE hash_as_array;
     VALUE pair;
     int length,i;
+    
+    VALUE klass;
 
     switch (TYPE(value)) {
     case T_FIXNUM:
@@ -241,11 +243,15 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
     case T_SYMBOL:
 	value = rb_funcall(value, rb_intern("to_s"), 0);
 	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, (int)RSTRING_LEN(value)).ToLocalChecked());
-    case T_CLASS:
     case T_DATA:
-    value = rb_funcall(value, rb_intern("to_f"), 0);
-    return scope.Escape(Date::New(isolate, NUM2DBL(value) * 1000));
+	klass = rb_funcall(value, rb_intern("class"), 0);
+    if (klass == rb_cTime)
+    {
+        value = rb_funcall(value, rb_intern("to_f"), 0);
+        return scope.Escape(Date::New(isolate, NUM2DBL(value) * 1000));
+    }
     case T_OBJECT:
+    case T_CLASS:
     case T_ICLASS:
     case T_MODULE:
     case T_REGEXP:
