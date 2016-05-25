@@ -163,6 +163,13 @@ raise FooError, "I like foos"
     assert_equal({"banana" => "nose", "inner" => {42 => 42}}, context.eval("test()"))
   end
 
+  def test_return_date
+    context = MiniRacer::Context.new
+    test_time = Time.new
+    context.attach("test", proc{{time: test_time}})
+    assert_equal(test_time.to_i, context.eval("var result = test(); result.getTime();"))
+  end
+
   module Echo
     def self.say(thing)
       thing
