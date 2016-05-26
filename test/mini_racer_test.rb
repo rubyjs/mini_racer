@@ -87,6 +87,19 @@ class MiniRacerTest < Minitest::Test
     end
   end
 
+  def test_it_handles_malformed_js_with_backtrace
+    context = MiniRacer::Context.new
+    assert_raises MiniRacer::ParseError do
+      begin
+        context.eval("var i;\ni=2;\nI am not JavaScript {")
+      rescue => e
+        # I <parse error> am not
+        assert_match(/3:2/, e.message)
+        raise
+      end
+    end
+  end
+
   def test_it_remembers_stuff_in_context
     context = MiniRacer::Context.new
     context.eval('var x = function(){return 22;}')
