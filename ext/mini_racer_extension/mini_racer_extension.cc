@@ -106,27 +106,37 @@ nogvl_context_eval(void* arg) {
 
 	result->executed = !maybe_value.IsEmpty();
 
-	if (!result->executed) {
-	    if (trycatch.HasCaught()) {
-		if (!trycatch.Exception()->IsNull()) {
-		    result->message = new Persistent<Value>();
-		    result->message->Reset(isolate, trycatch.Exception()->ToString());
-		} else if(trycatch.HasTerminated()) {
-		    result->terminated = true;
-		    result->message = new Persistent<Value>();
-		    Local<String> tmp = String::NewFromUtf8(isolate, "JavaScript was terminated (either by timeout or explicitly)");
-		    result->message->Reset(isolate, tmp);
-		}
-
-		if (!trycatch.StackTrace().IsEmpty()) {
-		    result->backtrace = new Persistent<Value>();
-		    result->backtrace->Reset(isolate, trycatch.StackTrace()->ToString());
-		}
-	    }
-	} else {
+	if (result->executed) {
 	    Persistent<Value>* persistent = new Persistent<Value>();
 	    persistent->Reset(isolate, maybe_value.ToLocalChecked());
 	    result->value = persistent;
+	}
+    }
+
+    if (!result->executed || !result->parsed) {
+	if (trycatch.HasCaught()) {
+	    if (!trycatch.Exception()->IsNull()) {
+		result->message = new Persistent<Value>();
+		Local<Message> message = trycatch.Message();
+		char buf[1000];
+		int len;
+		len = snprintf(buf, sizeof(buf), "%s at %s:%i:%i", *String::Utf8Value(message->Get()),
+			           *String::Utf8Value(message->GetScriptResourceName()->ToString()),
+				    message->GetLineNumber(),
+				    message->GetStartColumn());
+
+		Local<String> v8_message = String::NewFromUtf8(isolate, buf, NewStringType::kNormal, (int)len).ToLocalChecked();
+		result->message->Reset(isolate, v8_message);
+	    } else if(trycatch.HasTerminated()) {
+		result->terminated = true;
+		result->message = new Persistent<Value>();
+		Local<String> tmp = String::NewFromUtf8(isolate, "JavaScript was terminated (either by timeout or explicitly)");
+		result->message->Reset(isolate, tmp);
+	    }
+	    if (!trycatch.StackTrace().IsEmpty()) {
+		result->backtrace = new Persistent<Value>();
+		result->backtrace->Reset(isolate, trycatch.StackTrace()->ToString());
+	    }
 	}
     }
 
@@ -199,7 +209,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
     }
 
     Local<String> rstr = value->ToString();
-    return rb_enc_str_new(*v8::String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
+    return rb_enc_str_new(*String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
 }
 
 static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
@@ -209,8 +219,8 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
     Local<Object> object;
     VALUE hash_as_array;
     VALUE pair;
-    int length,i;
-    
+    int i;
+    long length;
     VALUE klass;
 
     switch (TYPE(value)) {
@@ -228,7 +238,7 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
 	return scope.Escape(False(isolate));
     case T_ARRAY:
 	length = RARRAY_LEN(value);
-	array = Array::New(isolate, length);
+	array = Array::New(isolate, (int)length);
 	for(i=0; i<length; i++) {
 	    array->Set(i, convert_ruby_to_v8(isolate, rb_ary_entry(value, i)));
 	}
@@ -336,13 +346,12 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
     }
 
     if (!eval_result.executed) {
-
 	VALUE ruby_exception = rb_iv_get(self, "@current_exception");
 	if (ruby_exception == Qnil) {
 	    ruby_exception = eval_result.terminated ? rb_eScriptTerminatedError : rb_eScriptRuntimeError;
 	    // exception report about what happened
-	    if(TYPE(message) == T_STRING && TYPE(backtrace) == T_STRING) {
-		rb_raise(ruby_exception, "%s/n%s", RSTRING_PTR(message), RSTRING_PTR(backtrace));
+	    if(TYPE(backtrace) == T_STRING) {
+		rb_raise(ruby_exception, "%s", RSTRING_PTR(backtrace));
 	    } else if(TYPE(message) == T_STRING) {
 		rb_raise(ruby_exception, "%s", RSTRING_PTR(message));
 	    } else {

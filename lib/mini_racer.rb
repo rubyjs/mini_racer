@@ -5,7 +5,6 @@ require "thread"
 module MiniRacer
 
   class EvalError < StandardError; end
-
   class ScriptTerminatedError < EvalError; end
   class ParseError < EvalError; end
 
@@ -18,7 +17,6 @@ module MiniRacer
       else
         @js_backtrace = nil
       end
-
       super(message)
     end
 
@@ -31,7 +29,6 @@ module MiniRacer
         val
       end
     end
-
   end
 
   # helper class returned when we have a JavaScript function
