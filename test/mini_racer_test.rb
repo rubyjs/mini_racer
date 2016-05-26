@@ -179,6 +179,15 @@ raise FooError, "I like foos"
     # check that no precision is lost in the marshalling (js only stores milliseconds)
     assert_equal((test_time.tv_usec/1000.0).floor, (result.tv_usec/1000.0).floor)
   end
+  
+  def test_return_large_number
+    context = MiniRacer::Context.new
+    test_num = 1_000_000_000_000_000
+    context.attach("test", proc{test_num})
+    
+    assert_equal(true, context.eval("test() === 1000000000000000"))
+    assert_equal(test_num, context.eval("test()"))
+  end
 
   def test_return_unknown
     context = MiniRacer::Context.new

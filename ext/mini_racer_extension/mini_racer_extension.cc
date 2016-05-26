@@ -215,7 +215,13 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
 
     switch (TYPE(value)) {
     case T_FIXNUM:
-	return scope.Escape(Integer::New(isolate, NUM2INT(value)));
+        length = NUM2INT(rb_funcall(value, rb_intern("size"), 0));
+        if (length > 4)
+        {
+            return scope.Escape(Number::New(isolate, NUM2DBL(value)));
+        }
+        
+        return scope.Escape(Integer::New(isolate, NUM2INT(value)));
     case T_FLOAT:
 	return scope.Escape(Number::New(isolate, NUM2DBL(value)));
     case T_STRING:
