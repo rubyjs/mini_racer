@@ -179,7 +179,9 @@ raise FooError, "I like foos"
   def test_return_date
     context = MiniRacer::Context.new
     test_time = Time.new
+    test_datetime = test_time.to_datetime
     context.attach("test", proc{test_time})
+    context.attach("test_datetime", proc{test_datetime})
     
     # check that marshalling to JS creates a date object (getTime())
     assert_equal((test_time.to_f*1000).to_i, context.eval("var result = test(); result.getTime();").to_i)
@@ -190,6 +192,12 @@ raise FooError, "I like foos"
     assert_equal(test_time.tv_sec, result.tv_sec)
     
     # check that no precision is lost in the marshalling (js only stores milliseconds)
+    assert_equal((test_time.tv_usec/1000.0).floor, (result.tv_usec/1000.0).floor)
+    
+    # check that DateTime gets marshalled to js date and back out as rb Time
+    result = context.eval("test_datetime()")
+    assert_equal(test_time.class, result.class)
+    assert_equal(test_time.tv_sec, result.tv_sec)
     assert_equal((test_time.tv_usec/1000.0).floor, (result.tv_usec/1000.0).floor)
   end
 

@@ -258,7 +258,7 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
 	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, (int)RSTRING_LEN(value)).ToLocalChecked());
     case T_DATA:
         klass = rb_funcall(value, rb_intern("class"), 0);
-        if (klass == rb_cTime)
+        if (klass == rb_cTime || klass == rb_cDateTime)
         {
             value = rb_funcall(value, rb_intern("to_f"), 0);
             return scope.Escape(Date::New(isolate, NUM2DBL(value) * 1000));
