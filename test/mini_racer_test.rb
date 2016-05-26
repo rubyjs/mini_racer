@@ -176,6 +176,30 @@ raise FooError, "I like foos"
     assert_equal({"banana" => "nose", "inner" => {42 => 42}}, context.eval("test()"))
   end
 
+  def test_return_date
+    context = MiniRacer::Context.new
+    test_time = Time.new
+    context.attach("test", proc{test_time})
+    
+    # check that marshalling to JS creates a date object (getTime())
+    assert_equal((test_time.to_f*1000).to_i, context.eval("var result = test(); result.getTime();").to_i)
+    
+    # check that marshalling to RB creates a Time object
+    result = context.eval("test()")
+    assert_equal(test_time.class, result.class)
+    assert_equal(test_time.tv_sec, result.tv_sec)
+    
+    # check that no precision is lost in the marshalling (js only stores milliseconds)
+    assert_equal((test_time.tv_usec/1000.0).floor, (result.tv_usec/1000.0).floor)
+  end
+
+  def test_return_unknown
+    context = MiniRacer::Context.new
+    test_unknown = DateTime.new # hits T_DATA in convert_ruby_to_v8
+    context.attach("test", proc{test_unknown})
+    assert_equal("Undefined Conversion", context.eval("test()"))
+  end
+
   module Echo
     def self.say(thing)
       thing
