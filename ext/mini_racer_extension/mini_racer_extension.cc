@@ -47,6 +47,8 @@ static VALUE rb_eParseError;
 static VALUE rb_eScriptRuntimeError;
 static VALUE rb_cJavaScriptFunction;
 
+static VALUE rb_cDateTime;
+
 static Platform* current_platform = NULL;
 
 static void init_v8() {
@@ -260,6 +262,11 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
         klass = rb_funcall(value, rb_intern("class"), 0);
         if (klass == rb_cTime || klass == rb_cDateTime)
         {
+            if (klass == rb_cDateTime)
+            {
+                value = rb_funcall(value, rb_intern("to_time"), 0);
+            }
+            
             value = rb_funcall(value, rb_intern("to_f"), 0);
             return scope.Escape(Date::New(isolate, NUM2DBL(value) * 1000));
         }
@@ -620,6 +627,8 @@ extern "C" {
 	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 1);
 	rb_define_private_method(rb_cExternalFunction, "notify_v8", (VALUE(*)(...))&rb_external_function_notify_v8, 0);
 	rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);
+    
+    rb_cDateTime = rb_const_get(rb_cObject, rb_intern("DateTime"));
     }
 
 }

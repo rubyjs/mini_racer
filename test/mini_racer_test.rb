@@ -203,7 +203,7 @@ raise FooError, "I like foos"
 
   def test_return_unknown
     context = MiniRacer::Context.new
-    test_unknown = DateTime.new # hits T_DATA in convert_ruby_to_v8
+    test_unknown = Date.new # hits T_DATA in convert_ruby_to_v8
     context.attach("test", proc{test_unknown})
     assert_equal("Undefined Conversion", context.eval("test()"))
   end
