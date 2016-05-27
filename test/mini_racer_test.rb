@@ -201,6 +201,15 @@ raise FooError, "I like foos"
     assert_equal(true, context.eval("test() === 1000000000000000"))
     assert_equal(test_num, context.eval("test()"))
   end
+  
+  def test_return_int_max
+    context = MiniRacer::Context.new
+    test_num = 2 ** (31) - 1 #last int32 number
+    context.attach("test", proc{test_num})
+    
+    assert_equal(true, context.eval("test() === 2147483647"))
+    assert_equal(test_num, context.eval("test()"))
+  end
 
   def test_return_unknown
     context = MiniRacer::Context.new
