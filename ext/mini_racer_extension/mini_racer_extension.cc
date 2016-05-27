@@ -627,8 +627,11 @@ extern "C" {
 	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 1);
 	rb_define_private_method(rb_cExternalFunction, "notify_v8", (VALUE(*)(...))&rb_external_function_notify_v8, 0);
 	rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);
-    
-    rb_cDateTime = rb_const_get(rb_cObject, rb_intern("DateTime"));
+
+        if (rb_funcall(rb_cObject, rb_intern("const_defined?"), 1, rb_str_new2("DateTime")) == Qtrue)
+        {
+            rb_cDateTime = rb_const_get(rb_cObject, rb_intern("DateTime"));
+        }
     }
 
 }
