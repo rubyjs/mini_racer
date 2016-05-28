@@ -221,11 +221,18 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
     VALUE pair;
     int i;
     long length;
+    long fixnum;
     VALUE klass;
 
     switch (TYPE(value)) {
     case T_FIXNUM:
-	return scope.Escape(Integer::New(isolate, NUM2INT(value)));
+        fixnum = NUM2LONG(value);
+        if (fixnum > INT_MAX)
+        {
+            return scope.Escape(Number::New(isolate, (double)fixnum));
+        }
+        
+        return scope.Escape(Integer::New(isolate, (int)fixnum));
     case T_FLOAT:
 	return scope.Escape(Number::New(isolate, NUM2DBL(value)));
     case T_STRING:
