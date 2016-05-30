@@ -47,7 +47,7 @@ static VALUE rb_eParseError;
 static VALUE rb_eScriptRuntimeError;
 static VALUE rb_cJavaScriptFunction;
 
-static VALUE rb_cDateTime;
+static VALUE rb_cDateTime = Qnil;
 
 static Platform* current_platform = NULL;
 
@@ -596,6 +596,11 @@ VALUE allocate(VALUE klass) {
     context_info->context = new Persistent<Context>();
     context_info->context->Reset(context_info->isolate, context);
 
+    if (rb_funcall(rb_cObject, rb_intern("const_defined?"), 1, rb_str_new2("DateTime")) == Qtrue)
+    {
+        rb_cDateTime = rb_const_get(rb_cObject, rb_intern("DateTime"));
+    }
+
     return Data_Wrap_Struct(klass, NULL, deallocate, (void*)context_info);
 }
 
@@ -627,11 +632,6 @@ extern "C" {
 	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 1);
 	rb_define_private_method(rb_cExternalFunction, "notify_v8", (VALUE(*)(...))&rb_external_function_notify_v8, 0);
 	rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);
-
-        if (rb_funcall(rb_cObject, rb_intern("const_defined?"), 1, rb_str_new2("DateTime")) == Qtrue)
-        {
-            rb_cDateTime = rb_const_get(rb_cObject, rb_intern("DateTime"));
-        }
     }
 
 }

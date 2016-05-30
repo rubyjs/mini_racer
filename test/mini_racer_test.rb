@@ -201,6 +201,22 @@ raise FooError, "I like foos"
     assert_equal((test_time.tv_usec/1000.0).floor, (result.tv_usec/1000.0).floor)
   end
 
+  def test_datetime_missing
+    Object.send(:remove_const, :DateTime)
+    
+    # no exceptions should happen here, and non-datetime classes should marshall correctly still.
+    context = MiniRacer::Context.new
+    test_time = Time.new
+    context.attach("test", proc{test_time})
+    
+    assert_equal((test_time.to_f*1000).to_i, context.eval("var result = test(); result.getTime();").to_i)
+    
+    result = context.eval("test()")
+    assert_equal(test_time.class, result.class)
+    assert_equal(test_time.tv_sec, result.tv_sec)
+    assert_equal((test_time.tv_usec/1000.0).floor, (result.tv_usec/1000.0).floor)
+  end
+
   def test_return_unknown
     context = MiniRacer::Context.new
     test_unknown = Date.new # hits T_DATA in convert_ruby_to_v8
