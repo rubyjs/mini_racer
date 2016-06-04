@@ -222,6 +222,15 @@ raise FooError, "I like foos"
     test_unknown = Date.new # hits T_DATA in convert_ruby_to_v8
     context.attach("test", proc{test_unknown})
     assert_equal("Undefined Conversion", context.eval("test()"))
+    
+    # clean up and start up a new context
+    context = nil
+    GC.start
+    
+    context = MiniRacer::Context.new
+    test_unknown = Date.new # hits T_DATA in convert_ruby_to_v8
+    context.attach("test", proc{test_unknown})
+    assert_equal("Undefined Conversion", context.eval("test()"))
   end
 
   module Echo

@@ -596,7 +596,7 @@ VALUE allocate(VALUE klass) {
     context_info->context = new Persistent<Context>();
     context_info->context->Reset(context_info->isolate, context);
 
-    if (rb_funcall(rb_cObject, rb_intern("const_defined?"), 1, rb_str_new2("DateTime")) == Qtrue)
+    if (Qnil == rb_cDateTime && rb_funcall(rb_cObject, rb_intern("const_defined?"), 1, rb_str_new2("DateTime")) == Qtrue)
     {
         rb_cDateTime = rb_const_get(rb_cObject, rb_intern("DateTime"));
     }
