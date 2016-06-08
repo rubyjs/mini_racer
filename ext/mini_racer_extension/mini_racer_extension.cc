@@ -47,6 +47,8 @@ static VALUE rb_eParseError;
 static VALUE rb_eScriptRuntimeError;
 static VALUE rb_cJavaScriptFunction;
 
+static VALUE rb_cDateTime = Qnil;
+
 static Platform* current_platform = NULL;
 
 static void init_v8() {
@@ -265,8 +267,13 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
 	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, (int)RSTRING_LEN(value)).ToLocalChecked());
     case T_DATA:
         klass = rb_funcall(value, rb_intern("class"), 0);
-        if (klass == rb_cTime)
+        if (klass == rb_cTime || klass == rb_cDateTime)
         {
+            if (klass == rb_cDateTime)
+            {
+                value = rb_funcall(value, rb_intern("to_time"), 0);
+            }
+            
             value = rb_funcall(value, rb_intern("to_f"), 0);
             return scope.Escape(Date::New(isolate, NUM2DBL(value) * 1000));
         }
@@ -595,6 +602,11 @@ VALUE allocate(VALUE klass) {
 
     context_info->context = new Persistent<Context>();
     context_info->context->Reset(context_info->isolate, context);
+
+    if (Qnil == rb_cDateTime && rb_funcall(rb_cObject, rb_intern("const_defined?"), 1, rb_str_new2("DateTime")) == Qtrue)
+    {
+        rb_cDateTime = rb_const_get(rb_cObject, rb_intern("DateTime"));
+    }
 
     return Data_Wrap_Struct(klass, NULL, deallocate, (void*)context_info);
 }
