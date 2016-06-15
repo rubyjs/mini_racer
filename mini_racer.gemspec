@@ -25,11 +25,10 @@ Gem::Specification.new do |spec|
   spec.add_development_dependency "minitest", "~> 5.0"
   spec.add_development_dependency "rake-compiler"
 
-  spec.add_dependency 'libv8', '~> 5.0'
+  spec.add_dependency 'libv8', '~> 5.0', '< 5.1.11'
   spec.require_paths = ["lib", "ext"]
 
   spec.extensions = ["ext/mini_racer_extension/extconf.rb"]
 
   spec.required_ruby_version = '>= 2.0'
-
 end
