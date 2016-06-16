@@ -287,4 +287,26 @@ raise FooError, "I like foos"
     end
   end
 
+  def test_it_can_use_snapshots
+    snapshot = MiniRacer::Snapshot.new('function hello() { return "world"; }; var foo = "bar";')
+
+    context = MiniRacer::Context.new(snapshot: snapshot)
+
+    assert_equal "world", context.eval("hello()")
+    assert_equal "bar", context.eval("foo")
+  end
+
+  def test_snapshot_size
+    snapshot = MiniRacer::Snapshot.new('var foo = "bar";')
+
+    # for some reason sizes seem to change across runs, so we just
+    # check it's a positive integer
+    assert(snapshot.size > 0)
+  end
+
+  def test_invalid_snapshots_throw_an_exception
+    assert_raises(MiniRacer::SnapshotError) do
+      MiniRacer::Snapshot.new('var foo = bar;')
+    end
+  end
 end

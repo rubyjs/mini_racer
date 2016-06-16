@@ -27,6 +27,11 @@ typedef struct {
 } ContextInfo;
 
 typedef struct {
+    const char* data;
+    int raw_size;
+} SnapshotInfo;
+
+typedef struct {
     bool parsed;
     bool executed;
     bool terminated;
@@ -46,6 +51,7 @@ static VALUE rb_eScriptTerminatedError;
 static VALUE rb_eParseError;
 static VALUE rb_eScriptRuntimeError;
 static VALUE rb_cJavaScriptFunction;
+static VALUE rb_eSnapshotError;
 
 static VALUE rb_cDateTime = Qnil;
 
@@ -299,6 +305,70 @@ static void unblock_eval(void *ptr) {
     eval->context_info->interrupted = true;
 }
 
+static VALUE rb_snapshot_size(VALUE self, VALUE str) {
+    SnapshotInfo* snapshot_info;
+    Data_Get_Struct(self, SnapshotInfo, snapshot_info);
+
+    return INT2NUM(snapshot_info->raw_size);
+}
+
+static VALUE rb_snapshot_load(VALUE self, VALUE str) {
+    SnapshotInfo* snapshot_info;
+    Data_Get_Struct(self, SnapshotInfo, snapshot_info);
+
+    init_v8();
+
+    StartupData startup_data = V8::CreateSnapshotDataBlob(RSTRING_PTR(str));
+
+    if (startup_data.data == NULL && startup_data.raw_size == 0) {
+        rb_raise(rb_eSnapshotError, "Could not create snapshot, most likely the source is incorrect");
+    }
+
+    snapshot_info->data = startup_data.data;
+    snapshot_info->raw_size = startup_data.raw_size;
+
+    return Qnil;
+}
+
+static VALUE rb_context_init_with_snapshot(VALUE self, VALUE snapshot) {
+    ContextInfo* context_info;
+    Data_Get_Struct(self, ContextInfo, context_info);
+
+    init_v8();
+
+    context_info->allocator = new ArrayBufferAllocator();
+    context_info->interrupted = false;
+
+    Isolate::CreateParams create_params;
+    create_params.array_buffer_allocator = context_info->allocator;
+
+    StartupData startup_data;
+    if (!NIL_P(snapshot)) {
+        SnapshotInfo* snapshot_info;
+        Data_Get_Struct(snapshot, SnapshotInfo, snapshot_info);
+
+        startup_data = {snapshot_info->data, snapshot_info->raw_size};
+        create_params.snapshot_blob = &startup_data;
+    }
+
+    context_info->isolate = Isolate::New(create_params);
+
+    Locker lock(context_info->isolate);
+    Isolate::Scope isolate_scope(context_info->isolate);
+    HandleScope handle_scope(context_info->isolate);
+
+    Local<Context> context = Context::New(context_info->isolate);
+
+    context_info->context = new Persistent<Context>();
+    context_info->context->Reset(context_info->isolate, context);
+
+    if (Qnil == rb_cDateTime && rb_funcall(rb_cObject, rb_intern("const_defined?"), 1, rb_str_new2("DateTime")) == Qtrue)
+    {
+        rb_cDateTime = rb_const_get(rb_cObject, rb_intern("DateTime"));
+    }
+
+    return Qnil;
+}
 
 static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 
@@ -553,13 +623,18 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
 
 void deallocate(void * data) {
     ContextInfo* context_info = (ContextInfo*)data;
+
     {
-	Locker lock(context_info->isolate);
+    if (context_info->isolate) {
+	    Locker lock(context_info->isolate);
+    }
     }
 
     {
-	context_info->context->Reset();
-	delete context_info->context;
+    if (context_info->context) {
+        context_info->context->Reset();
+        delete context_info->context;
+    }
     }
 
     {
@@ -578,37 +653,35 @@ void deallocate_external_function(void * data) {
     xfree(data);
 }
 
+void deallocate_snapshot(void * data) {
+    SnapshotInfo* snapshot_info = (SnapshotInfo*)data;
+
+    delete[] snapshot_info->data;
+
+    xfree(snapshot_info);
+}
+
 VALUE allocate_external_function(VALUE klass) {
     VALUE* self = ALLOC(VALUE);
     return Data_Wrap_Struct(klass, NULL, deallocate_external_function, (void*)self);
 }
 
 VALUE allocate(VALUE klass) {
-    init_v8();
-
     ContextInfo* context_info = ALLOC(ContextInfo);
-    context_info->allocator = new ArrayBufferAllocator();
+    context_info->allocator = NULL;
     context_info->interrupted = false;
-    Isolate::CreateParams create_params;
-    create_params.array_buffer_allocator = context_info->allocator;
-
-    context_info->isolate = Isolate::New(create_params);
-
-    Locker lock(context_info->isolate);
-    Isolate::Scope isolate_scope(context_info->isolate);
-    HandleScope handle_scope(context_info->isolate);
-
-    Local<Context> context = Context::New(context_info->isolate);
-
-    context_info->context = new Persistent<Context>();
-    context_info->context->Reset(context_info->isolate, context);
-
-    if (Qnil == rb_cDateTime && rb_funcall(rb_cObject, rb_intern("const_defined?"), 1, rb_str_new2("DateTime")) == Qtrue)
-    {
-        rb_cDateTime = rb_const_get(rb_cObject, rb_intern("DateTime"));
-    }
+    context_info->isolate = NULL;
+    context_info->context = NULL;
 
     return Data_Wrap_Struct(klass, NULL, deallocate, (void*)context_info);
+}
+
+VALUE allocate_snapshot(VALUE klass) {
+    SnapshotInfo* snapshot_info = ALLOC(SnapshotInfo);
+    snapshot_info->data = NULL;
+    snapshot_info->raw_size = 0;
+
+    return Data_Wrap_Struct(klass, NULL, deallocate_snapshot, (void*)snapshot_info);
 }
 
 static VALUE
@@ -625,20 +698,27 @@ extern "C" {
     {
 	VALUE rb_mMiniRacer = rb_define_module("MiniRacer");
 	VALUE rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);
+	VALUE rb_cSnapshot = rb_define_class_under(rb_mMiniRacer, "Snapshot", rb_cObject);
 
 	VALUE rb_eEvalError = rb_define_class_under(rb_mMiniRacer, "EvalError", rb_eStandardError);
 	rb_eScriptTerminatedError = rb_define_class_under(rb_mMiniRacer, "ScriptTerminatedError", rb_eEvalError);
 	rb_eParseError = rb_define_class_under(rb_mMiniRacer, "ParseError", rb_eEvalError);
 	rb_eScriptRuntimeError = rb_define_class_under(rb_mMiniRacer, "RuntimeError", rb_eEvalError);
 	rb_cJavaScriptFunction = rb_define_class_under(rb_mMiniRacer, "JavaScriptFunction", rb_cObject);
+	rb_eSnapshotError = rb_define_class_under(rb_mMiniRacer, "SnapshotError", rb_eStandardError);
 
 	VALUE rb_cExternalFunction = rb_define_class_under(rb_cContext, "ExternalFunction", rb_cObject);
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
 	rb_define_alloc_func(rb_cContext, allocate);
+	rb_define_alloc_func(rb_cSnapshot, allocate_snapshot);
 
 	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 1);
+	rb_define_private_method(rb_cContext, "init_with_snapshot",(VALUE(*)(...))&rb_context_init_with_snapshot, 1);
 	rb_define_private_method(rb_cExternalFunction, "notify_v8", (VALUE(*)(...))&rb_external_function_notify_v8, 0);
 	rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);
+
+	rb_define_method(rb_cSnapshot, "size", (VALUE(*)(...))&rb_snapshot_size, 0);
+	rb_define_private_method(rb_cSnapshot, "load", (VALUE(*)(...))&rb_snapshot_load, 1);
     }
 
 }

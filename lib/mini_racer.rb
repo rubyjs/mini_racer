@@ -7,6 +7,7 @@ module MiniRacer
   class EvalError < StandardError; end
   class ScriptTerminatedError < EvalError; end
   class ParseError < EvalError; end
+  class SnapshotError < StandardError; end
 
   class RuntimeError < EvalError
     def initialize(message)
@@ -80,9 +81,18 @@ module MiniRacer
       @timeout = nil
       @current_exception = nil
 
+      snapshot = nil
       if options
         @timeout = options[:timeout]
+        snapshot = options[:snapshot]
       end
+
+      unless snapshot.nil? || snapshot.is_a?(Snapshot)
+        raise ArgumentError, "snapshot must be a MiniRacer::Snapshot object, passed a #{snapshot.inspect}"
+      end
+
+      # defined in the C class
+      init_with_snapshot(snapshot)
     end
 
     def load(filename)
@@ -106,4 +116,10 @@ module MiniRacer
 
   end
 
+  class Snapshot
+    def initialize(str)
+      # defined in the C class
+      load(str)
+    end
+  end
 end
