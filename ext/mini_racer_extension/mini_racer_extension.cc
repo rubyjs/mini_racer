@@ -330,6 +330,27 @@ static VALUE rb_snapshot_load(VALUE self, VALUE str) {
     return Qnil;
 }
 
+static VALUE rb_snapshot_warmup(VALUE self, VALUE str) {
+    SnapshotInfo* snapshot_info;
+    Data_Get_Struct(self, SnapshotInfo, snapshot_info);
+
+    init_v8();
+
+    StartupData cold_startup_data = {snapshot_info->data, snapshot_info->raw_size};
+    StartupData warm_startup_data = V8::WarmUpSnapshotDataBlob(cold_startup_data, RSTRING_PTR(str));
+
+    if (warm_startup_data.data == NULL && warm_startup_data.raw_size == 0) {
+        rb_raise(rb_eSnapshotError, "Could not warm up snapshot, most likely the source is incorrect");
+    } else {
+        delete[] snapshot_info->data;
+
+        snapshot_info->data = warm_startup_data.data;
+        snapshot_info->raw_size = warm_startup_data.raw_size;
+    }
+
+    return Qnil;
+}
+
 static VALUE rb_context_init_with_snapshot(VALUE self, VALUE snapshot) {
     ContextInfo* context_info;
     Data_Get_Struct(self, ContextInfo, context_info);
@@ -718,6 +739,7 @@ extern "C" {
 	rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);
 
 	rb_define_method(rb_cSnapshot, "size", (VALUE(*)(...))&rb_snapshot_size, 0);
+	rb_define_method(rb_cSnapshot, "warmup", (VALUE(*)(...))&rb_snapshot_warmup, 1);
 	rb_define_private_method(rb_cSnapshot, "load", (VALUE(*)(...))&rb_snapshot_load, 1);
     }
 

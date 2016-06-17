@@ -116,8 +116,9 @@ module MiniRacer
 
   end
 
+  # `size` and `warmup` public methods are defined in the C class
   class Snapshot
-    def initialize(str)
+    def initialize(str = '')
       # defined in the C class
       load(str)
     end
