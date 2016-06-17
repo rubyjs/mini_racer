@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <ruby.h>
 #include <ruby/thread.h>
-#include <include/v8.h>
-#include <include/libplatform/libplatform.h>
+#include <v8.h>
+#include <libplatform/libplatform.h>
 #include <ruby/encoding.h>
 #include <pthread.h>
 #include <unistd.h>
