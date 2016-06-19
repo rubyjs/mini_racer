@@ -287,4 +287,74 @@ raise FooError, "I like foos"
     end
   end
 
+  def test_it_can_use_snapshots
+    snapshot = MiniRacer::Snapshot.new('function hello() { return "world"; }; var foo = "bar";')
+
+    context = MiniRacer::Context.new(snapshot: snapshot)
+
+    assert_equal "world", context.eval("hello()")
+    assert_equal "bar", context.eval("foo")
+  end
+
+  def test_snapshot_size
+    snapshot = MiniRacer::Snapshot.new('var foo = "bar";')
+
+    # for some reason sizes seem to change across runs, so we just
+    # check it's a positive integer
+    assert(snapshot.size > 0)
+  end
+
+  def test_invalid_snapshots_throw_an_exception
+    assert_raises(MiniRacer::SnapshotError) do
+      MiniRacer::Snapshot.new('var foo = bar;')
+    end
+  end
+
+  def test_an_empty_snapshot_is_valid
+    MiniRacer::Snapshot.new('')
+    MiniRacer::Snapshot.new
+  end
+
+  def test_snapshots_can_be_warmed_up_with_no_side_effects
+    # shamelessly insipired by https://github.com/v8/v8/blob/5.3.254/test/cctest/test-serialize.cc#L792-L854
+    snapshot_source = <<-JS
+      function f() { return Math.sin(1); }
+      var a = 5;
+    JS
+
+    snapshot = MiniRacer::Snapshot.new(snapshot_source)
+
+    warmump_source = <<-JS
+      Math.tan(1);
+      var a = f();
+      Math.sin = 1;
+    JS
+
+    snapshot.warmup(warmump_source)
+
+    context = MiniRacer::Context.new(snapshot: snapshot)
+
+    assert_equal 5, context.eval("a")
+    assert_equal "function", context.eval("typeof(Math.sin)")
+  end
+
+  def test_invalid_warmup_sources_throw_an_exception
+    assert_raises(MiniRacer::SnapshotError) do
+      MiniRacer::Snapshot.new('Math.sin = 1;').warmup('var a = Math.sin(1);')
+    end
+  end
+
+  def test_warming_up_with_invalid_source_does_not_affect_the_snapshot_internal_state
+    snapshot = MiniRacer::Snapshot.new('Math.sin = 1;')
+
+    begin
+      snapshot.warmup('var a = Math.sin(1);')
+    rescue
+      # do nothing
+    end
+
+    context = MiniRacer::Context.new(snapshot: snapshot)
+
+    assert_equal 1, context.eval("Math.sin")
+  end
 end
