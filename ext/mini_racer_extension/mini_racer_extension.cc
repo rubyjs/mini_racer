@@ -30,11 +30,8 @@ typedef struct {
     StartupData* startup_data;
     bool interrupted;
 
-    // the next 2 fields are used for orderly garbage collection
-    // whether there's a `MiniRacer::Isolate` object mapping to this isolate
-    bool maps_to_a_ruby_object;
-    // how many `ContextInfo` objects use this isolate
-    int using_contexts_count;
+    // how many references to this isolate exist
+    int refs_count;
 } IsolateInfo;
 
 typedef struct {
@@ -367,8 +364,7 @@ IsolateInfo* init_isolate_info_from_snapshot(IsolateInfo* isolate_info, VALUE sn
 
     isolate_info->allocator = new ArrayBufferAllocator();
     isolate_info->interrupted = false;
-    isolate_info->using_contexts_count = 0;
-    isolate_info->maps_to_a_ruby_object = false;
+    isolate_info->refs_count = 0;
 
     Isolate::CreateParams create_params;
     create_params.array_buffer_allocator = isolate_info->allocator;
@@ -400,7 +396,7 @@ static VALUE rb_isolate_init_with_snapshot(VALUE self, VALUE snapshot) {
     Data_Get_Struct(self, IsolateInfo, isolate_info);
 
     init_isolate_info_from_snapshot(isolate_info, snapshot);
-    isolate_info->maps_to_a_ruby_object = true;
+    isolate_info->refs_count++;
 
     return Qnil;
 }
@@ -425,7 +421,7 @@ static VALUE rb_context_init_with_isolate_or_snapshot(VALUE self, VALUE isolate,
         Data_Get_Struct(isolate, IsolateInfo, isolate_info);
     }
     context_info->isolate_info = isolate_info;
-    isolate_info->using_contexts_count++;
+    isolate_info->refs_count++;
 
     Locker lock(isolate_info->isolate);
     Isolate::Scope isolate_scope(isolate_info->isolate);
@@ -698,12 +694,9 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
 }
 
 void maybe_free_isolate_info(IsolateInfo* isolate_info) {
-    // isolates can only be freed when:
-    //  - there's no `MiniRacer::Isolate` ruby object using them
-    //  - there's no context still using them
-    if (isolate_info == NULL
-            || isolate_info->maps_to_a_ruby_object
-            || isolate_info->using_contexts_count > 0) {
+    // an isolate can only be freed if no Isolate or Context (ruby) object
+    // still need it
+    if (isolate_info == NULL || isolate_info->refs_count > 0) {
         return;
     }
 
@@ -736,7 +729,7 @@ void maybe_free_isolate_info(IsolateInfo* isolate_info) {
 void deallocate_isolate(void* data) {
     IsolateInfo* isolate_info = (IsolateInfo*) data;
 
-    isolate_info->maps_to_a_ruby_object = false;
+    isolate_info->refs_count--;
 
     maybe_free_isolate_info(isolate_info);
 }
@@ -755,7 +748,7 @@ void deallocate(void* data) {
     }
 
     if (isolate_info) {
-        isolate_info->using_contexts_count--;
+        isolate_info->refs_count--;
 
         maybe_free_isolate_info(isolate_info);
     }
@@ -801,6 +794,7 @@ VALUE allocate_isolate(VALUE klass) {
     isolate_info->allocator = NULL;
     isolate_info->startup_data = NULL;
     isolate_info->interrupted = false;
+    isolate_info->refs_count = 0;
 
     return Data_Wrap_Struct(klass, NULL, deallocate_isolate, (void*)isolate_info);
 }
