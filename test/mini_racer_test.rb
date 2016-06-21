@@ -287,6 +287,14 @@ raise FooError, "I like foos"
     end
   end
 
+  def test_contexts_can_be_safely_GCed
+    context = MiniRacer::Context.new
+    context.eval 'var hello = "world";'
+
+    context = nil
+    GC.start
+  end
+
   def test_it_can_use_snapshots
     snapshot = MiniRacer::Snapshot.new('function hello() { return "world"; }; var foo = "bar";')
 
@@ -313,6 +321,7 @@ raise FooError, "I like foos"
   def test_an_empty_snapshot_is_valid
     MiniRacer::Snapshot.new('')
     MiniRacer::Snapshot.new
+    GC.start
   end
 
   def test_snapshots_can_be_warmed_up_with_no_side_effects
@@ -330,17 +339,18 @@ raise FooError, "I like foos"
       Math.sin = 1;
     JS
 
-    snapshot.warmup(warmump_source)
+    warmed_up_snapshot = snapshot.warmup!(warmump_source)
 
     context = MiniRacer::Context.new(snapshot: snapshot)
 
     assert_equal 5, context.eval("a")
     assert_equal "function", context.eval("typeof(Math.sin)")
+    assert_same snapshot, warmed_up_snapshot
   end
 
   def test_invalid_warmup_sources_throw_an_exception
     assert_raises(MiniRacer::SnapshotError) do
-      MiniRacer::Snapshot.new('Math.sin = 1;').warmup('var a = Math.sin(1);')
+      MiniRacer::Snapshot.new('Math.sin = 1;').warmup!('var a = Math.sin(1);')
     end
   end
 
@@ -348,13 +358,90 @@ raise FooError, "I like foos"
     snapshot = MiniRacer::Snapshot.new('Math.sin = 1;')
 
     begin
-      snapshot.warmup('var a = Math.sin(1);')
+      snapshot.warmup!('var a = Math.sin(1);')
     rescue
       # do nothing
     end
 
     context = MiniRacer::Context.new(snapshot: snapshot)
 
-    assert_equal 1, context.eval("Math.sin")
+    assert_equal 1, context.eval('Math.sin')
+  end
+
+  def test_snapshots_can_be_GCed_without_affecting_contexts_created_from_them
+    snapshot = MiniRacer::Snapshot.new('Math.sin = 1;')
+    context = MiniRacer::Context.new(snapshot: snapshot)
+
+    # force the snapshot to be GC'ed
+    snapshot = nil
+    GC.start
+
+    # the context should still work fine
+    assert_equal 1, context.eval('Math.sin')
+  end
+
+  def test_it_can_re_use_isolates_for_multiple_contexts
+    snapshot = MiniRacer::Snapshot.new('Math.sin = 1;')
+    isolate = MiniRacer::Isolate.new(snapshot)
+
+    context1 = MiniRacer::Context.new(isolate: isolate)
+    assert_equal 1, context1.eval('Math.sin')
+
+    context1.eval('var a = 5;')
+
+    context2 = MiniRacer::Context.new(isolate: isolate)
+    assert_equal 1, context2.eval('Math.sin')
+    assert_raises MiniRacer::RuntimeError do
+      begin
+        context2.eval('a;')
+      rescue => e
+        assert_equal('ReferenceError: a is not defined', e.message)
+        raise
+      end
+    end
+  end
+
+  def test_empty_isolate_is_valid_and_can_be_GCed
+    MiniRacer::Isolate.new
+    GC.start
+  end
+
+  def test_isolates_from_snapshot_dont_get_corrupted_if_the_snapshot_gets_warmed_up_or_GCed
+    # basically tests that isolates get their own copy of the snapshot and don't
+    # get corrupted if the snapshot is subsequently warmed up
+    snapshot_source = <<-JS
+      function f() { return Math.sin(1); }
+      var a = 5;
+    JS
+
+    snapshot = MiniRacer::Snapshot.new(snapshot_source)
+    isolate = MiniRacer::Isolate.new(snapshot)
+
+    warmump_source = <<-JS
+      Math.tan(1);
+      var a = f();
+      Math.sin = 1;
+    JS
+
+    snapshot.warmup!(warmump_source)
+
+    context1 = MiniRacer::Context.new(isolate: isolate)
+
+    assert_equal 5, context1.eval("a")
+    assert_equal "function", context1.eval("typeof(Math.sin)")
+
+    snapshot = nil
+    GC.start
+
+    context2 = MiniRacer::Context.new(isolate: isolate)
+
+    assert_equal 5, context2.eval("a")
+    assert_equal "function", context2.eval("typeof(Math.sin)")
+  end
+
+  def test_isolate_can_be_notified_of_idle_time
+    isolate = MiniRacer::Isolate.new
+
+    assert(isolate.idle_notification(1000))
   end
 end

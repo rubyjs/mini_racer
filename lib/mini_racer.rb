@@ -39,6 +39,17 @@ module MiniRacer
     end
   end
 
+  class Isolate
+    def initialize(snapshot = nil)
+      unless snapshot.nil? || snapshot.is_a?(Snapshot)
+        raise ArgumentError, "snapshot must be a Snapshot object, passed a #{snapshot.inspect}"
+      end
+
+      # defined in the C class
+      init_with_snapshot(snapshot)
+    end
+  end
+
   # eval is defined in the C class
   class Context
 
@@ -76,23 +87,19 @@ module MiniRacer
     end
 
     def initialize(options = nil)
+      options ||= {}
+
+      check_init_options!(options)
+      
       @functions = {}
       @lock = Mutex.new
       @timeout = nil
       @current_exception = nil
 
-      snapshot = nil
-      if options
-        @timeout = options[:timeout]
-        snapshot = options[:snapshot]
-      end
-
-      unless snapshot.nil? || snapshot.is_a?(Snapshot)
-        raise ArgumentError, "snapshot must be a MiniRacer::Snapshot object, passed a #{snapshot.inspect}"
-      end
+      @timeout = options[:timeout]
 
       # defined in the C class
-      init_with_snapshot(snapshot)
+      init_with_isolate_or_snapshot(options[:isolate], options[:snapshot])
     end
 
     def load(filename)
@@ -114,6 +121,22 @@ module MiniRacer
       end
     end
 
+  private
+
+    def check_init_options!(options)
+      assert_option_is_nil_or_a('isolate', options[:isolate], Isolate)
+      assert_option_is_nil_or_a('snapshot', options[:snapshot], Snapshot)
+
+      if options[:isolate] && options[:snapshot]
+        raise ArgumentError, 'can only pass one of isolate and snapshot options'
+      end
+    end
+
+    def assert_option_is_nil_or_a(option_name, object, klass)
+      unless object.nil? || object.is_a?(klass)
+        raise ArgumentError, "#{option_name} must be a #{klass} object, passed a #{object.inspect}"
+      end
+    end
   end
 
   # `size` and `warmup` public methods are defined in the C class
