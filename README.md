@@ -88,6 +88,68 @@ puts context.eval("counter")
 
 ```
 
+### Snapshots
+
+Contexts can be created with pre-loaded snapshots:
+
+```ruby
+
+snapshot = MiniRacer::Snapshot.new('function hello() { return "world!"; }')
+
+context = MiniRacer::Context.new(snapshot: snapshot)
+
+context.eval("hello()")
+# => "world!"
+
+```
+
+Snapshots can come in handy for example if you want your contexts to be pre-loaded for effiency. It uses [V8 snapshots](http://v8project.blogspot.com/2015/09/custom-startup-snapshots.html) under the hood; see [this link](http://v8project.blogspot.com/2015/09/custom-startup-snapshots.html) for caveats using these, in particular:
+
+```
+There is an important limitation to snapshots: they can only capture V8’s
+heap. Any interaction from V8 with the outside is off-limits when creating the
+snapshot. Such interactions include:
+
+ * defining and calling API callbacks (i.e. functions created via v8::FunctionTemplate)
+ * creating typed arrays, since the backing store may be allocated outside of V8
+
+And of course, values derived from sources such as `Math.random` or `Date.now`
+are fixed once the snapshot has been captured. They are no longer really random
+nor reflect the current time.
+```
+
+### Shared isolates
+
+By default, MiniRacer's contexts each have their own isolate (V8 runtime). For efficiency, it is possible to re-use an isolate across contexts:
+
+```ruby
+
+isolate = MiniRacer::Isolate.new
+
+context1 = MiniRacer::Context.new(isolate: isolate)
+context2 = MiniRacer::Context.new(isolate: isolate)
+
+context1.isolate == context2.isolate
+# => true
+```
+
+The main benefit of this is avoiding creating/destroying isolates when not needed (for example if you use a lot of contexts).
+
+The caveat with this is that a given isolate can only execute one context at a time, so don't share isolates across contexts that you want to run concurrently.
+
+Also, note that if you want to use shared isolates together with snapshots, you need to first create an isolate with that snapshot, and then create contexts from that isolate:
+
+```ruby
+snapshot = MiniRacer::Snapshot.new('function hello() { return "world!"; }')
+
+isolate = MiniRacer::Isolate.new(snapshot)
+
+context = MiniRacer::Context.new(isolate: isolate)
+
+context.eval("hello()")
+# => "world!"
+```
+
 ## Performance
 
 The `bench` folder contains benchmark.
