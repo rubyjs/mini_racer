@@ -45,8 +45,14 @@ module MiniRacer
         raise ArgumentError, "snapshot must be a Snapshot object, passed a #{snapshot.inspect}"
       end
 
+      @lock = Mutex.new
+
       # defined in the C class
       init_with_snapshot(snapshot)
+    end
+
+    def with_lock
+      @lock.synchronize { yield }
     end
   end
 
@@ -86,20 +92,25 @@ module MiniRacer
       end
     end
 
+    attr_reader :isolate
+
     def initialize(options = nil)
       options ||= {}
 
       check_init_options!(options)
       
       @functions = {}
-      @lock = Mutex.new
       @timeout = nil
       @current_exception = nil
 
       @timeout = options[:timeout]
 
-      # defined in the C class
-      init_with_isolate_or_snapshot(options[:isolate], options[:snapshot])
+      @isolate = options[:isolate] || Isolate.new(options[:snapshot])
+
+      isolate.with_lock do
+        # defined in the C class
+        init_with_isolate(@isolate)
+      end
     end
 
     def load(filename)
@@ -108,14 +119,14 @@ module MiniRacer
     end
 
     def eval(str)
-      @lock.synchronize do
+      isolate.with_lock do
         @current_exception = nil
         eval_unsafe(str)
       end
     end
 
     def attach(name, callback)
-      @lock.synchronize do
+      isolate.with_lock do
         external = ExternalFunction.new(name, callback, self)
         @functions["#{name}"] = external
       end

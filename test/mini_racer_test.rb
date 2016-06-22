@@ -182,18 +182,18 @@ raise FooError, "I like foos"
     test_datetime = test_time.to_datetime
     context.attach("test", proc{test_time})
     context.attach("test_datetime", proc{test_datetime})
-    
+
     # check that marshalling to JS creates a date object (getTime())
     assert_equal((test_time.to_f*1000).to_i, context.eval("var result = test(); result.getTime();").to_i)
-    
+
     # check that marshalling to RB creates a Time object
     result = context.eval("test()")
     assert_equal(test_time.class, result.class)
     assert_equal(test_time.tv_sec, result.tv_sec)
-    
+
     # check that no precision is lost in the marshalling (js only stores milliseconds)
     assert_equal((test_time.tv_usec/1000.0).floor, (result.tv_usec/1000.0).floor)
-    
+
     # check that DateTime gets marshalled to js date and back out as rb Time
     result = context.eval("test_datetime()")
     assert_equal(test_time.class, result.class)
@@ -203,34 +203,34 @@ raise FooError, "I like foos"
 
   def test_datetime_missing
     Object.send(:remove_const, :DateTime)
-    
+
     # no exceptions should happen here, and non-datetime classes should marshall correctly still.
     context = MiniRacer::Context.new
     test_time = Time.new
     context.attach("test", proc{test_time})
-    
+
     assert_equal((test_time.to_f*1000).to_i, context.eval("var result = test(); result.getTime();").to_i)
-    
+
     result = context.eval("test()")
     assert_equal(test_time.class, result.class)
     assert_equal(test_time.tv_sec, result.tv_sec)
     assert_equal((test_time.tv_usec/1000.0).floor, (result.tv_usec/1000.0).floor)
   end
-  
+
   def test_return_large_number
     context = MiniRacer::Context.new
     test_num = 1_000_000_000_000_000
     context.attach("test", proc{test_num})
-    
+
     assert_equal(true, context.eval("test() === 1000000000000000"))
     assert_equal(test_num, context.eval("test()"))
   end
-  
+
   def test_return_int_max
     context = MiniRacer::Context.new
     test_num = 2 ** (31) - 1 #last int32 number
     context.attach("test", proc{test_num})
-    
+
     assert_equal(true, context.eval("test() === 2147483647"))
     assert_equal(test_num, context.eval("test()"))
   end
@@ -240,11 +240,11 @@ raise FooError, "I like foos"
     test_unknown = Date.new # hits T_DATA in convert_ruby_to_v8
     context.attach("test", proc{test_unknown})
     assert_equal("Undefined Conversion", context.eval("test()"))
-    
+
     # clean up and start up a new context
     context = nil
     GC.start
-    
+
     context = MiniRacer::Context.new
     test_unknown = Date.new # hits T_DATA in convert_ruby_to_v8
     context.attach("test", proc{test_unknown})
@@ -399,6 +399,9 @@ raise FooError, "I like foos"
         raise
       end
     end
+
+    assert_same isolate, context1.isolate
+    assert_same isolate, context2.isolate
   end
 
   def test_empty_isolate_is_valid_and_can_be_GCed
@@ -443,5 +446,43 @@ raise FooError, "I like foos"
     isolate = MiniRacer::Isolate.new
 
     assert(isolate.idle_notification(1000))
+  end
+
+  def test_concurrent_access_over_the_same_isolate_1
+    isolate = MiniRacer::Isolate.new
+    context = MiniRacer::Context.new(isolate: isolate)
+    context.eval('counter=0; plus=()=>counter++;')
+
+    (1..10).map do
+      Thread.new {
+        context.eval("plus()")
+      }
+    end.each(&:join)
+
+    assert_equal 10, context.eval("counter")
+  end
+
+  def test_concurrent_access_over_the_same_isolate_2
+    isolate = MiniRacer::Isolate.new
+
+    equals_after_sleep = {}
+
+    (1..10).map do |i|
+      Thread.new {
+        random = SecureRandom.hex
+        context = MiniRacer::Context.new(isolate: isolate)
+
+        context.eval('var now = new Date().getTime(); while(new Date().getTime() < now + 20) {}')
+        context.eval("a='#{random}'")
+        context.eval('var now = new Date().getTime(); while(new Date().getTime() < now + 20) {}')
+
+        # cruby hashes are thread safe as long as you don't mess with the
+        # same key in different threads
+        equals_after_sleep[i] = context.eval('a') == random
+       }
+    end.each(&:join)
+
+    assert_equal 10, equals_after_sleep.size
+    assert equals_after_sleep.values.all?
   end
 end

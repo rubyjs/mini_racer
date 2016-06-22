@@ -31,6 +31,10 @@ typedef struct {
     bool interrupted;
 
     // how many references to this isolate exist
+    // we can't rely on Ruby's GC for this, because when destroying
+    // objects, Ruby will destroy ruby objects first, then call the
+    // extenstion's deallocators. In this case, that means it would
+    // call `deallocate_isolate` _before_ `deallocate`, causing a segfault
     int refs_count;
 } IsolateInfo;
 
@@ -359,12 +363,15 @@ static VALUE rb_snapshot_warmup(VALUE self, VALUE str) {
     return self;
 }
 
-IsolateInfo* init_isolate_info_from_snapshot(IsolateInfo* isolate_info, VALUE snapshot) {
+static VALUE rb_isolate_init_with_snapshot(VALUE self, VALUE snapshot) {
+    IsolateInfo* isolate_info;
+    Data_Get_Struct(self, IsolateInfo, isolate_info);
+
     init_v8();
 
     isolate_info->allocator = new ArrayBufferAllocator();
     isolate_info->interrupted = false;
-    isolate_info->refs_count = 0;
+    isolate_info->refs_count = 1;
 
     Isolate::CreateParams create_params;
     create_params.array_buffer_allocator = isolate_info->allocator;
@@ -388,16 +395,6 @@ IsolateInfo* init_isolate_info_from_snapshot(IsolateInfo* isolate_info, VALUE sn
     isolate_info->startup_data = startup_data;
     isolate_info->isolate = Isolate::New(create_params);
 
-    return isolate_info;
-}
-
-static VALUE rb_isolate_init_with_snapshot(VALUE self, VALUE snapshot) {
-    IsolateInfo* isolate_info;
-    Data_Get_Struct(self, IsolateInfo, isolate_info);
-
-    init_isolate_info_from_snapshot(isolate_info, snapshot);
-    isolate_info->refs_count++;
-
     return Qnil;
 }
 
@@ -408,21 +405,19 @@ static VALUE rb_isolate_idle_notification(VALUE self, VALUE idle_time_in_ms) {
     return isolate_info->isolate->IdleNotification(NUM2INT(idle_time_in_ms)) ? Qtrue : Qfalse;
 }
 
-static VALUE rb_context_init_with_isolate_or_snapshot(VALUE self, VALUE isolate, VALUE snapshot) {
+static VALUE rb_context_init_with_isolate(VALUE self, VALUE isolate) {
     ContextInfo* context_info;
     Data_Get_Struct(self, ContextInfo, context_info);
 
     init_v8();
 
     IsolateInfo* isolate_info;
-    if (NIL_P(isolate)) {
-        isolate_info = init_isolate_info_from_snapshot(new IsolateInfo, snapshot);
-    } else {
-        Data_Get_Struct(isolate, IsolateInfo, isolate_info);
-    }
+    Data_Get_Struct(isolate, IsolateInfo, isolate_info);
+
     context_info->isolate_info = isolate_info;
     isolate_info->refs_count++;
 
+    {
     Locker lock(isolate_info->isolate);
     Isolate::Scope isolate_scope(isolate_info->isolate);
     HandleScope handle_scope(isolate_info->isolate);
@@ -431,6 +426,7 @@ static VALUE rb_context_init_with_isolate_or_snapshot(VALUE self, VALUE isolate,
 
     context_info->context = new Persistent<Context>();
     context_info->context->Reset(isolate_info->isolate, context);
+    }
 
     if (Qnil == rb_cDateTime && rb_funcall(rb_cObject, rb_intern("const_defined?"), 1, rb_str_new2("DateTime")) == Qtrue)
     {
@@ -830,7 +826,7 @@ extern "C" {
 	rb_define_alloc_func(rb_cIsolate, allocate_isolate);
 
 	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 1);
-	rb_define_private_method(rb_cContext, "init_with_isolate_or_snapshot",(VALUE(*)(...))&rb_context_init_with_isolate_or_snapshot, 2);
+	rb_define_private_method(rb_cContext, "init_with_isolate",(VALUE(*)(...))&rb_context_init_with_isolate, 1);
 	rb_define_private_method(rb_cExternalFunction, "notify_v8", (VALUE(*)(...))&rb_external_function_notify_v8, 0);
 	rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);
 
