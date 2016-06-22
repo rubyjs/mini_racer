@@ -357,4 +357,13 @@ raise FooError, "I like foos"
 
     assert_equal 1, context.eval("Math.sin")
   end
+
+  def test_platform_set_flag_raises_an_exception_if_already_initialized
+    # makes sure it's initialized
+    MiniRacer::Snapshot.new
+
+    assert_raises(MiniRacer::PlatformAlreadyInitialized) do
+      MiniRacer::Platform.set_flag!("--noconcurrent_recompilation")
+    end
+  end
 end

@@ -8,6 +8,7 @@ module MiniRacer
   class ScriptTerminatedError < EvalError; end
   class ParseError < EvalError; end
   class SnapshotError < StandardError; end
+  class PlatformAlreadyInitialized < StandardError; end
 
   class RuntimeError < EvalError
     def initialize(message)
@@ -38,6 +39,9 @@ module MiniRacer
       "JavaScript Function"
     end
   end
+
+  # `::set_flag!` is defined in the C class
+  class Platform; end
 
   # eval is defined in the C class
   class Context
