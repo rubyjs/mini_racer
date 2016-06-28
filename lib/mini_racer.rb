@@ -40,8 +40,36 @@ module MiniRacer
     end
   end
 
-  # `::set_flag!` is defined in the C class
-  class Platform; end
+  # `::` is defined in the C class
+  class Platform
+    class << self
+      def set_flags!(*args, **kwargs)
+        flags_to_strings([args, kwargs]).each do |flag|
+          # defined in the C class
+          set_flag_as_str!(flag)
+        end
+      end
+
+    private
+
+      def flags_to_strings(flags)
+        flags.flatten.map { |flag| flag_to_string(flag) }.flatten
+      end
+
+      # normalize flags to strings, and adds leading dashes if needed
+      def flag_to_string(flag)
+        if flag.is_a?(Hash)
+          flag.map do |key, value|
+            "#{flag_to_string(key)} #{value}"
+          end
+        else
+          str = flag.to_s
+          str = "--#{str}" unless str.start_with?('--')
+          str
+        end
+      end
+    end
+  end
 
   # eval is defined in the C class
   class Context

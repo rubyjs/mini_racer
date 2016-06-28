@@ -1,6 +1,8 @@
 require 'test_helper'
 
 class MiniRacerTest < Minitest::Test
+  # see `test_platform_set_flags_works` below
+  MiniRacer::Platform.set_flags! :use_strict
 
   def test_that_it_has_a_version_number
     refute_nil ::MiniRacer::VERSION
@@ -25,7 +27,7 @@ class MiniRacerTest < Minitest::Test
   def test_object
     context = MiniRacer::Context.new
     # remember JavaScript is quirky {"1" : 1} magically turns to {1: 1} cause magic
-    assert_equal({1 => 2, "two" => "two"}, context.eval('a={"1" : 2, "two" : "two"}'))
+    assert_equal({1 => 2, "two" => "two"}, context.eval('var a={"1" : 2, "two" : "two"}; a'))
   end
 
   def test_it_returns_runtime_error
@@ -77,7 +79,7 @@ class MiniRacerTest < Minitest::Test
 
   def test_returns_javascript_function
     context = MiniRacer::Context.new
-    assert_equal MiniRacer::JavaScriptFunction, context.eval("a = function(){}").class
+    assert_same MiniRacer::JavaScriptFunction, context.eval("var a = function(){}; a").class
   end
 
   def test_it_handles_malformed_js
@@ -108,18 +110,19 @@ class MiniRacerTest < Minitest::Test
 
   def test_can_attach_functions
     context = MiniRacer::Context.new
+    context.eval 'var adder'
     context.attach("adder", proc{|a,b| a+b})
     assert_equal 3, context.eval('adder(1,2)')
   end
 
   def test_es6_arrow_functions
     context = MiniRacer::Context.new
-    assert_equal 42, context.eval('adder=(x,y)=>x+y; adder(21,21);')
+    assert_equal 42, context.eval('var adder=(x,y)=>x+y; adder(21,21);')
   end
 
   def test_concurrent_access
     context = MiniRacer::Context.new
-    context.eval('counter=0; plus=()=>counter++;')
+    context.eval('var counter=0; var plus=()=>counter++;')
 
     (1..10).map do
       Thread.new {
@@ -154,18 +157,21 @@ raise FooError, "I like foos"
 
   def test_attached_on_object
     context = MiniRacer::Context.new
+    context.eval 'var minion'
     context.attach("minion.speak", proc{"banana"})
     assert_equal "banana", context.eval("minion.speak()")
   end
 
   def test_attached_on_nested_object
     context = MiniRacer::Context.new
+    context.eval 'var minion'
     context.attach("minion.kevin.speak", proc{"banana"})
     assert_equal "banana", context.eval("minion.kevin.speak()")
   end
 
   def test_return_arrays
     context = MiniRacer::Context.new
+    context.eval 'var nose'
     context.attach("nose.type", proc{["banana",["nose"]]})
     assert_equal ["banana", ["nose"]], context.eval("nose.type()")
   end
@@ -259,13 +265,14 @@ raise FooError, "I like foos"
 
   def test_can_attach_method
     context = MiniRacer::Context.new
+    context.eval 'var Echo'
     context.attach("Echo.say", Echo.method(:say))
     assert_equal "hello", context.eval("Echo.say('hello')")
   end
 
   def test_attach_error
     context = MiniRacer::Context.new
-    context.eval("minion = 2")
+    context.eval("var minion = 2")
     assert_raises do
       begin
         context.attach("minion.kevin.speak", proc{"banana"})
@@ -358,12 +365,53 @@ raise FooError, "I like foos"
     assert_equal 1, context.eval("Math.sin")
   end
 
-  def test_platform_set_flag_raises_an_exception_if_already_initialized
+  def test_platform_set_flags_raises_an_exception_if_already_initialized
     # makes sure it's initialized
     MiniRacer::Snapshot.new
 
     assert_raises(MiniRacer::PlatformAlreadyInitialized) do
-      MiniRacer::Platform.set_flag!("--noconcurrent_recompilation")
+      MiniRacer::Platform.set_flags! :noconcurrent_recompilation
     end
+  end
+
+  def test_platform_set_flags_works
+    context = MiniRacer::Context.new
+
+    assert_raises(MiniRacer::RuntimeError) do
+      # should fail because of strict mode set for all these tests
+      context.eval 'x = 28'
+    end
+  end
+
+  class TestPlatform < MiniRacer::Platform
+    def self.public_flags_to_strings(flags)
+      flags_to_strings(flags)
+    end
+  end
+
+  def test_platform_flags_to_strings
+    flags = [
+      :flag1,
+      [[[:flag2]]],
+      {key1: :value1},
+      {key2: 42,
+       key3: 8.7},
+      '--i_already_have_leading_hyphens',
+      [:'--me_too',
+       'i_dont']
+    ]
+
+    expected_string_flags = [
+      '--flag1',
+      '--flag2',
+      '--key1 value1',
+      '--key2 42',
+      '--key3 8.7',
+      '--i_already_have_leading_hyphens',
+      '--me_too',
+      '--i_dont'
+    ]
+
+    assert_equal expected_string_flags, TestPlatform.public_flags_to_strings(flags)
   end
 end

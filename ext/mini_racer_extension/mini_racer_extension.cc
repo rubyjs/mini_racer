@@ -60,7 +60,7 @@ static VALUE rb_cDateTime = Qnil;
 static Platform* current_platform = NULL;
 static std::mutex platform_lock;
 
-static VALUE rb_platform_set_flag(VALUE _klass, VALUE flag_as_str) {
+static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
     bool platform_already_initialized = false;
 
     platform_lock.lock();
@@ -775,7 +775,7 @@ extern "C" {
 	rb_define_method(rb_cSnapshot, "warmup", (VALUE(*)(...))&rb_snapshot_warmup, 1);
 	rb_define_private_method(rb_cSnapshot, "load", (VALUE(*)(...))&rb_snapshot_load, 1);
 
-	rb_define_singleton_method(rb_cPlatform, "set_flag!", (VALUE(*)(...))&rb_platform_set_flag, 1);
+	rb_define_singleton_method(rb_cPlatform, "set_flag_as_str!", (VALUE(*)(...))&rb_platform_set_flag_as_str, 1);
     }
 
 }
