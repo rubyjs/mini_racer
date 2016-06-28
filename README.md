@@ -118,6 +118,23 @@ are fixed once the snapshot has been captured. They are no longer really random
 nor reflect the current time.
 ```
 
+Also note that snapshots can be warmed up, using the `warmup!` method, which allows you to call functions which are otherwise lazily compiled to get them to compile right away; any side effect of your warm up code being then dismissed. [More details on warming up here](https://github.com/electron/electron/issues/169#issuecomment-76783481), and a small example:
+
+```ruby
+
+snapshot = MiniRacer::Snapshot.new('var counter = 0; function hello() { counter++; return "world! "; }')
+
+snapshot.warmup!('hello()')
+
+context = MiniRacer::Context.new(snapshot: snapshot)
+
+context.eval('hello()')
+# => "world! 1"
+context.eval('counter')
+# => 1
+
+```
+
 ### Shared isolates
 
 By default, MiniRacer's contexts each have their own isolate (V8 runtime). For efficiency, it is possible to re-use an isolate across contexts:
@@ -149,6 +166,24 @@ context = MiniRacer::Context.new(isolate: isolate)
 context.eval("hello()")
 # => "world!"
 ```
+
+Re-using the same isolate over and over again means V8's garbage collector will have to run to clean it up every now and then; it's possible to trigger a _blocking_ V8 GC run inside your isolate by running the `idle_notification` method on it, which takes a single argument: the amount of time (in milliseconds) that V8 should use at most for garbage collecting:
+
+```ruby
+isolate = MiniRacer::Isolate.new
+
+context = MiniRacer::Context.new(isolate: isolate)
+
+# do stuff with that context...
+
+# give up to 100ms for V8 garbage collection
+isolate.idle_notification(100)
+
+```
+
+This can come in handy to force V8 GC runs for example in between requests if you use MiniRacer on a web application.
+
+Note that this method maps directly to [`v8::Isolate::IdleNotification`](http://bespin.cz/~ondras/html/classv8_1_1Isolate.html#aea16cbb2e351de9a3ae7be2b7cb48297), and that in particular its return value is the same (true if there is no further garbage to collect, false otherwise) and the same caveats apply, in particular that `there is no guarantee that the [call will return] within the time limit.`
 
 ## Performance
 
