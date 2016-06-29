@@ -88,6 +88,47 @@ puts context.eval("counter")
 
 ```
 
+### V8 Runtime flags
+
+It is possible to set V8 Runtime flags:
+
+```ruby
+MiniRacer::Platform.set_flags! :noconcurrent_recompilation, max_inlining_levels: 10
+```
+
+This can come in handy if you want to use MiniRacer with Unicorn, which doesn't seem to alwatys appreciate V8's liberal use of threading:
+```ruby
+MiniRacer::Platform.set_flags! :noconcurrent_recompilation, :noconcurrent_sweeping
+```
+
+Or else to unlock experimental features in V8, for example tail recursion optimization:
+```ruby
+MiniRacer::Platform.set_flags! :harmony
+
+js = <<-JS
+'use strict';
+var f = function f(n){
+  if (n <= 0) {
+    return  'foo';
+  }
+  return f(n - 1);
+}
+
+f(1e6);
+JS
+
+context = MiniRacer::Context.new
+
+context.eval js
+# => "foo"
+```
+The same code without the harmony runtime flag results in a `MiniRacer::RuntimeError: RangeError: Maximum call stack size exceeded` exception.
+Please refer to http://node.green/ as a reference on other harmony features.
+
+A list of all V8 runtime flags can be found using `node --v8-options`, or else by perusing [the V8 source code for flags (make sure to use the right version of V8)](https://github.com/v8/v8/blob/master/src/flag-definitions.h).
+
+Note that runtime flags must be set before any other operation (e.g. creating a context, a snapshot or an isolate), otherwise an exception will be thrown.
+
 ## Performance
 
 The `bench` folder contains benchmark.
