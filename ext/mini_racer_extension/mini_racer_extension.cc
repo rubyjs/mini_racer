@@ -6,6 +6,7 @@
 #include <ruby/encoding.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <mutex>
 
 using namespace v8;
 
@@ -64,18 +65,48 @@ static VALUE rb_eParseError;
 static VALUE rb_eScriptRuntimeError;
 static VALUE rb_cJavaScriptFunction;
 static VALUE rb_eSnapshotError;
+static VALUE rb_ePlatformAlreadyInitializedError;
 
 static VALUE rb_cDateTime = Qnil;
 
 static Platform* current_platform = NULL;
+static std::mutex platform_lock;
+
+static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
+    bool platform_already_initialized = false;
+
+    platform_lock.lock();
+
+    if (current_platform == NULL) {
+        V8::SetFlagsFromString(RSTRING_PTR(flag_as_str), (int)RSTRING_LEN(flag_as_str));
+    } else {
+        platform_already_initialized = true;
+    }
+
+    platform_lock.unlock();
+
+    // important to raise outside of the lock
+    if (platform_already_initialized) {
+        rb_raise(rb_ePlatformAlreadyInitializedError, "The V8 platform is already initialized");
+    }
+
+    return Qnil;
+}
 
 static void init_v8() {
+    // no need to wait for the lock if already initialized
+    if (current_platform != NULL) return;
+
+    platform_lock.lock();
+
     if (current_platform == NULL) {
-	V8::InitializeICU();
-	current_platform = platform::CreateDefaultPlatform();
-	V8::InitializePlatform(current_platform);
-	V8::Initialize();
+        V8::InitializeICU();
+        current_platform = platform::CreateDefaultPlatform();
+        V8::InitializePlatform(current_platform);
+        V8::Initialize();
     }
+
+    platform_lock.unlock();
 }
 
 void* breaker(void *d) {
@@ -811,6 +842,7 @@ extern "C" {
 	VALUE rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);
 	VALUE rb_cSnapshot = rb_define_class_under(rb_mMiniRacer, "Snapshot", rb_cObject);
 	VALUE rb_cIsolate = rb_define_class_under(rb_mMiniRacer, "Isolate", rb_cObject);
+	VALUE rb_cPlatform = rb_define_class_under(rb_mMiniRacer, "Platform", rb_cObject);
 
 	VALUE rb_eEvalError = rb_define_class_under(rb_mMiniRacer, "EvalError", rb_eStandardError);
 	rb_eScriptTerminatedError = rb_define_class_under(rb_mMiniRacer, "ScriptTerminatedError", rb_eEvalError);
@@ -818,6 +850,7 @@ extern "C" {
 	rb_eScriptRuntimeError = rb_define_class_under(rb_mMiniRacer, "RuntimeError", rb_eEvalError);
 	rb_cJavaScriptFunction = rb_define_class_under(rb_mMiniRacer, "JavaScriptFunction", rb_cObject);
 	rb_eSnapshotError = rb_define_class_under(rb_mMiniRacer, "SnapshotError", rb_eStandardError);
+	rb_ePlatformAlreadyInitializedError = rb_define_class_under(rb_mMiniRacer, "PlatformAlreadyInitialized", rb_eStandardError);
 
 	VALUE rb_cExternalFunction = rb_define_class_under(rb_cContext, "ExternalFunction", rb_cObject);
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
@@ -836,6 +869,8 @@ extern "C" {
 
 	rb_define_method(rb_cIsolate, "idle_notification", (VALUE(*)(...))&rb_isolate_idle_notification, 1);
 	rb_define_private_method(rb_cIsolate, "init_with_snapshot",(VALUE(*)(...))&rb_isolate_init_with_snapshot, 1);
+
+	rb_define_singleton_method(rb_cPlatform, "set_flag_as_str!", (VALUE(*)(...))&rb_platform_set_flag_as_str, 1);
     }
 
 }
