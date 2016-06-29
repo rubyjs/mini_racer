@@ -208,19 +208,23 @@ raise FooError, "I like foos"
   end
 
   def test_datetime_missing
-    Object.send(:remove_const, :DateTime)
+    date_time_backup = Object.send(:remove_const, :DateTime)
 
-    # no exceptions should happen here, and non-datetime classes should marshall correctly still.
-    context = MiniRacer::Context.new
-    test_time = Time.new
-    context.attach("test", proc{test_time})
+    begin
+      # no exceptions should happen here, and non-datetime classes should marshall correctly still.
+      context = MiniRacer::Context.new
+      test_time = Time.new
+      context.attach("test", proc{test_time})
 
-    assert_equal((test_time.to_f*1000).to_i, context.eval("var result = test(); result.getTime();").to_i)
+      assert_equal((test_time.to_f*1000).to_i, context.eval("var result = test(); result.getTime();").to_i)
 
-    result = context.eval("test()")
-    assert_equal(test_time.class, result.class)
-    assert_equal(test_time.tv_sec, result.tv_sec)
-    assert_equal((test_time.tv_usec/1000.0).floor, (result.tv_usec/1000.0).floor)
+      result = context.eval("test()")
+      assert_equal(test_time.class, result.class)
+      assert_equal(test_time.tv_sec, result.tv_sec)
+      assert_equal((test_time.tv_usec/1000.0).floor, (result.tv_usec/1000.0).floor)
+    ensure
+      Object.const_set(:DateTime, date_time_backup)
+    end
   end
 
   def test_return_large_number
