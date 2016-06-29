@@ -188,18 +188,18 @@ raise FooError, "I like foos"
     test_datetime = test_time.to_datetime
     context.attach("test", proc{test_time})
     context.attach("test_datetime", proc{test_datetime})
-    
+
     # check that marshalling to JS creates a date object (getTime())
     assert_equal((test_time.to_f*1000).to_i, context.eval("var result = test(); result.getTime();").to_i)
-    
+
     # check that marshalling to RB creates a Time object
     result = context.eval("test()")
     assert_equal(test_time.class, result.class)
     assert_equal(test_time.tv_sec, result.tv_sec)
-    
+
     # check that no precision is lost in the marshalling (js only stores milliseconds)
     assert_equal((test_time.tv_usec/1000.0).floor, (result.tv_usec/1000.0).floor)
-    
+
     # check that DateTime gets marshalled to js date and back out as rb Time
     result = context.eval("test_datetime()")
     assert_equal(test_time.class, result.class)
@@ -209,34 +209,34 @@ raise FooError, "I like foos"
 
   def test_datetime_missing
     Object.send(:remove_const, :DateTime)
-    
+
     # no exceptions should happen here, and non-datetime classes should marshall correctly still.
     context = MiniRacer::Context.new
     test_time = Time.new
     context.attach("test", proc{test_time})
-    
+
     assert_equal((test_time.to_f*1000).to_i, context.eval("var result = test(); result.getTime();").to_i)
-    
+
     result = context.eval("test()")
     assert_equal(test_time.class, result.class)
     assert_equal(test_time.tv_sec, result.tv_sec)
     assert_equal((test_time.tv_usec/1000.0).floor, (result.tv_usec/1000.0).floor)
   end
-  
+
   def test_return_large_number
     context = MiniRacer::Context.new
     test_num = 1_000_000_000_000_000
     context.attach("test", proc{test_num})
-    
+
     assert_equal(true, context.eval("test() === 1000000000000000"))
     assert_equal(test_num, context.eval("test()"))
   end
-  
+
   def test_return_int_max
     context = MiniRacer::Context.new
     test_num = 2 ** (31) - 1 #last int32 number
     context.attach("test", proc{test_num})
-    
+
     assert_equal(true, context.eval("test() === 2147483647"))
     assert_equal(test_num, context.eval("test()"))
   end
@@ -246,11 +246,11 @@ raise FooError, "I like foos"
     test_unknown = Date.new # hits T_DATA in convert_ruby_to_v8
     context.attach("test", proc{test_unknown})
     assert_equal("Undefined Conversion", context.eval("test()"))
-    
+
     # clean up and start up a new context
     context = nil
     GC.start
-    
+
     context = MiniRacer::Context.new
     test_unknown = Date.new # hits T_DATA in convert_ruby_to_v8
     context.attach("test", proc{test_unknown})
@@ -294,6 +294,14 @@ raise FooError, "I like foos"
     end
   end
 
+  def test_contexts_can_be_safely_GCed
+    context = MiniRacer::Context.new
+    context.eval 'var hello = "world";'
+
+    context = nil
+    GC.start
+  end
+
   def test_it_can_use_snapshots
     snapshot = MiniRacer::Snapshot.new('function hello() { return "world"; }; var foo = "bar";')
 
@@ -320,6 +328,7 @@ raise FooError, "I like foos"
   def test_an_empty_snapshot_is_valid
     MiniRacer::Snapshot.new('')
     MiniRacer::Snapshot.new
+    GC.start
   end
 
   def test_snapshots_can_be_warmed_up_with_no_side_effects
@@ -337,17 +346,18 @@ raise FooError, "I like foos"
       Math.sin = 1;
     JS
 
-    snapshot.warmup(warmump_source)
+    warmed_up_snapshot = snapshot.warmup!(warmump_source)
 
     context = MiniRacer::Context.new(snapshot: snapshot)
 
     assert_equal 5, context.eval("a")
     assert_equal "function", context.eval("typeof(Math.sin)")
+    assert_same snapshot, warmed_up_snapshot
   end
 
   def test_invalid_warmup_sources_throw_an_exception
     assert_raises(MiniRacer::SnapshotError) do
-      MiniRacer::Snapshot.new('Math.sin = 1;').warmup('var a = Math.sin(1);')
+      MiniRacer::Snapshot.new('Math.sin = 1;').warmup!('var a = Math.sin(1);')
     end
   end
 
@@ -355,14 +365,132 @@ raise FooError, "I like foos"
     snapshot = MiniRacer::Snapshot.new('Math.sin = 1;')
 
     begin
-      snapshot.warmup('var a = Math.sin(1);')
+      snapshot.warmup!('var a = Math.sin(1);')
     rescue
       # do nothing
     end
 
     context = MiniRacer::Context.new(snapshot: snapshot)
 
-    assert_equal 1, context.eval("Math.sin")
+    assert_equal 1, context.eval('Math.sin')
+  end
+
+  def test_snapshots_can_be_GCed_without_affecting_contexts_created_from_them
+    snapshot = MiniRacer::Snapshot.new('Math.sin = 1;')
+    context = MiniRacer::Context.new(snapshot: snapshot)
+
+    # force the snapshot to be GC'ed
+    snapshot = nil
+    GC.start
+
+    # the context should still work fine
+    assert_equal 1, context.eval('Math.sin')
+  end
+
+  def test_it_can_re_use_isolates_for_multiple_contexts
+    snapshot = MiniRacer::Snapshot.new('Math.sin = 1;')
+    isolate = MiniRacer::Isolate.new(snapshot)
+
+    context1 = MiniRacer::Context.new(isolate: isolate)
+    assert_equal 1, context1.eval('Math.sin')
+
+    context1.eval('var a = 5;')
+
+    context2 = MiniRacer::Context.new(isolate: isolate)
+    assert_equal 1, context2.eval('Math.sin')
+    assert_raises MiniRacer::RuntimeError do
+      begin
+        context2.eval('a;')
+      rescue => e
+        assert_equal('ReferenceError: a is not defined', e.message)
+        raise
+      end
+    end
+
+    assert_same isolate, context1.isolate
+    assert_same isolate, context2.isolate
+  end
+
+  def test_empty_isolate_is_valid_and_can_be_GCed
+    MiniRacer::Isolate.new
+    GC.start
+  end
+
+  def test_isolates_from_snapshot_dont_get_corrupted_if_the_snapshot_gets_warmed_up_or_GCed
+    # basically tests that isolates get their own copy of the snapshot and don't
+    # get corrupted if the snapshot is subsequently warmed up
+    snapshot_source = <<-JS
+      function f() { return Math.sin(1); }
+      var a = 5;
+    JS
+
+    snapshot = MiniRacer::Snapshot.new(snapshot_source)
+    isolate = MiniRacer::Isolate.new(snapshot)
+
+    warmump_source = <<-JS
+      Math.tan(1);
+      var a = f();
+      Math.sin = 1;
+    JS
+
+    snapshot.warmup!(warmump_source)
+
+    context1 = MiniRacer::Context.new(isolate: isolate)
+
+    assert_equal 5, context1.eval("a")
+    assert_equal "function", context1.eval("typeof(Math.sin)")
+
+    snapshot = nil
+    GC.start
+
+    context2 = MiniRacer::Context.new(isolate: isolate)
+
+    assert_equal 5, context2.eval("a")
+    assert_equal "function", context2.eval("typeof(Math.sin)")
+  end
+
+  def test_isolate_can_be_notified_of_idle_time
+    isolate = MiniRacer::Isolate.new
+
+    assert(isolate.idle_notification(1000))
+  end
+
+  def test_concurrent_access_over_the_same_isolate_1
+    isolate = MiniRacer::Isolate.new
+    context = MiniRacer::Context.new(isolate: isolate)
+    context.eval('var counter=0; var plus=()=>counter++;')
+
+    (1..10).map do
+      Thread.new {
+        context.eval("plus()")
+      }
+    end.each(&:join)
+
+    assert_equal 10, context.eval('counter')
+  end
+
+  def test_concurrent_access_over_the_same_isolate_2
+    isolate = MiniRacer::Isolate.new
+
+    equals_after_sleep = {}
+
+    (1..10).map do |i|
+      Thread.new {
+        random = SecureRandom.hex
+        context = MiniRacer::Context.new(isolate: isolate)
+
+        context.eval('var now = new Date().getTime(); while(new Date().getTime() < now + 20) {}')
+        context.eval("var a='#{random}'")
+        context.eval('var now = new Date().getTime(); while(new Date().getTime() < now + 20) {}')
+
+        # cruby hashes are thread safe as long as you don't mess with the
+        # same key in different threads
+        equals_after_sleep[i] = context.eval('a') == random
+       }
+    end.each(&:join)
+
+    assert_equal 10, equals_after_sleep.size
+    assert equals_after_sleep.values.all?
   end
 
   def test_platform_set_flags_raises_an_exception_if_already_initialized

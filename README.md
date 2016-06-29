@@ -88,6 +88,103 @@ puts context.eval("counter")
 
 ```
 
+### Snapshots
+
+Contexts can be created with pre-loaded snapshots:
+
+```ruby
+
+snapshot = MiniRacer::Snapshot.new('function hello() { return "world!"; }')
+
+context = MiniRacer::Context.new(snapshot: snapshot)
+
+context.eval("hello()")
+# => "world!"
+
+```
+
+Snapshots can come in handy for example if you want your contexts to be pre-loaded for effiency. It uses [V8 snapshots](http://v8project.blogspot.com/2015/09/custom-startup-snapshots.html) under the hood; see [this link](http://v8project.blogspot.com/2015/09/custom-startup-snapshots.html) for caveats using these, in particular:
+
+```
+There is an important limitation to snapshots: they can only capture V8’s
+heap. Any interaction from V8 with the outside is off-limits when creating the
+snapshot. Such interactions include:
+
+ * defining and calling API callbacks (i.e. functions created via v8::FunctionTemplate)
+ * creating typed arrays, since the backing store may be allocated outside of V8
+
+And of course, values derived from sources such as `Math.random` or `Date.now`
+are fixed once the snapshot has been captured. They are no longer really random
+nor reflect the current time.
+```
+
+Also note that snapshots can be warmed up, using the `warmup!` method, which allows you to call functions which are otherwise lazily compiled to get them to compile right away; any side effect of your warm up code being then dismissed. [More details on warming up here](https://github.com/electron/electron/issues/169#issuecomment-76783481), and a small example:
+
+```ruby
+
+snapshot = MiniRacer::Snapshot.new('var counter = 0; function hello() { counter++; return "world! "; }')
+
+snapshot.warmup!('hello()')
+
+context = MiniRacer::Context.new(snapshot: snapshot)
+
+context.eval('hello()')
+# => "world! 1"
+context.eval('counter')
+# => 1
+
+```
+
+### Shared isolates
+
+By default, MiniRacer's contexts each have their own isolate (V8 runtime). For efficiency, it is possible to re-use an isolate across contexts:
+
+```ruby
+
+isolate = MiniRacer::Isolate.new
+
+context1 = MiniRacer::Context.new(isolate: isolate)
+context2 = MiniRacer::Context.new(isolate: isolate)
+
+context1.isolate == context2.isolate
+# => true
+```
+
+The main benefit of this is avoiding creating/destroying isolates when not needed (for example if you use a lot of contexts).
+
+The caveat with this is that a given isolate can only execute one context at a time, so don't share isolates across contexts that you want to run concurrently.
+
+Also, note that if you want to use shared isolates together with snapshots, you need to first create an isolate with that snapshot, and then create contexts from that isolate:
+
+```ruby
+snapshot = MiniRacer::Snapshot.new('function hello() { return "world!"; }')
+
+isolate = MiniRacer::Isolate.new(snapshot)
+
+context = MiniRacer::Context.new(isolate: isolate)
+
+context.eval("hello()")
+# => "world!"
+```
+
+Re-using the same isolate over and over again means V8's garbage collector will have to run to clean it up every now and then; it's possible to trigger a _blocking_ V8 GC run inside your isolate by running the `idle_notification` method on it, which takes a single argument: the amount of time (in milliseconds) that V8 should use at most for garbage collecting:
+
+```ruby
+isolate = MiniRacer::Isolate.new
+
+context = MiniRacer::Context.new(isolate: isolate)
+
+# do stuff with that context...
+
+# give up to 100ms for V8 garbage collection
+isolate.idle_notification(100)
+
+```
+
+This can come in handy to force V8 GC runs for example in between requests if you use MiniRacer on a web application.
+
+Note that this method maps directly to [`v8::Isolate::IdleNotification`](http://bespin.cz/~ondras/html/classv8_1_1Isolate.html#aea16cbb2e351de9a3ae7be2b7cb48297), and that in particular its return value is the same (true if there is no further garbage to collect, false otherwise) and the same caveats apply, in particular that `there is no guarantee that the [call will return] within the time limit.`
+
 ### V8 Runtime flags
 
 It is possible to set V8 Runtime flags:

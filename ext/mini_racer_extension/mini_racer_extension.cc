@@ -21,16 +21,28 @@ class ArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
 };
 
 typedef struct {
-    Isolate* isolate;
-    Persistent<Context>* context;
-    ArrayBufferAllocator* allocator;
-    bool interrupted;
-} ContextInfo;
-
-typedef struct {
     const char* data;
     int raw_size;
 } SnapshotInfo;
+
+typedef struct {
+    Isolate* isolate;
+    ArrayBufferAllocator* allocator;
+    StartupData* startup_data;
+    bool interrupted;
+
+    // how many references to this isolate exist
+    // we can't rely on Ruby's GC for this, because when destroying
+    // objects, Ruby will destroy ruby objects first, then call the
+    // extenstion's deallocators. In this case, that means it would
+    // call `deallocate_isolate` _before_ `deallocate`, causing a segfault
+    int refs_count;
+} IsolateInfo;
+
+typedef struct {
+    IsolateInfo* isolate_info;
+    Persistent<Context>* context;
+} ContextInfo;
 
 typedef struct {
     bool parsed;
@@ -101,7 +113,7 @@ void* breaker(void *d) {
   EvalParams* data = (EvalParams*)d;
   usleep(data->timeout*1000);
   pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-  V8::TerminateExecution(data->context_info->isolate);
+  V8::TerminateExecution(data->context_info->isolate_info->isolate);
   return NULL;
 }
 
@@ -109,7 +121,7 @@ void*
 nogvl_context_eval(void* arg) {
     EvalParams* eval_params = (EvalParams*)arg;
     EvalResult* result = eval_params->result;
-    Isolate* isolate = eval_params->context_info->isolate;
+    Isolate* isolate = eval_params->context_info->isolate_info->isolate;
     Isolate::Scope isolate_scope(isolate);
     HandleScope handle_scope(isolate);
 
@@ -333,7 +345,7 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
 
 static void unblock_eval(void *ptr) {
     EvalParams* eval = (EvalParams*)ptr;
-    eval->context_info->interrupted = true;
+    eval->context_info->isolate_info->interrupted = true;
 }
 
 static VALUE rb_snapshot_size(VALUE self, VALUE str) {
@@ -379,40 +391,73 @@ static VALUE rb_snapshot_warmup(VALUE self, VALUE str) {
         snapshot_info->raw_size = warm_startup_data.raw_size;
     }
 
+    return self;
+}
+
+static VALUE rb_isolate_init_with_snapshot(VALUE self, VALUE snapshot) {
+    IsolateInfo* isolate_info;
+    Data_Get_Struct(self, IsolateInfo, isolate_info);
+
+    init_v8();
+
+    isolate_info->allocator = new ArrayBufferAllocator();
+    isolate_info->interrupted = false;
+    isolate_info->refs_count = 1;
+
+    Isolate::CreateParams create_params;
+    create_params.array_buffer_allocator = isolate_info->allocator;
+
+    StartupData* startup_data = NULL;
+    if (!NIL_P(snapshot)) {
+        SnapshotInfo* snapshot_info;
+        Data_Get_Struct(snapshot, SnapshotInfo, snapshot_info);
+
+        int raw_size = snapshot_info->raw_size;
+        char* data = new char[raw_size];
+        memcpy(data, snapshot_info->data, sizeof(char) * raw_size);
+
+        startup_data = new StartupData;
+        startup_data->data = data;
+        startup_data->raw_size = raw_size;
+
+        create_params.snapshot_blob = startup_data;
+    }
+
+    isolate_info->startup_data = startup_data;
+    isolate_info->isolate = Isolate::New(create_params);
+
     return Qnil;
 }
 
-static VALUE rb_context_init_with_snapshot(VALUE self, VALUE snapshot) {
+static VALUE rb_isolate_idle_notification(VALUE self, VALUE idle_time_in_ms) {
+    IsolateInfo* isolate_info;
+    Data_Get_Struct(self, IsolateInfo, isolate_info);
+
+    return isolate_info->isolate->IdleNotification(NUM2INT(idle_time_in_ms)) ? Qtrue : Qfalse;
+}
+
+static VALUE rb_context_init_with_isolate(VALUE self, VALUE isolate) {
     ContextInfo* context_info;
     Data_Get_Struct(self, ContextInfo, context_info);
 
     init_v8();
 
-    context_info->allocator = new ArrayBufferAllocator();
-    context_info->interrupted = false;
+    IsolateInfo* isolate_info;
+    Data_Get_Struct(isolate, IsolateInfo, isolate_info);
 
-    Isolate::CreateParams create_params;
-    create_params.array_buffer_allocator = context_info->allocator;
+    context_info->isolate_info = isolate_info;
+    isolate_info->refs_count++;
 
-    StartupData startup_data;
-    if (!NIL_P(snapshot)) {
-        SnapshotInfo* snapshot_info;
-        Data_Get_Struct(snapshot, SnapshotInfo, snapshot_info);
+    {
+    Locker lock(isolate_info->isolate);
+    Isolate::Scope isolate_scope(isolate_info->isolate);
+    HandleScope handle_scope(isolate_info->isolate);
 
-        startup_data = {snapshot_info->data, snapshot_info->raw_size};
-        create_params.snapshot_blob = &startup_data;
-    }
-
-    context_info->isolate = Isolate::New(create_params);
-
-    Locker lock(context_info->isolate);
-    Isolate::Scope isolate_scope(context_info->isolate);
-    HandleScope handle_scope(context_info->isolate);
-
-    Local<Context> context = Context::New(context_info->isolate);
+    Local<Context> context = Context::New(isolate_info->isolate);
 
     context_info->context = new Persistent<Context>();
-    context_info->context->Reset(context_info->isolate, context);
+    context_info->context->Reset(isolate_info->isolate, context);
+    }
 
     if (Qnil == rb_cDateTime && rb_funcall(rb_cObject, rb_intern("const_defined?"), 1, rb_str_new2("DateTime")) == Qtrue)
     {
@@ -433,13 +478,14 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
     VALUE backtrace = Qnil;
 
     Data_Get_Struct(self, ContextInfo, context_info);
+    Isolate* isolate = context_info->isolate_info->isolate;
 
     {
-	Locker lock(context_info->isolate);
-	Isolate::Scope isolate_scope(context_info->isolate);
-	HandleScope handle_scope(context_info->isolate);
+	Locker lock(isolate);
+	Isolate::Scope isolate_scope(isolate);
+	HandleScope handle_scope(isolate);
 
-	Local<String> eval = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(str),
+	Local<String> eval = String::NewFromUtf8(isolate, RSTRING_PTR(str),
 						  NewStringType::kNormal, (int)RSTRING_LEN(str)).ToLocalChecked();
 
 	eval_params.context_info = context_info;
@@ -457,15 +503,15 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 	rb_thread_call_without_gvl(nogvl_context_eval, &eval_params, unblock_eval, &eval_params);
 
 	if (eval_result.message != NULL) {
-	    Local<Value> tmp = Local<Value>::New(context_info->isolate, *eval_result.message);
-	    message = convert_v8_to_ruby(context_info->isolate, tmp);
+	    Local<Value> tmp = Local<Value>::New(isolate, *eval_result.message);
+	    message = convert_v8_to_ruby(isolate, tmp);
 	    eval_result.message->Reset();
 	    delete eval_result.message;
 	}
 
 	if (eval_result.backtrace != NULL) {
-	    Local<Value> tmp = Local<Value>::New(context_info->isolate, *eval_result.backtrace);
-	    backtrace = convert_v8_to_ruby(context_info->isolate, tmp);
+	    Local<Value> tmp = Local<Value>::New(isolate, *eval_result.backtrace);
+	    backtrace = convert_v8_to_ruby(isolate, tmp);
 	    eval_result.backtrace->Reset();
 	    delete eval_result.backtrace;
 	}
@@ -501,12 +547,12 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 
     // New scope for return value
     {
-	Locker lock(context_info->isolate);
-	Isolate::Scope isolate_scope(context_info->isolate);
-	HandleScope handle_scope(context_info->isolate);
+	Locker lock(isolate);
+	Isolate::Scope isolate_scope(isolate);
+	HandleScope handle_scope(isolate);
 
-	Local<Value> tmp = Local<Value>::New(context_info->isolate, *eval_result.value);
-	result = convert_v8_to_ruby(context_info->isolate, tmp);
+	Local<Value> tmp = Local<Value>::New(isolate, *eval_result.value);
+	result = convert_v8_to_ruby(isolate, tmp);
 
 	eval_result.value->Reset();
 	delete eval_result.value;
@@ -617,16 +663,17 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
     bool attach_error = false;
 
     Data_Get_Struct(parent, ContextInfo, context_info);
+    Isolate* isolate = context_info->isolate_info->isolate;
 
     {
-	Locker lock(context_info->isolate);
-	Isolate::Scope isolate_scope(context_info->isolate);
-	HandleScope handle_scope(context_info->isolate);
+	Locker lock(isolate);
+	Isolate::Scope isolate_scope(isolate);
+	HandleScope handle_scope(isolate);
 
-	Local<Context> context = context_info->context->Get(context_info->isolate);
+	Local<Context> context = context_info->context->Get(isolate);
 	Context::Scope context_scope(context);
 
-	Local<String> v8_str = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(name),
+	Local<String> v8_str = String::NewFromUtf8(isolate, RSTRING_PTR(name),
 						  NewStringType::kNormal, (int)RSTRING_LEN(name)).ToLocalChecked();
 
 	// copy self so we can access from v8 external
@@ -634,13 +681,13 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
 	Data_Get_Struct(self, VALUE, self_copy);
 	*self_copy = self;
 
-	Local<Value> external = External::New(context_info->isolate, self_copy);
+	Local<Value> external = External::New(isolate, self_copy);
 
 	if (parent_object == Qnil) {
-	    context->Global()->Set(v8_str, FunctionTemplate::New(context_info->isolate, ruby_callback, external)->GetFunction());
+	    context->Global()->Set(v8_str, FunctionTemplate::New(isolate, ruby_callback, external)->GetFunction());
 	} else {
 
-	    Local<String> eval = String::NewFromUtf8(context_info->isolate, RSTRING_PTR(parent_object_eval),
+	    Local<String> eval = String::NewFromUtf8(isolate, RSTRING_PTR(parent_object_eval),
 						      NewStringType::kNormal, (int)RSTRING_LEN(parent_object_eval)).ToLocalChecked();
 
 	    MaybeLocal<Script> parsed_script = Script::Compile(context, eval);
@@ -653,7 +700,7 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
 		if (!maybe_value.IsEmpty()) {
 		    Local<Value> value = maybe_value.ToLocalChecked();
 		    if (value->IsObject()){
-			value.As<Object>()->Set(v8_str, FunctionTemplate::New(context_info->isolate, ruby_callback, external)->GetFunction());
+			value.As<Object>()->Set(v8_str, FunctionTemplate::New(isolate, ruby_callback, external)->GetFunction());
 			attach_error = false;
 		    }
 		}
@@ -673,32 +720,65 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
     return Qnil;
 }
 
-void deallocate(void * data) {
+void maybe_free_isolate_info(IsolateInfo* isolate_info) {
+    // an isolate can only be freed if no Isolate or Context (ruby) object
+    // still need it
+    if (isolate_info == NULL || isolate_info->refs_count > 0) {
+        return;
+    }
+
+    {
+    if (isolate_info->isolate) {
+	    Locker lock(isolate_info->isolate);
+    }
+    }
+
+    {
+    if (isolate_info->isolate) {
+        if (isolate_info->interrupted) {
+            fprintf(stderr, "WARNING: V8 isolate was interrupted by Ruby, it can not be disposed and memory will not be reclaimed till the Ruby process exits.");
+        } else {
+            isolate_info->isolate->Dispose();
+        }
+        isolate_info->isolate = NULL;
+    }
+    }
+
+    if (isolate_info->startup_data) {
+        delete[] isolate_info->startup_data->data;
+        delete isolate_info->startup_data;
+    }
+
+    delete isolate_info->allocator;
+    xfree(isolate_info);
+}
+
+void deallocate_isolate(void* data) {
+    IsolateInfo* isolate_info = (IsolateInfo*) data;
+
+    isolate_info->refs_count--;
+
+    maybe_free_isolate_info(isolate_info);
+}
+
+void deallocate(void* data) {
     ContextInfo* context_info = (ContextInfo*)data;
+    IsolateInfo* isolate_info = context_info->isolate_info;
 
     {
-    if (context_info->isolate) {
-	    Locker lock(context_info->isolate);
-    }
-    }
-
-    {
-    if (context_info->context) {
+    if (context_info->context && isolate_info && isolate_info->isolate) {
+        Locker lock(isolate_info->isolate);
+        v8::Isolate::Scope isolate_scope(isolate_info->isolate);
         context_info->context->Reset();
         delete context_info->context;
     }
     }
 
-    {
-	if (context_info->interrupted) {
-	    fprintf(stderr, "WARNING: V8 isolate was interrupted by Ruby, it can not be disposed and memory will not be reclaimed till the Ruby process exits.");
-	} else {
-	    context_info->isolate->Dispose();
-	}
-    }
+    if (isolate_info) {
+        isolate_info->refs_count--;
 
-    delete context_info->allocator;
-    xfree(context_info);
+        maybe_free_isolate_info(isolate_info);
+    }
 }
 
 void deallocate_external_function(void * data) {
@@ -720,9 +800,7 @@ VALUE allocate_external_function(VALUE klass) {
 
 VALUE allocate(VALUE klass) {
     ContextInfo* context_info = ALLOC(ContextInfo);
-    context_info->allocator = NULL;
-    context_info->interrupted = false;
-    context_info->isolate = NULL;
+    context_info->isolate_info = NULL;
     context_info->context = NULL;
 
     return Data_Wrap_Struct(klass, NULL, deallocate, (void*)context_info);
@@ -736,11 +814,23 @@ VALUE allocate_snapshot(VALUE klass) {
     return Data_Wrap_Struct(klass, NULL, deallocate_snapshot, (void*)snapshot_info);
 }
 
+VALUE allocate_isolate(VALUE klass) {
+    IsolateInfo* isolate_info = ALLOC(IsolateInfo);
+
+    isolate_info->isolate = NULL;
+    isolate_info->allocator = NULL;
+    isolate_info->startup_data = NULL;
+    isolate_info->interrupted = false;
+    isolate_info->refs_count = 0;
+
+    return Data_Wrap_Struct(klass, NULL, deallocate_isolate, (void*)isolate_info);
+}
+
 static VALUE
 rb_context_stop(VALUE self) {
     ContextInfo* context_info;
     Data_Get_Struct(self, ContextInfo, context_info);
-    V8::TerminateExecution(context_info->isolate);
+    V8::TerminateExecution(context_info->isolate_info->isolate);
     return Qnil;
 }
 
@@ -751,6 +841,7 @@ extern "C" {
 	VALUE rb_mMiniRacer = rb_define_module("MiniRacer");
 	VALUE rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);
 	VALUE rb_cSnapshot = rb_define_class_under(rb_mMiniRacer, "Snapshot", rb_cObject);
+	VALUE rb_cIsolate = rb_define_class_under(rb_mMiniRacer, "Isolate", rb_cObject);
 	VALUE rb_cPlatform = rb_define_class_under(rb_mMiniRacer, "Platform", rb_cObject);
 
 	VALUE rb_eEvalError = rb_define_class_under(rb_mMiniRacer, "EvalError", rb_eStandardError);
@@ -765,15 +856,19 @@ extern "C" {
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
 	rb_define_alloc_func(rb_cContext, allocate);
 	rb_define_alloc_func(rb_cSnapshot, allocate_snapshot);
+	rb_define_alloc_func(rb_cIsolate, allocate_isolate);
 
 	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 1);
-	rb_define_private_method(rb_cContext, "init_with_snapshot",(VALUE(*)(...))&rb_context_init_with_snapshot, 1);
+	rb_define_private_method(rb_cContext, "init_with_isolate",(VALUE(*)(...))&rb_context_init_with_isolate, 1);
 	rb_define_private_method(rb_cExternalFunction, "notify_v8", (VALUE(*)(...))&rb_external_function_notify_v8, 0);
 	rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);
 
 	rb_define_method(rb_cSnapshot, "size", (VALUE(*)(...))&rb_snapshot_size, 0);
-	rb_define_method(rb_cSnapshot, "warmup", (VALUE(*)(...))&rb_snapshot_warmup, 1);
+	rb_define_method(rb_cSnapshot, "warmup!", (VALUE(*)(...))&rb_snapshot_warmup, 1);
 	rb_define_private_method(rb_cSnapshot, "load", (VALUE(*)(...))&rb_snapshot_load, 1);
+
+	rb_define_method(rb_cIsolate, "idle_notification", (VALUE(*)(...))&rb_isolate_idle_notification, 1);
+	rb_define_private_method(rb_cIsolate, "init_with_snapshot",(VALUE(*)(...))&rb_isolate_init_with_snapshot, 1);
 
 	rb_define_singleton_method(rb_cPlatform, "set_flag_as_str!", (VALUE(*)(...))&rb_platform_set_flag_as_str, 1);
     }
