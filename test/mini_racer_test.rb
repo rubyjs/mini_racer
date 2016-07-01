@@ -261,6 +261,15 @@ raise FooError, "I like foos"
     assert_equal("Undefined Conversion", context.eval("test()"))
   end
 
+  def test_fatal_alloc
+    MiniRacer::Platform.set_flags! max_old_space_size: 10
+    # todo find a way to get the above working in a test case.
+
+    context = MiniRacer::Context.new
+
+    assert_raises(MiniRacer::ScriptTerminatedError) { context.eval('var a = []; while(true) a.push(new Array(100000000));') }
+  end
+
   module Echo
     def self.say(thing)
       thing
