@@ -524,6 +524,13 @@ raise FooError, "I like foos"
     end
   end
 
+  def test_error_on_return_val
+    v8 = MiniRacer::Context.new
+    assert_raises(MiniRacer::RuntimeError) do
+      v8.eval('var o = {}; o.__defineGetter__("bar", function() { return null(); }); o')
+    end
+  end
+
   class TestPlatform < MiniRacer::Platform
     def self.public_flags_to_strings(flags)
       flags_to_strings(flags)
