@@ -67,6 +67,7 @@ static VALUE rb_cJavaScriptFunction;
 static VALUE rb_eSnapshotError;
 static VALUE rb_ePlatformAlreadyInitializedError;
 
+static VALUE rb_cFailedV8Conversion;
 static VALUE rb_cDateTime = Qnil;
 
 static Platform* current_platform = NULL;
@@ -224,6 +225,9 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
       for(uint32_t i=0; i < arr->Length(); i++) {
 	  Local<Value> element = arr->Get(i);
 	  VALUE rb_elem = convert_v8_to_ruby(isolate, element);
+	  if (rb_funcall(rb_elem, rb_intern("class"), 0) == rb_cFailedV8Conversion) {
+	    return rb_elem;
+	  }
           rb_ary_push(rb_array, rb_elem);
       }
       return rb_array;
@@ -242,6 +246,9 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
     }
 
     if (value->IsObject()) {
+
+	TryCatch trycatch(isolate);
+
 	VALUE rb_hash = rb_hash_new();
 	Local<Context> context = Context::New(isolate);
 	Local<Object> object = value->ToObject();
@@ -252,6 +259,14 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
 	     Local<Value> key = props->Get(i);
 	     VALUE rb_key = convert_v8_to_ruby(isolate, key);
 	     Local<Value> value = object->Get(key);
+	     // this may have failed due to Get raising
+
+	     if (trycatch.HasCaught()) {
+		 // TODO isolate code that translates execption to ruby
+		 // exception so we can properly return it
+		 return rb_funcall(rb_cFailedV8Conversion, rb_intern("new"), 1, rb_str_new2(""));
+	     }
+
 	     VALUE rb_value = convert_v8_to_ruby(isolate, value);
 	     rb_hash_aset(rb_hash, rb_key, rb_value);
 	    }
@@ -282,7 +297,6 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
         {
             return scope.Escape(Number::New(isolate, (double)fixnum));
         }
-        
         return scope.Escape(Integer::New(isolate, (int)fixnum));
     case T_FLOAT:
 	return scope.Escape(Number::New(isolate, NUM2DBL(value)));
@@ -322,7 +336,6 @@ static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
             {
                 value = rb_funcall(value, rb_intern("to_time"), 0);
             }
-            
             value = rb_funcall(value, rb_intern("to_f"), 0);
             return scope.Escape(Date::New(isolate, NUM2DBL(value) * 1000));
         }
@@ -556,6 +569,11 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 
 	eval_result.value->Reset();
 	delete eval_result.value;
+    }
+
+    if (rb_funcall(result, rb_intern("class"), 0) == rb_cFailedV8Conversion) {
+	// TODO try to recover stack trace from the conversion error
+	rb_raise(rb_eScriptRuntimeError, "Error converting JS object to Ruby object");
     }
 
     return result;
@@ -851,6 +869,7 @@ extern "C" {
 	rb_cJavaScriptFunction = rb_define_class_under(rb_mMiniRacer, "JavaScriptFunction", rb_cObject);
 	rb_eSnapshotError = rb_define_class_under(rb_mMiniRacer, "SnapshotError", rb_eStandardError);
 	rb_ePlatformAlreadyInitializedError = rb_define_class_under(rb_mMiniRacer, "PlatformAlreadyInitialized", rb_eStandardError);
+	rb_cFailedV8Conversion = rb_define_class_under(rb_mMiniRacer, "FailedV8Conversion", rb_cObject);
 
 	VALUE rb_cExternalFunction = rb_define_class_under(rb_cContext, "ExternalFunction", rb_cObject);
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);

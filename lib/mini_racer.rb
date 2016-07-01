@@ -10,6 +10,13 @@ module MiniRacer
   class SnapshotError < StandardError; end
   class PlatformAlreadyInitialized < StandardError; end
 
+  class FailedV8Conversion
+    attr_reader :info
+    def initialize(info)
+      @info = info
+    end
+  end
+
   class RuntimeError < EvalError
     def initialize(message)
       message, js_backtrace = message.split("\n", 2)
