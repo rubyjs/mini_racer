@@ -17,6 +17,28 @@ if ENV['CXX']
   CONFIG['CXX'] = ENV['CXX']
 end
 
+CXX11_TEST = <<EOS
+#if __cplusplus <= 199711L
+#   error A compiler that supports at least C++11 is required in order to compile this project.
+#endif
+EOS
+
+`echo "#{CXX11_TEST}" | #{CONFIG['CXX']} -std=c++0x -x c++ -E -`
+unless $?.success?
+  warn <<EOS
+
+
+WARNING: C++11 support is required for compiling mini_racer. Please make sure
+you are using a compiler that supports at least C++11. Examples of such
+compilers are GCC 4.7+ and Clang 3.2+.
+
+If you are using Travis, consider either migrating your bulid to Ubuntu Trusty or
+installing GCC 4.8. See mini_racer's README.md for more information.
+
+
+EOS
+end
+
 CONFIG['LDSHARED'] = '$(CXX) -shared' unless RUBY_PLATFORM =~ /darwin/
 if CONFIG['warnflags']
   CONFIG['warnflags'].gsub!('-Wdeclaration-after-statement', '')
