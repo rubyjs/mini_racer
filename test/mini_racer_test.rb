@@ -522,6 +522,12 @@ raise FooError, "I like foos"
     end
   end
 
+  def test_thing
+    v8 = MiniRacer::Context.new
+    v8.attach 'print', proc{|x| puts x}
+    puts v8.eval "var o = {get bar() { print(42); }}; o"
+  end
+
   class TestPlatform < MiniRacer::Platform
     def self.public_flags_to_strings(flags)
       flags_to_strings(flags)
