@@ -522,10 +522,16 @@ raise FooError, "I like foos"
     end
   end
 
-  def test_thing
+  def test_ruby_based_property_in_rval
     v8 = MiniRacer::Context.new
     v8.attach 'print', proc{|x| puts x}
     puts v8.eval "var o = {get bar() { print(42); }}; o"
+  end
+
+  def test_function_rval
+    context = MiniRacer::Context.new
+    context.attach("print", proc{|msg| puts msg})
+    context.eval "print('foo')"
   end
 
   class TestPlatform < MiniRacer::Platform

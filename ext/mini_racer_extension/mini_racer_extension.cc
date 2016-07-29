@@ -10,6 +10,8 @@
 
 using namespace v8;
 
+extern "C" int ruby_thread_has_gvl_p(void);
+
 class ArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
  public:
   virtual void* Allocate(size_t length) {
@@ -30,7 +32,6 @@ typedef struct {
     ArrayBufferAllocator* allocator;
     StartupData* startup_data;
     bool interrupted;
-    bool has_gvl;
 
     // how many references to this isolate exist
     // we can't rely on Ruby's GC for this, because when destroying
@@ -130,7 +131,6 @@ nogvl_context_eval(void* arg) {
     TryCatch trycatch(isolate);
 
     Local<Context> context = eval_params->context_info->context->Get(isolate);
-
     Context::Scope context_scope(context);
 
     MaybeLocal<Script> parsed_script = Script::Compile(context, *eval_params->eval);
@@ -417,7 +417,6 @@ static VALUE rb_isolate_init_with_snapshot(VALUE self, VALUE snapshot) {
     isolate_info->allocator = new ArrayBufferAllocator();
     isolate_info->interrupted = false;
     isolate_info->refs_count = 1;
-    isolate_info->has_gvl = true;
 
     Isolate::CreateParams create_params;
     create_params.array_buffer_allocator = isolate_info->allocator;
@@ -515,9 +514,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 	eval_result.message = NULL;
 	eval_result.backtrace = NULL;
 
-	context_info->isolate_info->has_gvl = false;
 	rb_thread_call_without_gvl(nogvl_context_eval, &eval_params, unblock_eval, &eval_params);
-	context_info->isolate_info->has_gvl = true;
 
 	if (eval_result.message != NULL) {
 	    Local<Value> tmp = Local<Value>::New(isolate, *eval_result.message);
@@ -669,18 +666,7 @@ gvl_ruby_callback(void* data) {
 
 static void ruby_callback(const FunctionCallbackInfo<Value>& args) {
 
-    bool has_gvl = false;
-
-    {
-	HandleScope scope(args.GetIsolate());
-	Handle<External> external = Handle<External>::Cast(args.Data());
-	VALUE* self_pointer = (VALUE*)(external->Value());
-	ContextInfo* context_info;
-	Data_Get_Struct(*self_pointer, ContextInfo, context_info);
-	has_gvl = context_info->isolate_info->has_gvl;
-    }
-
-    if(has_gvl) {
+    if(ruby_thread_has_gvl_p()) {
 	gvl_ruby_callback((void*)&args);
     } else {
 	rb_thread_call_with_gvl(gvl_ruby_callback, (void*)(&args));
