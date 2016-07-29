@@ -10,8 +10,6 @@
 
 using namespace v8;
 
-extern "C" int ruby_thread_has_gvl_p(void);
-
 class ArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
  public:
   virtual void* Allocate(size_t length) {
@@ -133,6 +131,8 @@ nogvl_context_eval(void* arg) {
     Local<Context> context = eval_params->context_info->context->Get(isolate);
     Context::Scope context_scope(context);
 
+    isolate->SetData(0, (void*)false);
+
     MaybeLocal<Script> parsed_script = Script::Compile(context, *eval_params->eval);
     result->parsed = !parsed_script.IsEmpty();
     result->executed = false;
@@ -192,6 +192,8 @@ nogvl_context_eval(void* arg) {
 	    }
 	}
     }
+
+    isolate->SetData(0, (void*)true);
 
     return NULL;
 }
@@ -666,7 +668,9 @@ gvl_ruby_callback(void* data) {
 
 static void ruby_callback(const FunctionCallbackInfo<Value>& args) {
 
-    if(ruby_thread_has_gvl_p()) {
+    bool has_gvl = (bool)args.GetIsolate()->GetData(0);
+
+    if(has_gvl) {
 	gvl_ruby_callback((void*)&args);
     } else {
 	rb_thread_call_with_gvl(gvl_ruby_callback, (void*)(&args));
