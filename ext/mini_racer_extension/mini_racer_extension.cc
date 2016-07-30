@@ -613,7 +613,7 @@ void*
 gvl_ruby_callback(void* data) {
 
     FunctionCallbackInfo<Value>* args = (FunctionCallbackInfo<Value>*)data;
-    VALUE* ruby_args;
+    VALUE* ruby_args = NULL;
     int length = args->Length();
     VALUE callback;
     VALUE result;
@@ -755,13 +755,10 @@ void maybe_free_isolate_info(IsolateInfo* isolate_info) {
         return;
     }
 
-    {
     if (isolate_info->isolate) {
 	    Locker lock(isolate_info->isolate);
     }
-    }
 
-    {
     if (isolate_info->isolate) {
         if (isolate_info->interrupted) {
             fprintf(stderr, "WARNING: V8 isolate was interrupted by Ruby, it can not be disposed and memory will not be reclaimed till the Ruby process exits.");
@@ -769,7 +766,6 @@ void maybe_free_isolate_info(IsolateInfo* isolate_info) {
             isolate_info->isolate->Dispose();
         }
         isolate_info->isolate = NULL;
-    }
     }
 
     if (isolate_info->startup_data) {
