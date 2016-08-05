@@ -129,8 +129,9 @@ nogvl_context_eval(void* arg) {
     TryCatch trycatch(isolate);
 
     Local<Context> context = eval_params->context_info->context->Get(isolate);
-
     Context::Scope context_scope(context);
+
+    isolate->SetData(0, (void*)false);
 
     MaybeLocal<Script> parsed_script = Script::Compile(context, *eval_params->eval);
     result->parsed = !parsed_script.IsEmpty();
@@ -191,6 +192,8 @@ nogvl_context_eval(void* arg) {
 	    }
 	}
     }
+
+    isolate->SetData(0, (void*)true);
 
     return NULL;
 }
@@ -558,7 +561,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 	}
     }
 
-    // New scope for return value
+    // New scope for return value, must release GVL which
     {
 	Locker lock(isolate);
 	Isolate::Scope isolate_scope(isolate);
@@ -664,7 +667,14 @@ gvl_ruby_callback(void* data) {
 }
 
 static void ruby_callback(const FunctionCallbackInfo<Value>& args) {
-    rb_thread_call_with_gvl(gvl_ruby_callback, (void*)(&args));
+
+    bool has_gvl = (bool)args.GetIsolate()->GetData(0);
+
+    if(has_gvl) {
+	gvl_ruby_callback((void*)&args);
+    } else {
+	rb_thread_call_with_gvl(gvl_ruby_callback, (void*)(&args));
+    }
 }
 
 
