@@ -57,6 +57,8 @@ typedef struct {
     ContextInfo* context_info;
     Local<String>* eval;
     useconds_t timeout;
+    size_t max_mem;
+    size_t current_mem;
     EvalResult* result;
 } EvalParams;
 
@@ -118,6 +120,39 @@ void* breaker(void *d) {
   return NULL;
 }
 
+EvalParams* callback_eval_params = NULL;
+
+void mem_alloc_callback(ObjectSpace space, AllocationAction action, int size) {
+    if (NULL == callback_eval_params)
+    {
+        return; // this is probably an error that has to do with multi-threaded usage. Error somehow -seanmakesgames
+    }
+
+    if (action == kAllocationActionAllocate)
+    {
+        callback_eval_params->current_mem += size;
+        
+        printf("\nALLOC %d: %zu", size, callback_eval_params->current_mem);
+    }
+    else if (action == kAllocationActionFree)
+    {
+        callback_eval_params->current_mem -= size;
+        
+        printf("\nFREE  %d: %zu", size, callback_eval_params->current_mem);
+    }
+    else
+    {
+        // not sure what to do here. probably ignore? -seanmakesgames
+    }
+
+    if (callback_eval_params->current_mem > callback_eval_params->max_mem)
+    {
+        printf("\nPAST THRESHOLD I_%x", callback_eval_params->context_info->isolate_info->isolate);
+        V8::TerminateExecution(callback_eval_params->context_info->isolate_info->isolate);
+        // ^ this does not seem to be working -seanmakesgames
+    }
+}
+
 void*
 nogvl_context_eval(void* arg) {
     EvalParams* eval_params = (EvalParams*)arg;
@@ -146,6 +181,17 @@ nogvl_context_eval(void* arg) {
 
 	pthread_t breaker_thread;
 
+	if (eval_params->max_mem > 0) {
+        if (NULL != callback_eval_params)
+        {
+            // TODO this only happens in multi-threaded usage. Error somehow. -seanmakesgames
+        }
+
+        callback_eval_params = eval_params;
+        eval_params->current_mem = 0;
+        isolate->AddMemoryAllocationCallback(mem_alloc_callback, kObjectSpaceAll, kAllocationActionAll);
+    }
+
 	if (eval_params->timeout > 0) {
 	   pthread_create(&breaker_thread, NULL, breaker, (void*)eval_params);
 	}
@@ -156,6 +202,16 @@ nogvl_context_eval(void* arg) {
 	    pthread_cancel(breaker_thread);
 	    pthread_join(breaker_thread, NULL);
 	}
+
+	if (eval_params->max_mem > 0) {
+        if (NULL == callback_eval_params)
+        {
+            // TODO this only happens in multi-threaded usage. Error somehow. -seanmakesgames
+        }
+
+        callback_eval_params = NULL;
+        isolate->RemoveMemoryAllocationCallback(mem_alloc_callback);
+    }
 
 	result->executed = !maybe_value.IsEmpty();
 
@@ -511,6 +567,11 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 	VALUE timeout = rb_iv_get(self, "@timeout");
 	if (timeout != Qnil) {
 	    eval_params.timeout = (useconds_t)NUM2LONG(timeout);
+	}
+	eval_params.max_mem = 0;
+	VALUE max_mem = rb_iv_get(self, "@max_mem");
+	if (max_mem != Qnil) {
+	    eval_params.max_mem = (useconds_t)NUM2LONG(max_mem);
 	}
 
 	eval_result.message = NULL;

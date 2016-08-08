@@ -139,9 +139,11 @@ module MiniRacer
 
       @functions = {}
       @timeout = nil
+      @max_mem = nil
       @current_exception = nil
 
       @timeout = options[:timeout]
+      @max_mem = options[:max_mem]
 
       @isolate = options[:isolate] || Isolate.new(options[:snapshot])
 

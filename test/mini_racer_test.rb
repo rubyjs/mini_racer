@@ -2,7 +2,7 @@ require 'test_helper'
 
 class MiniRacerTest < Minitest::Test
   # see `test_platform_set_flags_works` below
-  MiniRacer::Platform.set_flags! :use_strict, max_old_space_size: 10
+  MiniRacer::Platform.set_flags! :use_strict, max_old_space_size: 50
 
   def test_that_it_has_a_version_number
     refute_nil ::MiniRacer::VERSION
@@ -262,9 +262,10 @@ raise FooError, "I like foos"
   end
 
   def test_fatal_alloc
-    context = MiniRacer::Context.new
+    context = MiniRacer::Context.new(max_mem: 10_000_000)
+    context.attach("print", proc{|a| puts a})
 
-    assert_raises(MiniRacer::ScriptTerminatedError) { context.eval('var a = []; while(true) a.push(new Array(100000000));') }
+    assert_raises(MiniRacer::ScriptTerminatedError) { context.eval('var a = new Array(100000); while(true) {a = a.concat(a); print("loop " + a.length);}') }
   end
 
   module Echo
