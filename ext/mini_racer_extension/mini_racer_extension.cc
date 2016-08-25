@@ -56,9 +56,9 @@ typedef struct {
 typedef struct {
     ContextInfo* context_info;
     Local<String>* eval;
+    int64_t max_mem;
+    int64_t current_mem;
     useconds_t timeout;
-    size_t max_mem;
-    size_t current_mem;
     EvalResult* result;
 } EvalParams;
 
@@ -132,13 +132,13 @@ void mem_alloc_callback(ObjectSpace space, AllocationAction action, int size) {
     {
         callback_eval_params->current_mem += size;
         
-        printf("\nALLOC %d: %zu", size, callback_eval_params->current_mem);
+        printf("\nALLOC %d: %lld", size, callback_eval_params->current_mem);
     }
     else if (action == kAllocationActionFree)
     {
         callback_eval_params->current_mem -= size;
         
-        printf("\nFREE  %d: %zu", size, callback_eval_params->current_mem);
+        printf("\nFREE  %d: %lld", size, callback_eval_params->current_mem);
     }
     else
     {
@@ -147,7 +147,7 @@ void mem_alloc_callback(ObjectSpace space, AllocationAction action, int size) {
 
     if (callback_eval_params->current_mem > callback_eval_params->max_mem)
     {
-        printf("\nPAST THRESHOLD I_%x", callback_eval_params->context_info->isolate_info->isolate);
+        printf("\nPAST THRESHOLD I_%llx", (uint64_t)callback_eval_params->context_info->isolate_info->isolate);
         V8::TerminateExecution(callback_eval_params->context_info->isolate_info->isolate);
         // ^ this does not seem to be working -seanmakesgames
     }
@@ -571,7 +571,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 	eval_params.max_mem = 0;
 	VALUE max_mem = rb_iv_get(self, "@max_mem");
 	if (max_mem != Qnil) {
-	    eval_params.max_mem = (useconds_t)NUM2LONG(max_mem);
+	    eval_params.max_mem = (int64_t)NUM2LONG(max_mem);
 	}
 
 	eval_result.message = NULL;
