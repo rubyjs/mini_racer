@@ -534,6 +534,15 @@ raise FooError, "I like foos"
     context.eval "print('foo')"
   end
 
+  def test_timeout_in_ruby_land
+    skip("This fails and should be fixed")
+    context = MiniRacer::Context.new(timeout: 50)
+    context.attach('sleep', proc{ sleep 0.1 })
+    assert_raises(MiniRacer::ScriptTerminatedError) do
+      context.eval('sleep(); "hi";')
+    end
+  end
+
   class TestPlatform < MiniRacer::Platform
     def self.public_flags_to_strings(flags)
       flags_to_strings(flags)
