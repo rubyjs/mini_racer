@@ -524,23 +524,42 @@ raise FooError, "I like foos"
 
   def test_ruby_based_property_in_rval
     v8 = MiniRacer::Context.new
-    v8.attach 'print', proc{|x| puts x}
-    puts v8.eval "var o = {get bar() { print(42); }}; o"
+    v8.attach 'echo', proc{|x| x}
+    assert_equal({"bar" => 42}, v8.eval("var o = {get bar() { return echo(42); }}; o"))
   end
 
   def test_function_rval
     context = MiniRacer::Context.new
-    context.attach("print", proc{|msg| puts msg})
-    context.eval "print('foo')"
+    context.attach("echo", proc{|msg| msg})
+    assert_equal("foo", context.eval("echo('foo')"))
   end
 
   def test_timeout_in_ruby_land
-    skip("This fails and should be fixed")
     context = MiniRacer::Context.new(timeout: 50)
     context.attach('sleep', proc{ sleep 0.1 })
     assert_raises(MiniRacer::ScriptTerminatedError) do
       context.eval('sleep(); "hi";')
     end
+
+  end
+
+  def test_undef_mem
+    context = MiniRacer::Context.new(timeout: 5)
+
+    context.attach("marsh", proc do |a, b, c|
+      return [a,b,c] if a.is_a?(MiniRacer::FailedV8Conversion) || b.is_a?(MiniRacer::FailedV8Conversion) || c.is_a?(MiniRacer::FailedV8Conversion)
+
+      a[rand(10000).to_s] = "a"
+      b[rand(10000).to_s] = "b"
+      c[rand(10000).to_s] = "c"
+      [a,b,c]
+    end)
+
+    assert_raises do
+      # TODO make it raise the correct exception!
+      context.eval("var a = [{},{},{}]; while(true) { a = marsh(a[0],a[1],a[2]); }")
+    end
+
   end
 
   class TestPlatform < MiniRacer::Platform

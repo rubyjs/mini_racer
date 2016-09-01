@@ -110,11 +110,28 @@ static void init_v8() {
     platform_lock.unlock();
 }
 
+static VALUE
+ruby_timeout_thread(VALUE data) {
+    rb_funcall(data, rb_intern("raise"), 1, rb_eScriptTerminatedError);
+    return Qnil;
+}
+
 void* breaker(void *d) {
   EvalParams* data = (EvalParams*)d;
+  Isolate* isolate = data->context_info->isolate_info->isolate;
+
   usleep(data->timeout*1000);
   pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-  V8::TerminateExecution(data->context_info->isolate_info->isolate);
+
+  // flag for termination
+  isolate->SetData(2, (void*)true);
+
+  VALUE* ruby_thread = (VALUE*)isolate->GetData(1);
+  if (ruby_thread == NULL) {
+      V8::TerminateExecution(isolate);
+  } else {
+    rb_thread_create((VALUE(*)(...))&ruby_timeout_thread, (void*)*ruby_thread);
+  }
   return NULL;
 }
 
@@ -131,7 +148,12 @@ nogvl_context_eval(void* arg) {
     Local<Context> context = eval_params->context_info->context->Get(isolate);
     Context::Scope context_scope(context);
 
+    // in gvl flag
     isolate->SetData(0, (void*)false);
+    // ruby thread value
+    isolate->SetData(1, (void*)NULL);
+    // terminate ASAP
+    isolate->SetData(2, (void*)false);
 
     MaybeLocal<Script> parsed_script = Script::Compile(context, *eval_params->eval);
     result->parsed = !parsed_script.IsEmpty();
@@ -645,8 +667,18 @@ gvl_ruby_callback(void* data) {
     callback_data.args = ruby_args;
     callback_data.failed = false;
 
+    if ((bool)args->GetIsolate()->GetData(2) == true) {
+	args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Terminated execution during tansition from Ruby to JS"));
+	return NULL;
+    }
+
+    VALUE thread = rb_funcall(rb_cThread, rb_intern("current"), 0);
+    args->GetIsolate()->SetData(1, (void*)&thread);
+
     result = rb_rescue((VALUE(*)(...))&protected_callback, (VALUE)(&callback_data),
 			(VALUE(*)(...))&rescue_callback, (VALUE)(&callback_data));
+
+    args->GetIsolate()->SetData(1, (void*)NULL);
 
     if(callback_data.failed) {
 	VALUE parent = rb_iv_get(self, "@parent");
@@ -661,6 +693,10 @@ gvl_ruby_callback(void* data) {
 
     if (length > 0) {
 	xfree(ruby_args);
+    }
+
+    if ((bool)args->GetIsolate()->GetData(2) == true) {
+      V8::TerminateExecution(args->GetIsolate());
     }
 
     return NULL;
