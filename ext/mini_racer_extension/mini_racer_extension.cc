@@ -110,33 +110,9 @@ static void init_v8() {
     platform_lock.unlock();
 }
 
-static VALUE
-ruby_timeout_thread(VALUE data) {
-    rb_funcall(data, rb_intern("raise"), 1, rb_eScriptTerminatedError);
-    return Qnil;
-}
-
-void* breaker(void *d) {
-  EvalParams* data = (EvalParams*)d;
-  Isolate* isolate = data->context_info->isolate_info->isolate;
-
-  usleep(data->timeout*1000);
-  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-
-  // flag for termination
-  isolate->SetData(2, (void*)true);
-
-  VALUE* ruby_thread = (VALUE*)isolate->GetData(1);
-  if (ruby_thread == NULL) {
-      V8::TerminateExecution(isolate);
-  } else {
-    rb_thread_create((VALUE(*)(...))&ruby_timeout_thread, (void*)*ruby_thread);
-  }
-  return NULL;
-}
-
 void*
 nogvl_context_eval(void* arg) {
+
     EvalParams* eval_params = (EvalParams*)arg;
     EvalResult* result = eval_params->result;
     Isolate* isolate = eval_params->context_info->isolate_info->isolate;
@@ -150,10 +126,8 @@ nogvl_context_eval(void* arg) {
 
     // in gvl flag
     isolate->SetData(0, (void*)false);
-    // ruby thread value
-    isolate->SetData(1, (void*)NULL);
     // terminate ASAP
-    isolate->SetData(2, (void*)false);
+    isolate->SetData(1, (void*)false);
 
     MaybeLocal<Script> parsed_script = Script::Compile(context, *eval_params->eval);
     result->parsed = !parsed_script.IsEmpty();
@@ -166,18 +140,7 @@ nogvl_context_eval(void* arg) {
 	result->message->Reset(isolate, trycatch.Exception());
     } else {
 
-	pthread_t breaker_thread;
-
-	if (eval_params->timeout > 0) {
-	   pthread_create(&breaker_thread, NULL, breaker, (void*)eval_params);
-	}
-
 	MaybeLocal<Value> maybe_value = parsed_script.ToLocalChecked()->Run(context);
-
-	if (eval_params->timeout > 0) {
-	    pthread_cancel(breaker_thread);
-	    pthread_join(breaker_thread, NULL);
-	}
 
 	result->executed = !maybe_value.IsEmpty();
 
@@ -203,6 +166,8 @@ nogvl_context_eval(void* arg) {
 		Local<String> v8_message = String::NewFromUtf8(isolate, buf, NewStringType::kNormal, (int)len).ToLocalChecked();
 		result->message->Reset(isolate, v8_message);
 	    } else if(trycatch.HasTerminated()) {
+
+
 		result->terminated = true;
 		result->message = new Persistent<Value>();
 		Local<String> tmp = String::NewFromUtf8(isolate, "JavaScript was terminated (either by timeout or explicitly)");
@@ -216,6 +181,7 @@ nogvl_context_eval(void* arg) {
     }
 
     isolate->SetData(0, (void*)true);
+
 
     return NULL;
 }
@@ -518,6 +484,8 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
     Data_Get_Struct(self, ContextInfo, context_info);
     Isolate* isolate = context_info->isolate_info->isolate;
 
+
+
     {
 	Locker lock(isolate);
 	Isolate::Scope isolate_scope(isolate);
@@ -601,6 +569,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 	rb_raise(rb_eScriptRuntimeError, "Error converting JS object to Ruby object");
     }
 
+
     return result;
 }
 
@@ -667,18 +636,14 @@ gvl_ruby_callback(void* data) {
     callback_data.args = ruby_args;
     callback_data.failed = false;
 
-    if ((bool)args->GetIsolate()->GetData(2) == true) {
+    if ((bool)args->GetIsolate()->GetData(1) == true) {
 	args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Terminated execution during tansition from Ruby to JS"));
+	V8::TerminateExecution(args->GetIsolate());
 	return NULL;
     }
 
-    VALUE thread = rb_funcall(rb_cThread, rb_intern("current"), 0);
-    args->GetIsolate()->SetData(1, (void*)&thread);
-
-    result = rb_rescue((VALUE(*)(...))&protected_callback, (VALUE)(&callback_data),
-			(VALUE(*)(...))&rescue_callback, (VALUE)(&callback_data));
-
-    args->GetIsolate()->SetData(1, (void*)NULL);
+    result = rb_rescue2((VALUE(*)(...))&protected_callback, (VALUE)(&callback_data),
+			(VALUE(*)(...))&rescue_callback, (VALUE)(&callback_data), rb_eException, (VALUE)0);
 
     if(callback_data.failed) {
 	VALUE parent = rb_iv_get(self, "@parent");
@@ -695,8 +660,9 @@ gvl_ruby_callback(void* data) {
 	xfree(ruby_args);
     }
 
-    if ((bool)args->GetIsolate()->GetData(2) == true) {
-      V8::TerminateExecution(args->GetIsolate());
+    if ((bool)args->GetIsolate()->GetData(1) == true) {
+      Isolate* isolate = args->GetIsolate();
+      V8::TerminateExecution(isolate);
     }
 
     return NULL;
@@ -799,6 +765,7 @@ void maybe_free_isolate_info(IsolateInfo* isolate_info) {
         if (isolate_info->interrupted) {
             fprintf(stderr, "WARNING: V8 isolate was interrupted by Ruby, it can not be disposed and memory will not be reclaimed till the Ruby process exits.");
         } else {
+
             isolate_info->isolate->Dispose();
         }
         isolate_info->isolate = NULL;
@@ -825,18 +792,15 @@ void deallocate(void* data) {
     ContextInfo* context_info = (ContextInfo*)data;
     IsolateInfo* isolate_info = context_info->isolate_info;
 
-    {
     if (context_info->context && isolate_info && isolate_info->isolate) {
         Locker lock(isolate_info->isolate);
         v8::Isolate::Scope isolate_scope(isolate_info->isolate);
         context_info->context->Reset();
         delete context_info->context;
     }
-    }
 
     if (isolate_info) {
         isolate_info->refs_count--;
-
         maybe_free_isolate_info(isolate_info);
     }
 }
@@ -888,9 +852,18 @@ VALUE allocate_isolate(VALUE klass) {
 
 static VALUE
 rb_context_stop(VALUE self) {
+
     ContextInfo* context_info;
     Data_Get_Struct(self, ContextInfo, context_info);
-    V8::TerminateExecution(context_info->isolate_info->isolate);
+
+    Isolate* isolate = context_info->isolate_info->isolate;
+
+    // flag for termination
+    isolate->SetData(1, (void*)true);
+
+    V8::TerminateExecution(isolate);
+    rb_funcall(self, rb_intern("stop_attached"), 0);
+
     return Qnil;
 }
 

@@ -140,10 +140,13 @@ module MiniRacer
       @functions = {}
       @timeout = nil
       @current_exception = nil
-
       @timeout = options[:timeout]
-
       @isolate = options[:isolate] || Isolate.new(options[:snapshot])
+
+      @callback_mutex = Mutex.new
+      @callback_running = false
+      @thread_raise_called = false
+      @eval_thread = nil
 
       isolate.with_lock do
         # defined in the C class
@@ -157,20 +160,80 @@ module MiniRacer
     end
 
     def eval(str)
+      @eval_thread = Thread.current
       isolate.with_lock do
         @current_exception = nil
-        eval_unsafe(str)
+        timeout do
+          eval_unsafe(str)
+        end
       end
+    ensure
+      @eval_thread = nil
     end
 
+
     def attach(name, callback)
+
+      wrapped = lambda do |*args|
+        begin
+          @callback_mutex.synchronize{
+            @callback_running = true
+          }
+
+          callback.call(*args)
+        ensure
+          @callback_mutex.synchronize {
+            @callback_running = false
+
+            # this is some odd code, but it is required
+            # if we raised on this thread we better wait for it
+            # otherwise we may end up raising in an unsafe spot
+            if @thread_raise_called
+              sleep 0.1
+            end
+            @thread_raise_called = false
+          }
+        end
+      end
+
       isolate.with_lock do
-        external = ExternalFunction.new(name, callback, self)
+        external = ExternalFunction.new(name, wrapped, self)
         @functions["#{name}"] = external
       end
     end
 
   private
+
+    def stop_attached
+      @callback_mutex.synchronize{
+        if @callback_running
+          @eval_thread.raise ScriptTerminatedError, "Terminated during callback"
+          @thread_raise_called = true
+        end
+      }
+    end
+
+    def timeout(&blk)
+      return blk.call unless @timeout
+
+      _,wp = IO.pipe
+
+      Thread.new do
+        begin
+          result = IO.select([wp],[],[],(@timeout/1000.0))
+          if !result
+            stop
+          end
+        rescue
+          STDERR.puts "FAILED TO TERMINATE DUE TO TIMEOUT"
+        end
+      end
+
+      rval = blk.call
+      wp.write("done")
+
+      rval
+    end
 
     def check_init_options!(options)
       assert_option_is_nil_or_a('isolate', options[:isolate], Isolate)
