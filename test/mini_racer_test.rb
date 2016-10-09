@@ -4,6 +4,18 @@ class MiniRacerTest < Minitest::Test
   # see `test_platform_set_flags_works` below
   MiniRacer::Platform.set_flags! :use_strict
 
+  def test_segfault
+    skip "running this test is very slow"
+    # 5000.times do
+    #   GC.start
+    #   context = MiniRacer::Context.new(timeout: 5)
+    #   context.attach("echo", proc{|msg| msg.to_sym.to_s})
+    #   assert_raises(MiniRacer::EvalError) do
+    #     context.eval("while(true) echo('foo');")
+    #   end
+    # end
+  end
+
   def test_that_it_has_a_version_number
     refute_nil ::MiniRacer::VERSION
   end
@@ -540,7 +552,6 @@ raise FooError, "I like foos"
     assert_raises(MiniRacer::ScriptTerminatedError) do
       context.eval('sleep(); "hi";')
     end
-
   end
 
   def test_undef_mem

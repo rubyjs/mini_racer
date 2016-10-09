@@ -1,3 +1,10 @@
+10-10-2017
+
+- 0.1.5
+
+  - Support for snapshots, shared isolates, runtime flags thanks to @wk8
+  - Fix timeout behavior when it occurs in an attached Ruby method
+
 19-05-2016
 
 - 0.1.4
