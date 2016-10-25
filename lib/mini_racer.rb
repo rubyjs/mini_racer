@@ -216,23 +216,33 @@ module MiniRacer
     def timeout(&blk)
       return blk.call unless @timeout
 
-      _,wp = IO.pipe
+      mutex = Mutex.new
+      done = false
+
+      rp,wp = IO.pipe
 
       Thread.new do
         begin
-          result = IO.select([wp],[],[],(@timeout/1000.0))
+          result = IO.select([rp],[],[],(@timeout/1000.0))
           if !result
-            stop
+            mutex.synchronize do
+              stop unless done
+            end
           end
-        rescue
+        rescue => e
+          STDERR.puts e
           STDERR.puts "FAILED TO TERMINATE DUE TO TIMEOUT"
         end
       end
 
       rval = blk.call
-      wp.write("done")
+      mutex.synchronize do
+        done = true
+      end
 
+      wp.write("done")
       rval
+
     end
 
     def check_init_options!(options)

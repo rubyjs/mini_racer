@@ -1,3 +1,9 @@
+25-10-2016
+
+- 0.1.6
+
+  - Fix: timeout behavior was incorrect, in some cases stop could be called on already stopped contexts
+
 10-10-2016
 
 - 0.1.5
