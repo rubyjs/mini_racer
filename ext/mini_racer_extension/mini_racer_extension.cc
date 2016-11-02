@@ -30,6 +30,7 @@ typedef struct {
     ArrayBufferAllocator* allocator;
     StartupData* startup_data;
     bool interrupted;
+    pid_t pid;
 
     // how many references to this isolate exist
     // we can't rely on Ruby's GC for this, because when destroying
@@ -763,10 +764,14 @@ void maybe_free_isolate_info(IsolateInfo* isolate_info) {
 
     if (isolate_info->isolate) {
         if (isolate_info->interrupted) {
-            fprintf(stderr, "WARNING: V8 isolate was interrupted by Ruby, it can not be disposed and memory will not be reclaimed till the Ruby process exits.");
+            fprintf(stderr, "WARNING: V8 isolate was interrupted by Ruby, it can not be disposed and memory will not be reclaimed till the Ruby process exits.\n");
         } else {
 
-            isolate_info->isolate->Dispose();
+	    if (isolate_info->pid != getpid()) {
+		fprintf(stderr, "WARNING: V8 isolate was forked, it can not be disposed and memory will not be reclaimed till the Ruby process exits.\n");
+	    } else {
+		isolate_info->isolate->Dispose();
+	    }
         }
         isolate_info->isolate = NULL;
     }
@@ -846,6 +851,7 @@ VALUE allocate_isolate(VALUE klass) {
     isolate_info->startup_data = NULL;
     isolate_info->interrupted = false;
     isolate_info->refs_count = 0;
+    isolate_info->pid = getpid();
 
     return Data_Wrap_Struct(klass, NULL, deallocate_isolate, (void*)isolate_info);
 }

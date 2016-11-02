@@ -1,3 +1,9 @@
+02-11-2016
+
+- 0.1.7
+
+  - Fix: if for some reason an isolate was forked don't free it and raise a warning instead to avoid hanging process
+
 25-10-2016
 
 - 0.1.6
