@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <mutex>
+#include <math.h>
 
 using namespace v8;
 
