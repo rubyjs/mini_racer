@@ -1,4 +1,6 @@
-Unreleased
+06-02-2017
+
+- 0.1.8
 
   - Fix: Include math.h to fix use of undeclared identifier floor with rbx. See #51
 
