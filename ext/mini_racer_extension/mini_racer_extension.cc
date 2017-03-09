@@ -50,6 +50,7 @@ typedef struct {
     bool parsed;
     bool executed;
     bool terminated;
+    bool json;
     Persistent<Value>* value;
     Persistent<Value>* message;
     Persistent<Value>* backtrace;
@@ -68,6 +69,7 @@ static VALUE rb_eScriptRuntimeError;
 static VALUE rb_cJavaScriptFunction;
 static VALUE rb_eSnapshotError;
 static VALUE rb_ePlatformAlreadyInitializedError;
+static VALUE rb_mJSON;
 
 static VALUE rb_cFailedV8Conversion;
 static VALUE rb_cDateTime = Qnil;
@@ -118,11 +120,10 @@ nogvl_context_eval(void* arg) {
     EvalParams* eval_params = (EvalParams*)arg;
     EvalResult* result = eval_params->result;
     Isolate* isolate = eval_params->context_info->isolate_info->isolate;
+
     Isolate::Scope isolate_scope(isolate);
     HandleScope handle_scope(isolate);
-
     TryCatch trycatch(isolate);
-
     Local<Context> context = eval_params->context_info->context->Get(isolate);
     Context::Scope context_scope(context);
 
@@ -135,6 +136,7 @@ nogvl_context_eval(void* arg) {
     result->parsed = !parsed_script.IsEmpty();
     result->executed = false;
     result->terminated = false;
+    result->json = false;
     result->value = NULL;
 
     if (!result->parsed) {
@@ -147,9 +149,36 @@ nogvl_context_eval(void* arg) {
 	result->executed = !maybe_value.IsEmpty();
 
 	if (result->executed) {
-	    Persistent<Value>* persistent = new Persistent<Value>();
-	    persistent->Reset(isolate, maybe_value.ToLocalChecked());
-	    result->value = persistent;
+
+	    // arrays and objects get converted to json
+	    Local<Value> local_value = maybe_value.ToLocalChecked();
+	    if ((local_value->IsObject() || local_value->IsArray()) &&
+		    !local_value->IsDate() && !local_value->IsFunction()) {
+		Local<Object> JSON = context->Global()->Get(
+		    String::NewFromUtf8(isolate, "JSON"))->ToObject();
+
+		Local<Function> stringify = JSON->Get(v8::String::NewFromUtf8(isolate, "stringify"))
+		     .As<Function>();
+
+		Local<Object> object = local_value->ToObject();
+		const unsigned argc = 1;
+		Local<Value> argv[argc] = { object };
+		MaybeLocal<Value> json = stringify->Call(JSON, argc, argv);
+
+		if (json.IsEmpty()) {
+		    result->executed = false;
+		} else {
+		    result->json = true;
+		    Persistent<Value>* persistent = new Persistent<Value>();
+		    persistent->Reset(isolate, json.ToLocalChecked());
+		    result->value = persistent;
+		}
+
+	    } else {
+		Persistent<Value>* persistent = new Persistent<Value>();
+		persistent->Reset(isolate, local_value);
+		result->value = persistent;
+	    }
 	}
     }
 
@@ -190,6 +219,7 @@ nogvl_context_eval(void* arg) {
 
 static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
 
+    Isolate::Scope isolate_scope(isolate);
     HandleScope scope(isolate);
 
     if (value->IsNull() || value->IsUndefined()){
@@ -239,11 +269,10 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
     }
 
     if (value->IsObject()) {
-
-	TryCatch trycatch(isolate);
-
 	VALUE rb_hash = rb_hash_new();
+	TryCatch trycatch(isolate);
 	Local<Context> context = Context::New(isolate);
+
 	Local<Object> object = value->ToObject();
 	MaybeLocal<Array> maybe_props = object->GetOwnPropertyNames(context);
 	if (!maybe_props.IsEmpty()) {
@@ -486,8 +515,6 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
     Data_Get_Struct(self, ContextInfo, context_info);
     Isolate* isolate = context_info->isolate_info->isolate;
 
-
-
     {
 	Locker lock(isolate);
 	Isolate::Scope isolate_scope(isolate);
@@ -553,14 +580,21 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 	}
     }
 
-    // New scope for return value, must release GVL which
+    // New scope for return value
     {
 	Locker lock(isolate);
 	Isolate::Scope isolate_scope(isolate);
 	HandleScope handle_scope(isolate);
 
 	Local<Value> tmp = Local<Value>::New(isolate, *eval_result.value);
-	result = convert_v8_to_ruby(isolate, tmp);
+
+	if (eval_result.json) {
+	    Local<String> rstr = tmp->ToString();
+	    VALUE json_string = rb_enc_str_new(*String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
+	    result = rb_funcall(rb_mJSON, rb_intern("parse"), 1, json_string);
+	} else {
+	    result = convert_v8_to_ruby(isolate, tmp);
+	}
 
 	eval_result.value->Reset();
 	delete eval_result.value;
@@ -892,6 +926,7 @@ extern "C" {
 	rb_eSnapshotError = rb_define_class_under(rb_mMiniRacer, "SnapshotError", rb_eStandardError);
 	rb_ePlatformAlreadyInitializedError = rb_define_class_under(rb_mMiniRacer, "PlatformAlreadyInitialized", rb_eStandardError);
 	rb_cFailedV8Conversion = rb_define_class_under(rb_mMiniRacer, "FailedV8Conversion", rb_cObject);
+	rb_mJSON = rb_define_module("JSON");
 
 	VALUE rb_cExternalFunction = rb_define_class_under(rb_cContext, "ExternalFunction", rb_cObject);
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);

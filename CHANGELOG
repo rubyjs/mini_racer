@@ -1,3 +1,9 @@
+09-03-2017
+
+- 0.1.9
+
+ - Perf: speed up ruby/node boundary performance when moving large objects
+
 06-02-2017
 
 - 0.1.8

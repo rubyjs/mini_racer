@@ -39,7 +39,7 @@ class MiniRacerTest < Minitest::Test
   def test_object
     context = MiniRacer::Context.new
     # remember JavaScript is quirky {"1" : 1} magically turns to {1: 1} cause magic
-    assert_equal({1 => 2, "two" => "two"}, context.eval('var a={"1" : 2, "two" : "two"}; a'))
+    assert_equal({"1" => 2, "two" => "two"}, context.eval('var a={"1" : 2, "two" : "two"}; a'))
   end
 
   def test_it_returns_runtime_error
@@ -191,7 +191,7 @@ raise FooError, "I like foos"
   def test_return_hash
     context = MiniRacer::Context.new
     context.attach("test", proc{{banana: :nose, "inner" => {42 => 42}}})
-    assert_equal({"banana" => "nose", "inner" => {42 => 42}}, context.eval("test()"))
+    assert_equal({"banana" => "nose", "inner" => {"42" => 42}}, context.eval("test()"))
   end
 
   def test_return_date

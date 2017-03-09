@@ -1,6 +1,7 @@
 require "mini_racer/version"
 require "mini_racer_extension"
 require "thread"
+require "json"
 
 module MiniRacer
 
