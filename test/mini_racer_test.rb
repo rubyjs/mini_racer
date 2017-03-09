@@ -4,6 +4,18 @@ class MiniRacerTest < Minitest::Test
   # see `test_platform_set_flags_works` below
   MiniRacer::Platform.set_flags! :use_strict
 
+  def test_segfault
+    skip "running this test is very slow"
+    # 5000.times do
+    #   GC.start
+    #   context = MiniRacer::Context.new(timeout: 5)
+    #   context.attach("echo", proc{|msg| msg.to_sym.to_s})
+    #   assert_raises(MiniRacer::EvalError) do
+    #     context.eval("while(true) echo('foo');")
+    #   end
+    # end
+  end
+
   def test_that_it_has_a_version_number
     refute_nil ::MiniRacer::VERSION
   end
@@ -27,7 +39,7 @@ class MiniRacerTest < Minitest::Test
   def test_object
     context = MiniRacer::Context.new
     # remember JavaScript is quirky {"1" : 1} magically turns to {1: 1} cause magic
-    assert_equal({1 => 2, "two" => "two"}, context.eval('var a={"1" : 2, "two" : "two"}; a'))
+    assert_equal({"1" => 2, "two" => "two"}, context.eval('var a={"1" : 2, "two" : "two"}; a'))
   end
 
   def test_it_returns_runtime_error
@@ -179,7 +191,7 @@ raise FooError, "I like foos"
   def test_return_hash
     context = MiniRacer::Context.new
     context.attach("test", proc{{banana: :nose, "inner" => {42 => 42}}})
-    assert_equal({"banana" => "nose", "inner" => {42 => 42}}, context.eval("test()"))
+    assert_equal({"banana" => "nose", "inner" => {"42" => 42}}, context.eval("test()"))
   end
 
   def test_return_date
@@ -540,7 +552,6 @@ raise FooError, "I like foos"
     assert_raises(MiniRacer::ScriptTerminatedError) do
       context.eval('sleep(); "hi";')
     end
-
   end
 
   def test_undef_mem

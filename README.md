@@ -8,7 +8,7 @@ MiniRacer provides a minimal two way bridge between the V8 JavaScript engine and
 
 It was created as an alternative to the excellent [therubyracer](https://github.com/cowboyd/therubyracer). Unlike therubyracer, mini_racer only implements a minimal bridge. This reduces the surface area making upgrading v8 much simpler and exhaustive testing simpler.
 
-MiniRacer has an adapter for [execjs](https://github.com/sstephenson/execjs) so it can be used directly with Rails projects to minify assets, run babel or compile CoffeeScript.
+MiniRacer has an adapter for [execjs](https://github.com/rails/execjs) so it can be used directly with Rails projects to minify assets, run babel or compile CoffeeScript.
 
 ## Features
 
@@ -241,22 +241,31 @@ The `bench` folder contains benchmark.
 
 ### Benchmark minification of Discourse application.js (both minified and unminified)
 
-- MiniRacer version 0.1
+MiniRacer outperforms node when minifying assets via execjs.
+
+- MiniRacer version 0.1.9
+- node version 6.10
 - therubyracer version 0.12.2
 
 ```
-$ ruby bench_uglify.rb
-Benching with MiniRacer
-MiniRacer minify discourse_app.js 13813.36ms
-MiniRacer minify discourse_app_minified.js 18271.19ms
-MiniRacer minify discourse_app.js twice (2 threads) 13587.21ms
-```
 
-```
+$ bundle exec ruby bench.rb mini_racer
+Benching with mini_racer
+mini_racer minify discourse_app.js 9292.72063ms
+mini_racer minify discourse_app_minified.js 11799.850171ms
+mini_racer minify discourse_app.js twice (2 threads) 10269.570797ms
+
+sam@ubuntu exec_js_uglify % bundle exec ruby bench.rb node
+Benching with node
+node minify discourse_app.js 13302.715484ms
+node minify discourse_app_minified.js 18100.761243ms
+node minify discourse_app.js twice (2 threads) 14383.600207000001ms
+
+sam@ubuntu exec_js_uglify % bundle exec ruby bench.rb therubyracer
 Benching with therubyracer
-MiniRacer minify discourse_app.js 151467.164ms
-MiniRacer minify discourse_app_minified.js 158172.097ms
-MiniRacer minify discourse_app.js twice (2 threads) - DOES NOT FINISH
+therubyracer minify discourse_app.js 171683.01867700001ms
+therubyracer minify discourse_app_minified.js 143138.88492ms
+therubyracer minify discourse_app.js twice (2 threads) NEVER FINISH
 
 Killed: 9
 ```
@@ -264,6 +273,8 @@ Killed: 9
 The huge performance disparity (MiniRacer is 10x faster) is due to MiniRacer running latest version of V8. In July 2016 there is a queued upgrade to therubyracer which should bring some of the perf inline.
 
 Note how the global interpreter lock release leads to 2 threads doing the same work taking the same wall time as 1 thread.
+
+As a rule MiniRacer strives to always support and depend on the latest stable version of libv8.
 
 ## Installation
 

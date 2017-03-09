@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <mutex>
+#include <math.h>
 
 using namespace v8;
 
@@ -30,6 +31,7 @@ typedef struct {
     ArrayBufferAllocator* allocator;
     StartupData* startup_data;
     bool interrupted;
+    pid_t pid;
 
     // how many references to this isolate exist
     // we can't rely on Ruby's GC for this, because when destroying
@@ -48,6 +50,7 @@ typedef struct {
     bool parsed;
     bool executed;
     bool terminated;
+    bool json;
     Persistent<Value>* value;
     Persistent<Value>* message;
     Persistent<Value>* backtrace;
@@ -66,6 +69,7 @@ static VALUE rb_eScriptRuntimeError;
 static VALUE rb_cJavaScriptFunction;
 static VALUE rb_eSnapshotError;
 static VALUE rb_ePlatformAlreadyInitializedError;
+static VALUE rb_mJSON;
 
 static VALUE rb_cFailedV8Conversion;
 static VALUE rb_cDateTime = Qnil;
@@ -110,55 +114,29 @@ static void init_v8() {
     platform_lock.unlock();
 }
 
-static VALUE
-ruby_timeout_thread(VALUE data) {
-    rb_funcall(data, rb_intern("raise"), 1, rb_eScriptTerminatedError);
-    return Qnil;
-}
-
-void* breaker(void *d) {
-  EvalParams* data = (EvalParams*)d;
-  Isolate* isolate = data->context_info->isolate_info->isolate;
-
-  usleep(data->timeout*1000);
-  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-
-  // flag for termination
-  isolate->SetData(2, (void*)true);
-
-  VALUE* ruby_thread = (VALUE*)isolate->GetData(1);
-  if (ruby_thread == NULL) {
-      V8::TerminateExecution(isolate);
-  } else {
-    rb_thread_create((VALUE(*)(...))&ruby_timeout_thread, (void*)*ruby_thread);
-  }
-  return NULL;
-}
-
 void*
 nogvl_context_eval(void* arg) {
+
     EvalParams* eval_params = (EvalParams*)arg;
     EvalResult* result = eval_params->result;
     Isolate* isolate = eval_params->context_info->isolate_info->isolate;
+
     Isolate::Scope isolate_scope(isolate);
     HandleScope handle_scope(isolate);
-
     TryCatch trycatch(isolate);
-
     Local<Context> context = eval_params->context_info->context->Get(isolate);
     Context::Scope context_scope(context);
 
     // in gvl flag
     isolate->SetData(0, (void*)false);
-    // ruby thread value
-    isolate->SetData(1, (void*)NULL);
     // terminate ASAP
-    isolate->SetData(2, (void*)false);
+    isolate->SetData(1, (void*)false);
 
     MaybeLocal<Script> parsed_script = Script::Compile(context, *eval_params->eval);
     result->parsed = !parsed_script.IsEmpty();
     result->executed = false;
     result->terminated = false;
+    result->json = false;
     result->value = NULL;
 
     if (!result->parsed) {
@@ -166,25 +144,41 @@ nogvl_context_eval(void* arg) {
 	result->message->Reset(isolate, trycatch.Exception());
     } else {
 
-	pthread_t breaker_thread;
-
-	if (eval_params->timeout > 0) {
-	   pthread_create(&breaker_thread, NULL, breaker, (void*)eval_params);
-	}
-
 	MaybeLocal<Value> maybe_value = parsed_script.ToLocalChecked()->Run(context);
-
-	if (eval_params->timeout > 0) {
-	    pthread_cancel(breaker_thread);
-	    pthread_join(breaker_thread, NULL);
-	}
 
 	result->executed = !maybe_value.IsEmpty();
 
 	if (result->executed) {
-	    Persistent<Value>* persistent = new Persistent<Value>();
-	    persistent->Reset(isolate, maybe_value.ToLocalChecked());
-	    result->value = persistent;
+
+	    // arrays and objects get converted to json
+	    Local<Value> local_value = maybe_value.ToLocalChecked();
+	    if ((local_value->IsObject() || local_value->IsArray()) &&
+		    !local_value->IsDate() && !local_value->IsFunction()) {
+		Local<Object> JSON = context->Global()->Get(
+		    String::NewFromUtf8(isolate, "JSON"))->ToObject();
+
+		Local<Function> stringify = JSON->Get(v8::String::NewFromUtf8(isolate, "stringify"))
+		     .As<Function>();
+
+		Local<Object> object = local_value->ToObject();
+		const unsigned argc = 1;
+		Local<Value> argv[argc] = { object };
+		MaybeLocal<Value> json = stringify->Call(JSON, argc, argv);
+
+		if (json.IsEmpty()) {
+		    result->executed = false;
+		} else {
+		    result->json = true;
+		    Persistent<Value>* persistent = new Persistent<Value>();
+		    persistent->Reset(isolate, json.ToLocalChecked());
+		    result->value = persistent;
+		}
+
+	    } else {
+		Persistent<Value>* persistent = new Persistent<Value>();
+		persistent->Reset(isolate, local_value);
+		result->value = persistent;
+	    }
 	}
     }
 
@@ -203,6 +197,8 @@ nogvl_context_eval(void* arg) {
 		Local<String> v8_message = String::NewFromUtf8(isolate, buf, NewStringType::kNormal, (int)len).ToLocalChecked();
 		result->message->Reset(isolate, v8_message);
 	    } else if(trycatch.HasTerminated()) {
+
+
 		result->terminated = true;
 		result->message = new Persistent<Value>();
 		Local<String> tmp = String::NewFromUtf8(isolate, "JavaScript was terminated (either by timeout or explicitly)");
@@ -217,11 +213,13 @@ nogvl_context_eval(void* arg) {
 
     isolate->SetData(0, (void*)true);
 
+
     return NULL;
 }
 
 static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
 
+    Isolate::Scope isolate_scope(isolate);
     HandleScope scope(isolate);
 
     if (value->IsNull() || value->IsUndefined()){
@@ -271,11 +269,10 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
     }
 
     if (value->IsObject()) {
-
-	TryCatch trycatch(isolate);
-
 	VALUE rb_hash = rb_hash_new();
+	TryCatch trycatch(isolate);
 	Local<Context> context = Context::New(isolate);
+
 	Local<Object> object = value->ToObject();
 	MaybeLocal<Array> maybe_props = object->GetOwnPropertyNames(context);
 	if (!maybe_props.IsEmpty()) {
@@ -583,14 +580,21 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 	}
     }
 
-    // New scope for return value, must release GVL which
+    // New scope for return value
     {
 	Locker lock(isolate);
 	Isolate::Scope isolate_scope(isolate);
 	HandleScope handle_scope(isolate);
 
 	Local<Value> tmp = Local<Value>::New(isolate, *eval_result.value);
-	result = convert_v8_to_ruby(isolate, tmp);
+
+	if (eval_result.json) {
+	    Local<String> rstr = tmp->ToString();
+	    VALUE json_string = rb_enc_str_new(*String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
+	    result = rb_funcall(rb_mJSON, rb_intern("parse"), 1, json_string);
+	} else {
+	    result = convert_v8_to_ruby(isolate, tmp);
+	}
 
 	eval_result.value->Reset();
 	delete eval_result.value;
@@ -600,6 +604,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 	// TODO try to recover stack trace from the conversion error
 	rb_raise(rb_eScriptRuntimeError, "Error converting JS object to Ruby object");
     }
+
 
     return result;
 }
@@ -667,18 +672,14 @@ gvl_ruby_callback(void* data) {
     callback_data.args = ruby_args;
     callback_data.failed = false;
 
-    if ((bool)args->GetIsolate()->GetData(2) == true) {
+    if ((bool)args->GetIsolate()->GetData(1) == true) {
 	args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Terminated execution during tansition from Ruby to JS"));
+	V8::TerminateExecution(args->GetIsolate());
 	return NULL;
     }
 
-    VALUE thread = rb_funcall(rb_cThread, rb_intern("current"), 0);
-    args->GetIsolate()->SetData(1, (void*)&thread);
-
-    result = rb_rescue((VALUE(*)(...))&protected_callback, (VALUE)(&callback_data),
-			(VALUE(*)(...))&rescue_callback, (VALUE)(&callback_data));
-
-    args->GetIsolate()->SetData(1, (void*)NULL);
+    result = rb_rescue2((VALUE(*)(...))&protected_callback, (VALUE)(&callback_data),
+			(VALUE(*)(...))&rescue_callback, (VALUE)(&callback_data), rb_eException, (VALUE)0);
 
     if(callback_data.failed) {
 	VALUE parent = rb_iv_get(self, "@parent");
@@ -695,8 +696,9 @@ gvl_ruby_callback(void* data) {
 	xfree(ruby_args);
     }
 
-    if ((bool)args->GetIsolate()->GetData(2) == true) {
-      V8::TerminateExecution(args->GetIsolate());
+    if ((bool)args->GetIsolate()->GetData(1) == true) {
+      Isolate* isolate = args->GetIsolate();
+      V8::TerminateExecution(isolate);
     }
 
     return NULL;
@@ -797,9 +799,14 @@ void maybe_free_isolate_info(IsolateInfo* isolate_info) {
 
     if (isolate_info->isolate) {
         if (isolate_info->interrupted) {
-            fprintf(stderr, "WARNING: V8 isolate was interrupted by Ruby, it can not be disposed and memory will not be reclaimed till the Ruby process exits.");
+            fprintf(stderr, "WARNING: V8 isolate was interrupted by Ruby, it can not be disposed and memory will not be reclaimed till the Ruby process exits.\n");
         } else {
-            isolate_info->isolate->Dispose();
+
+	    if (isolate_info->pid != getpid()) {
+		fprintf(stderr, "WARNING: V8 isolate was forked, it can not be disposed and memory will not be reclaimed till the Ruby process exits.\n");
+	    } else {
+		isolate_info->isolate->Dispose();
+	    }
         }
         isolate_info->isolate = NULL;
     }
@@ -825,18 +832,15 @@ void deallocate(void* data) {
     ContextInfo* context_info = (ContextInfo*)data;
     IsolateInfo* isolate_info = context_info->isolate_info;
 
-    {
     if (context_info->context && isolate_info && isolate_info->isolate) {
         Locker lock(isolate_info->isolate);
         v8::Isolate::Scope isolate_scope(isolate_info->isolate);
         context_info->context->Reset();
         delete context_info->context;
     }
-    }
 
     if (isolate_info) {
         isolate_info->refs_count--;
-
         maybe_free_isolate_info(isolate_info);
     }
 }
@@ -882,15 +886,25 @@ VALUE allocate_isolate(VALUE klass) {
     isolate_info->startup_data = NULL;
     isolate_info->interrupted = false;
     isolate_info->refs_count = 0;
+    isolate_info->pid = getpid();
 
     return Data_Wrap_Struct(klass, NULL, deallocate_isolate, (void*)isolate_info);
 }
 
 static VALUE
 rb_context_stop(VALUE self) {
+
     ContextInfo* context_info;
     Data_Get_Struct(self, ContextInfo, context_info);
-    V8::TerminateExecution(context_info->isolate_info->isolate);
+
+    Isolate* isolate = context_info->isolate_info->isolate;
+
+    // flag for termination
+    isolate->SetData(1, (void*)true);
+
+    V8::TerminateExecution(isolate);
+    rb_funcall(self, rb_intern("stop_attached"), 0);
+
     return Qnil;
 }
 
@@ -912,6 +926,7 @@ extern "C" {
 	rb_eSnapshotError = rb_define_class_under(rb_mMiniRacer, "SnapshotError", rb_eStandardError);
 	rb_ePlatformAlreadyInitializedError = rb_define_class_under(rb_mMiniRacer, "PlatformAlreadyInitialized", rb_eStandardError);
 	rb_cFailedV8Conversion = rb_define_class_under(rb_mMiniRacer, "FailedV8Conversion", rb_cObject);
+	rb_mJSON = rb_define_module("JSON");
 
 	VALUE rb_cExternalFunction = rb_define_class_under(rb_cContext, "ExternalFunction", rb_cObject);
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);

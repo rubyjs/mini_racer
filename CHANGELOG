@@ -1,3 +1,34 @@
+09-03-2017
+
+- 0.1.9
+
+ - Perf: speed up ruby/node boundary performance when moving large objects
+
+06-02-2017
+
+- 0.1.8
+
+  - Fix: Include math.h to fix use of undeclared identifier floor with rbx. See #51
+
+02-11-2016
+
+- 0.1.7
+
+  - Fix: if for some reason an isolate was forked don't free it and raise a warning instead to avoid hanging process
+
+25-10-2016
+
+- 0.1.6
+
+  - Fix: timeout behavior was incorrect, in some cases stop could be called on already stopped contexts
+
+10-10-2016
+
+- 0.1.5
+
+  - Support for snapshots, shared isolates, runtime flags thanks to @wk8
+  - Fix timeout behavior when it occurs in an attached Ruby method
+
 19-05-2016
 
 - 0.1.4
