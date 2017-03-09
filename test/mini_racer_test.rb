@@ -1,3 +1,5 @@
+require 'securerandom'
+require 'date'
 require 'test_helper'
 
 class MiniRacerTest < Minitest::Test
