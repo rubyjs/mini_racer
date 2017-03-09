@@ -81,6 +81,14 @@ class MiniRacerTest < Minitest::Test
 
   end
 
+  def test_it_can_timeout_during_serialization
+    context = MiniRacer::Context.new(timeout: 500)
+
+    assert_raises(MiniRacer::ScriptTerminatedError) do
+      context.eval 'var a = {get a(){ while(true); }}; a'
+    end
+  end
+
   def test_it_can_automatically_time_out_context
     # 2 millisecs is a very short timeout but we don't want test running forever
     context = MiniRacer::Context.new(timeout: 2)

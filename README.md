@@ -68,15 +68,6 @@ context.eval 'while(true){}'
 # => exception is raised
 ```
 
-:exclamation:Warning:exclamation: Code that is executed during return value serialization is not gated by timeout
-
-```ruby
-context = MiniRacer::Context.new(timeout: 1000)
-context.eval 'var a = {get a(){ while(true); }}; a'
-```
-
-This block will run past the timeout time.
-
 ### Threadsafe
 
 Context usage is threadsafe
