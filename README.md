@@ -302,7 +302,7 @@ Add this to your .travis.yml file:
 
 ## Similar Projects
 
-###therubyracer
+### therubyracer
 
 - https://github.com/cowboyd/therubyracer
 - Most comprehensive bridge available
@@ -317,7 +317,7 @@ Add this to your .travis.yml file:
 - Supports execjs
 
 
-###v8eval
+### v8eval
 
 - https://github.com/sony/v8eval
 - Provides the ability to "eval" JavaScript using the latest V8 engine
@@ -330,7 +330,7 @@ Add this to your .travis.yml file:
 - No support for execjs (can not be used with Rails uglifier and coffeescript gems)
 
 
-###therubyrhino
+### therubyrhino
 
 - https://github.com/cowboyd/therubyrhino
 - API compatible with therubyracer
