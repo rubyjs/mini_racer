@@ -32,7 +32,7 @@ WARNING: C++11 support is required for compiling mini_racer. Please make sure
 you are using a compiler that supports at least C++11. Examples of such
 compilers are GCC 4.7+ and Clang 3.2+.
 
-If you are using Travis, consider either migrating your bulid to Ubuntu Trusty or
+If you are using Travis, consider either migrating your build to Ubuntu Trusty or
 installing GCC 4.8. See mini_racer's README.md for more information.
 
 
