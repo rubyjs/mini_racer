@@ -308,8 +308,8 @@ Add this to your .travis.yml file:
 - Most comprehensive bridge available
 - Provides the ability to "eval" JavaScript
 - Provides the ability to invoke Ruby code from JavaScript
-- Hold refrences to JavaScript objects and methods in your Ruby code
-- Hold refrences to Ruby objects and methods in JavaScript code
+- Hold references to JavaScript objects and methods in your Ruby code
+- Hold references to Ruby objects and methods in JavaScript code
 - Uses libv8, so installation is fast
 - Supports timeouts for JavaScript execution
 - Does not release global interpreter lock, so performance is constrained to a single thread
