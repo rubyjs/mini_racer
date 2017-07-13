@@ -5,11 +5,15 @@ require "json"
 
 module MiniRacer
 
-  class EvalError < StandardError; end
-  class ScriptTerminatedError < EvalError; end
+  class Error < ::StandardError; end
+
+  class ContextDisposedError < Error; end
+  class SnapshotError < Error; end
+  class PlatformAlreadyInitialized < Error; end
+
+  class EvalError < Error; end
   class ParseError < EvalError; end
-  class SnapshotError < StandardError; end
-  class PlatformAlreadyInitialized < StandardError; end
+  class ScriptTerminatedError < EvalError; end
 
   class FailedV8Conversion
     attr_reader :info
@@ -161,6 +165,8 @@ module MiniRacer
     end
 
     def eval(str)
+      raise(ContextDisposedError, 'attempted to call eval on a disposed context!') if @disposed
+
       @eval_thread = Thread.current
       isolate.with_lock do
         @current_exception = nil
@@ -170,6 +176,15 @@ module MiniRacer
       end
     ensure
       @eval_thread = nil
+    end
+
+    def dispose
+      if !@disposed
+        isolate.with_lock do
+          dispose_unsafe
+        end
+        @disposed = true
+      end
     end
 
 

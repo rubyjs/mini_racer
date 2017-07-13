@@ -614,4 +614,42 @@ raise FooError, "I like foos"
 
     assert_equal expected_string_flags, TestPlatform.public_flags_to_strings(flags)
   end
+
+  def test_can_dispose_context
+    context = MiniRacer::Context.new(timeout: 5)
+    context.dispose
+    assert_raises(MiniRacer::ContextDisposedError) do
+      context.eval("a")
+    end
+  end
+
+  def test_estimated_size
+    context = MiniRacer::Context.new(timeout: 5)
+    context.eval("let a='testing';")
+
+    stats = context.heap_stats
+    # eg: {:total_physical_size=>1280640, :total_heap_size_executable=>4194304, :total_heap_size=>3100672, :used_heap_size=>1205376, :heap_size_limit=>1501560832}
+    assert_equal(
+      [:total_physical_size, :total_heap_size_executable, :total_heap_size, :used_heap_size, :heap_size_limit].sort,
+      stats.keys.sort
+    )
+
+    assert(stats.values.all?{|v| v > 0}, "expecting the isolate to have values for all the vals")
+  end
+
+  def test_can_dispose
+    skip "takes too long"
+    #
+    # junk_it_up
+    # 3.times do
+    #   GC.start(full_mark: true, immediate_sweep: true)
+    # end
+  end
+
+  def junk_it_up
+    1000.times do
+      context = MiniRacer::Context.new(timeout: 5)
+      context.dispose
+    end
+  end
 end

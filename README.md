@@ -226,6 +226,33 @@ A list of all V8 runtime flags can be found using `node --v8-options`, or else b
 
 Note that runtime flags must be set before any other operation (e.g. creating a context, a snapshot or an isolate), otherwise an exception will be thrown.
 
+## Controlling memory
+
+When hosting v8 you may want to keep track of memory usage, use #heap_stats to get memory usage:
+
+```ruby
+context = MiniRacer::Context.new(timeout: 5)
+context.eval("let a='testing';")
+p context.heap_stats
+# {:total_physical_size=>1280640,
+#  :total_heap_size_executable=>4194304,
+#  :total_heap_size=>3100672,
+#  :used_heap_size=>1205376,
+#  :heap_size_limit=>1501560832}
+```
+
+If you wish to dispose of a context before waiting on the GC use
+
+```ruby
+context = MiniRacer::Context.new(timeout: 5)
+context.eval("let a='testing';")
+context.dispose
+context.eval("a = 2")
+# MiniRacer::ContextDisposedError
+
+# nothing works on the context from now on, its a shell waiting to be disposed
+```
+
 ## Performance
 
 The `bench` folder contains benchmark.

@@ -17,8 +17,12 @@ class ArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
     void* data = AllocateUninitialized(length);
     return data == NULL ? data : memset(data, 0, length);
   }
-  virtual void* AllocateUninitialized(size_t length) { return malloc(length); }
-  virtual void Free(void* data, size_t) { free(data); }
+  virtual void* AllocateUninitialized(size_t length) {
+    return malloc(length);
+  }
+  virtual void Free(void* data, size_t) {
+     free(data);
+  }
 };
 
 typedef struct {
@@ -31,6 +35,7 @@ typedef struct {
     ArrayBufferAllocator* allocator;
     StartupData* startup_data;
     bool interrupted;
+    bool disposed;
     pid_t pid;
 
     // how many references to this isolate exist
@@ -38,7 +43,7 @@ typedef struct {
     // objects, Ruby will destroy ruby objects first, then call the
     // extenstion's deallocators. In this case, that means it would
     // call `deallocate_isolate` _before_ `deallocate`, causing a segfault
-    int refs_count;
+    volatile int refs_count;
 } IsolateInfo;
 
 typedef struct {
@@ -484,14 +489,14 @@ static VALUE rb_context_init_with_isolate(VALUE self, VALUE isolate) {
     isolate_info->refs_count++;
 
     {
-    Locker lock(isolate_info->isolate);
-    Isolate::Scope isolate_scope(isolate_info->isolate);
-    HandleScope handle_scope(isolate_info->isolate);
+	Locker lock(isolate_info->isolate);
+	Isolate::Scope isolate_scope(isolate_info->isolate);
+	HandleScope handle_scope(isolate_info->isolate);
 
-    Local<Context> context = Context::New(isolate_info->isolate);
+	Local<Context> context = Context::New(isolate_info->isolate);
 
-    context_info->context = new Persistent<Context>();
-    context_info->context->Reset(isolate_info->isolate, context);
+	context_info->context = new Persistent<Context>();
+	context_info->context->Reset(isolate_info->isolate, context);
     }
 
     if (Qnil == rb_cDateTime && rb_funcall(rb_cObject, rb_intern("const_defined?"), 1, rb_str_new2("DateTime")) == Qtrue)
@@ -786,15 +791,10 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
     return Qnil;
 }
 
-void maybe_free_isolate_info(IsolateInfo* isolate_info) {
-    // an isolate can only be freed if no Isolate or Context (ruby) object
-    // still need it
-    if (isolate_info == NULL || isolate_info->refs_count > 0) {
-        return;
-    }
+void free_isolate(IsolateInfo* isolate_info) {
 
     if (isolate_info->isolate) {
-	    Locker lock(isolate_info->isolate);
+	Locker lock(isolate_info->isolate);
     }
 
     if (isolate_info->isolate) {
@@ -817,18 +817,25 @@ void maybe_free_isolate_info(IsolateInfo* isolate_info) {
     }
 
     delete isolate_info->allocator;
-    xfree(isolate_info);
+    isolate_info->disposed = true;
 }
 
-void deallocate_isolate(void* data) {
-    IsolateInfo* isolate_info = (IsolateInfo*) data;
+void maybe_free_isolate(IsolateInfo* isolate_info) {
+    // an isolate can only be freed if no Isolate or Context (ruby) object
+    // still need it
+    //
+    // there is a sequence issue here where Ruby may call the deallocator on the
+    // context object after it calles the dallocator on the isolate
+    if (isolate_info->refs_count != 0 || isolate_info->disposed) {
+        return;
+    }
 
-    isolate_info->refs_count--;
-
-    maybe_free_isolate_info(isolate_info);
+    free_isolate(isolate_info);
 }
 
-void deallocate(void* data) {
+
+void free_context(void* data) {
+
     ContextInfo* context_info = (ContextInfo*)data;
     IsolateInfo* isolate_info = context_info->isolate_info;
 
@@ -837,13 +844,48 @@ void deallocate(void* data) {
         v8::Isolate::Scope isolate_scope(isolate_info->isolate);
         context_info->context->Reset();
         delete context_info->context;
-    }
-
-    if (isolate_info) {
-        isolate_info->refs_count--;
-        maybe_free_isolate_info(isolate_info);
+	context_info->context = NULL;
     }
 }
+
+void deallocate_context(void* data) {
+
+    ContextInfo* context_info = (ContextInfo*)data;
+    IsolateInfo* isolate_info = context_info->isolate_info;
+
+    free_context(data);
+
+    if (isolate_info) {
+	isolate_info->refs_count--;
+	maybe_free_isolate(isolate_info);
+    }
+}
+
+void deallocate_isolate(void* data) {
+
+    IsolateInfo* isolate_info = (IsolateInfo*) data;
+
+    isolate_info->refs_count--;
+    maybe_free_isolate(isolate_info);
+
+    if (isolate_info->refs_count == 0) {
+	xfree(isolate_info);
+    }
+}
+
+void deallocate(void* data) {
+    ContextInfo* context_info = (ContextInfo*)data;
+    IsolateInfo* isolate_info = context_info->isolate_info;
+
+    deallocate_context(data);
+
+    if (isolate_info && isolate_info->refs_count == 0) {
+	xfree(isolate_info);
+    }
+
+    xfree(data);
+}
+
 
 void deallocate_external_function(void * data) {
     xfree(data);
@@ -851,9 +893,7 @@ void deallocate_external_function(void * data) {
 
 void deallocate_snapshot(void * data) {
     SnapshotInfo* snapshot_info = (SnapshotInfo*)data;
-
     delete[] snapshot_info->data;
-
     xfree(snapshot_info);
 }
 
@@ -887,8 +927,40 @@ VALUE allocate_isolate(VALUE klass) {
     isolate_info->interrupted = false;
     isolate_info->refs_count = 0;
     isolate_info->pid = getpid();
+    isolate_info->disposed = false;
 
     return Data_Wrap_Struct(klass, NULL, deallocate_isolate, (void*)isolate_info);
+}
+
+static VALUE
+rb_heap_stats(VALUE self) {
+
+    ContextInfo* context_info;
+    Data_Get_Struct(self, ContextInfo, context_info);
+
+    if (!context_info->isolate_info) {
+	return Qnil;
+    }
+
+    Isolate* isolate = context_info->isolate_info->isolate;
+
+    if (!isolate) {
+	return Qnil;
+    }
+
+    v8::HeapStatistics stats;
+
+    isolate->GetHeapStatistics(&stats);
+
+    VALUE rval = rb_hash_new();
+
+    rb_hash_aset(rval, ID2SYM(rb_intern("total_physical_size")), ULONG2NUM(stats.total_physical_size()));
+    rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size_executable")), ULONG2NUM(stats.total_heap_size_executable()));
+    rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size")), ULONG2NUM(stats.total_heap_size()));
+    rb_hash_aset(rval, ID2SYM(rb_intern("used_heap_size")), ULONG2NUM(stats.used_heap_size()));
+    rb_hash_aset(rval, ID2SYM(rb_intern("heap_size_limit")), ULONG2NUM(stats.heap_size_limit()));
+
+    return rval;
 }
 
 static VALUE
@@ -908,6 +980,22 @@ rb_context_stop(VALUE self) {
     return Qnil;
 }
 
+static VALUE
+rb_context_dispose(VALUE self) {
+
+    ContextInfo* context_info;
+    Data_Get_Struct(self, ContextInfo, context_info);
+
+    free_context(context_info);
+
+    if (context_info->isolate_info && context_info->isolate_info->refs_count == 2) {
+	// special case, we only have isolate + context so we can burn the
+	// isolate as well
+	free_isolate(context_info->isolate_info);
+    }
+    return Qnil;
+}
+
 extern "C" {
 
     void Init_mini_racer_extension ( void )
@@ -918,18 +1006,25 @@ extern "C" {
 	VALUE rb_cIsolate = rb_define_class_under(rb_mMiniRacer, "Isolate", rb_cObject);
 	VALUE rb_cPlatform = rb_define_class_under(rb_mMiniRacer, "Platform", rb_cObject);
 
-	VALUE rb_eEvalError = rb_define_class_under(rb_mMiniRacer, "EvalError", rb_eStandardError);
+	VALUE rb_eError = rb_define_class_under(rb_mMiniRacer, "Error", rb_eStandardError);
+
+	VALUE rb_eEvalError = rb_define_class_under(rb_mMiniRacer, "EvalError", rb_eError);
 	rb_eScriptTerminatedError = rb_define_class_under(rb_mMiniRacer, "ScriptTerminatedError", rb_eEvalError);
 	rb_eParseError = rb_define_class_under(rb_mMiniRacer, "ParseError", rb_eEvalError);
 	rb_eScriptRuntimeError = rb_define_class_under(rb_mMiniRacer, "RuntimeError", rb_eEvalError);
+
 	rb_cJavaScriptFunction = rb_define_class_under(rb_mMiniRacer, "JavaScriptFunction", rb_cObject);
-	rb_eSnapshotError = rb_define_class_under(rb_mMiniRacer, "SnapshotError", rb_eStandardError);
-	rb_ePlatformAlreadyInitializedError = rb_define_class_under(rb_mMiniRacer, "PlatformAlreadyInitialized", rb_eStandardError);
+	rb_eSnapshotError = rb_define_class_under(rb_mMiniRacer, "SnapshotError", rb_eError);
+	rb_ePlatformAlreadyInitializedError = rb_define_class_under(rb_mMiniRacer, "PlatformAlreadyInitialized", rb_eError);
 	rb_cFailedV8Conversion = rb_define_class_under(rb_mMiniRacer, "FailedV8Conversion", rb_cObject);
 	rb_mJSON = rb_define_module("JSON");
 
 	VALUE rb_cExternalFunction = rb_define_class_under(rb_cContext, "ExternalFunction", rb_cObject);
+
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
+	rb_define_method(rb_cContext, "dispose_unsafe", (VALUE(*)(...))&rb_context_dispose, 0);
+	rb_define_method(rb_cContext, "heap_stats", (VALUE(*)(...))&rb_heap_stats, 0);
+
 	rb_define_alloc_func(rb_cContext, allocate);
 	rb_define_alloc_func(rb_cSnapshot, allocate_snapshot);
 	rb_define_alloc_func(rb_cIsolate, allocate_isolate);
