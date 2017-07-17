@@ -637,6 +637,33 @@ raise FooError, "I like foos"
     assert(stats.values.all?{|v| v > 0}, "expecting the isolate to have values for all the vals")
   end
 
+  def test_eval_with_filename
+    context = MiniRacer::Context.new()
+    context.eval("var foo = function(){baz();}", filename: 'b/c/foo1.js')
+
+    got_error = false
+    begin
+      context.eval("foo()", filename: 'baz1.js')
+    rescue MiniRacer::RuntimeError => e
+      assert_match(/foo1.js/, e.backtrace[0])
+      assert_match(/baz1.js/, e.backtrace[1])
+      got_error = true
+    end
+
+    assert(got_error, "should raise")
+
+  end
+
+  def test_estimated_size_when_disposed
+
+    context = MiniRacer::Context.new(timeout: 5)
+    context.eval("let a='testing';")
+    context.dispose
+
+    stats = context.heap_stats
+    assert(stats.values.all?{|v| v==0}, "should have 0 values once disposed")
+  end
+
   def test_can_dispose
     skip "takes too long"
     #

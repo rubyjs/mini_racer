@@ -64,6 +64,7 @@ typedef struct {
 typedef struct {
     ContextInfo* context_info;
     Local<String>* eval;
+    Local<String>* filename;
     useconds_t timeout;
     EvalResult* result;
 } EvalParams;
@@ -131,13 +132,25 @@ nogvl_context_eval(void* arg) {
     TryCatch trycatch(isolate);
     Local<Context> context = eval_params->context_info->context->Get(isolate);
     Context::Scope context_scope(context);
+    v8::ScriptOrigin *origin = NULL;
 
     // in gvl flag
     isolate->SetData(0, (void*)false);
     // terminate ASAP
     isolate->SetData(1, (void*)false);
 
-    MaybeLocal<Script> parsed_script = Script::Compile(context, *eval_params->eval);
+    MaybeLocal<Script> parsed_script;
+
+    if (eval_params->filename) {
+	origin = new v8::ScriptOrigin(*eval_params->filename);
+    }
+
+    parsed_script = Script::Compile(context, *eval_params->eval, origin);
+
+    if (origin) {
+	delete origin;
+    }
+
     result->parsed = !parsed_script.IsEmpty();
     result->executed = false;
     result->terminated = false;
@@ -507,7 +520,7 @@ static VALUE rb_context_init_with_isolate(VALUE self, VALUE isolate) {
     return Qnil;
 }
 
-static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
+static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
 
     EvalParams eval_params;
     EvalResult eval_result;
@@ -526,7 +539,17 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str) {
 	HandleScope handle_scope(isolate);
 
 	Local<String> eval = String::NewFromUtf8(isolate, RSTRING_PTR(str),
-						  NewStringType::kNormal, (int)RSTRING_LEN(str)).ToLocalChecked();
+				NewStringType::kNormal, (int)RSTRING_LEN(str)).ToLocalChecked();
+
+	Local<String> local_filename;
+
+	if (filename != Qnil) {
+	    local_filename = String::NewFromUtf8(isolate, RSTRING_PTR(filename),
+		    NewStringType::kNormal, (int)RSTRING_LEN(filename)).ToLocalChecked();
+	    eval_params.filename = &local_filename;
+	} else {
+	    eval_params.filename = NULL;
+	}
 
 	eval_params.context_info = context_info;
 	eval_params.eval = &eval;
@@ -937,28 +960,30 @@ rb_heap_stats(VALUE self) {
 
     ContextInfo* context_info;
     Data_Get_Struct(self, ContextInfo, context_info);
-
-    if (!context_info->isolate_info) {
-	return Qnil;
-    }
-
-    Isolate* isolate = context_info->isolate_info->isolate;
-
-    if (!isolate) {
-	return Qnil;
-    }
-
+    Isolate* isolate;
     v8::HeapStatistics stats;
 
-    isolate->GetHeapStatistics(&stats);
+    isolate = context_info->isolate_info ? context_info->isolate_info->isolate : NULL;
 
     VALUE rval = rb_hash_new();
 
-    rb_hash_aset(rval, ID2SYM(rb_intern("total_physical_size")), ULONG2NUM(stats.total_physical_size()));
-    rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size_executable")), ULONG2NUM(stats.total_heap_size_executable()));
-    rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size")), ULONG2NUM(stats.total_heap_size()));
-    rb_hash_aset(rval, ID2SYM(rb_intern("used_heap_size")), ULONG2NUM(stats.used_heap_size()));
-    rb_hash_aset(rval, ID2SYM(rb_intern("heap_size_limit")), ULONG2NUM(stats.heap_size_limit()));
+    if (!isolate) {
+
+	rb_hash_aset(rval, ID2SYM(rb_intern("total_physical_size")), ULONG2NUM(0));
+	rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size_executable")), ULONG2NUM(0));
+	rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size")), ULONG2NUM(0));
+	rb_hash_aset(rval, ID2SYM(rb_intern("used_heap_size")), ULONG2NUM(0));
+	rb_hash_aset(rval, ID2SYM(rb_intern("heap_size_limit")), ULONG2NUM(0));
+
+    } else {
+	isolate->GetHeapStatistics(&stats);
+
+	rb_hash_aset(rval, ID2SYM(rb_intern("total_physical_size")), ULONG2NUM(stats.total_physical_size()));
+	rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size_executable")), ULONG2NUM(stats.total_heap_size_executable()));
+	rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size")), ULONG2NUM(stats.total_heap_size()));
+	rb_hash_aset(rval, ID2SYM(rb_intern("used_heap_size")), ULONG2NUM(stats.used_heap_size()));
+	rb_hash_aset(rval, ID2SYM(rb_intern("heap_size_limit")), ULONG2NUM(stats.heap_size_limit()));
+    }
 
     return rval;
 }
@@ -1029,7 +1054,7 @@ extern "C" {
 	rb_define_alloc_func(rb_cSnapshot, allocate_snapshot);
 	rb_define_alloc_func(rb_cIsolate, allocate_isolate);
 
-	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 1);
+	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 2);
 	rb_define_private_method(rb_cContext, "init_with_isolate",(VALUE(*)(...))&rb_context_init_with_isolate, 1);
 	rb_define_private_method(rb_cExternalFunction, "notify_v8", (VALUE(*)(...))&rb_external_function_notify_v8, 0);
 	rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);

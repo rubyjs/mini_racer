@@ -164,14 +164,16 @@ module MiniRacer
       eval(File.read(filename))
     end
 
-    def eval(str)
+    def eval(str, options=nil)
       raise(ContextDisposedError, 'attempted to call eval on a disposed context!') if @disposed
+
+      filename = options && options[:filename].to_s
 
       @eval_thread = Thread.current
       isolate.with_lock do
         @current_exception = nil
         timeout do
-          eval_unsafe(str)
+          eval_unsafe(str, filename)
         end
       end
     ensure

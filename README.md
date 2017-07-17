@@ -68,6 +68,19 @@ context.eval 'while(true){}'
 # => exception is raised
 ```
 
+### Rich debugging with "filename" support
+
+```ruby
+
+context = MiniRacer::Context.new
+context.eval('var foo = function() {bar();}', filename: 'a/foo.js')
+context.eval('bar()', filename: 'a/bar.js')
+
+# MiniRacer::RuntimeError is raised containing the filenames you specified for evals in backtrace
+
+```
+
+
 ### Threadsafe
 
 Context usage is threadsafe
@@ -225,6 +238,12 @@ Please refer to http://node.green/ as a reference on other harmony features.
 A list of all V8 runtime flags can be found using `node --v8-options`, or else by perusing [the V8 source code for flags (make sure to use the right version of V8)](https://github.com/v8/v8/blob/master/src/flag-definitions.h).
 
 Note that runtime flags must be set before any other operation (e.g. creating a context, a snapshot or an isolate), otherwise an exception will be thrown.
+
+Flags:
+
+- :expose_gc : Will expose `gc()` which you can run in JavaScript to issue a gc
+- :max_old_space_size : defaults to 1400 (megs) on 64 bit, you can restric memory usage by limiting this.
+- **NOTE TO READER** our documentation could be awesome we could be properly documenting all the flags, they are hugely useful, if you feel like documenting a few more, PLEASE DO, PRs are welcome.
 
 ## Controlling memory
 
