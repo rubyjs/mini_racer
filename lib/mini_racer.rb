@@ -147,6 +147,7 @@ module MiniRacer
       @current_exception = nil
       @timeout = options[:timeout]
       @isolate = options[:isolate] || Isolate.new(options[:snapshot])
+      @disposed = false
 
       @callback_mutex = Mutex.new
       @callback_running = false
