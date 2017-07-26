@@ -1,5 +1,12 @@
 18-07-2017
 
+- 0.1.12
+
+  - Feature: upgrade libv8 to 5.9
+  - Fix: warning when runnin with ruby warnings enabled (missed @disposed initialize)
+
+18-07-2017
+
 - 0.1.11
 
   - Feature: upgrade libv8 to 5.7
