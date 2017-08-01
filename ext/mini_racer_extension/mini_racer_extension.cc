@@ -67,9 +67,11 @@ typedef struct {
     Local<String>* filename;
     useconds_t timeout;
     EvalResult* result;
+    long max_memory;
 } EvalParams;
 
 static VALUE rb_eScriptTerminatedError;
+static VALUE rb_eV8OutOfMemoryError;
 static VALUE rb_eParseError;
 static VALUE rb_eScriptRuntimeError;
 static VALUE rb_cJavaScriptFunction;
@@ -120,6 +122,21 @@ static void init_v8() {
     platform_lock.unlock();
 }
 
+static void gc_callback(Isolate *isolate, GCType type, GCCallbackFlags flags) {
+    if((bool)isolate->GetData(3)) return;
+
+    long softlimit = *(long*) isolate->GetData(2);
+
+    HeapStatistics* stats = new HeapStatistics();
+    isolate->GetHeapStatistics(stats);
+    long used = stats->used_heap_size();
+
+    if(used > softlimit) {
+        isolate->SetData(3, (void*)true);
+        V8::TerminateExecution(isolate);
+    }
+}
+
 void*
 nogvl_context_eval(void* arg) {
 
@@ -138,6 +155,10 @@ nogvl_context_eval(void* arg) {
     isolate->SetData(0, (void*)false);
     // terminate ASAP
     isolate->SetData(1, (void*)false);
+    // Memory softlimit
+    isolate->SetData(2, (void*)false);
+    // Memory softlimit hit flag
+    isolate->SetData(3, (void*)false);
 
     MaybeLocal<Script> parsed_script;
 
@@ -161,6 +182,11 @@ nogvl_context_eval(void* arg) {
 	result->message = new Persistent<Value>();
 	result->message->Reset(isolate, trycatch.Exception());
     } else {
+
+    if(eval_params->max_memory > 0) {
+        isolate->SetData(2, &eval_params->max_memory);
+        isolate->AddGCEpilogueCallback(gc_callback);
+    }
 
 	MaybeLocal<Value> maybe_value = parsed_script.ToLocalChecked()->Run(context);
 
@@ -555,9 +581,15 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
 	eval_params.eval = &eval;
 	eval_params.result = &eval_result;
 	eval_params.timeout = 0;
+	eval_params.max_memory = 0;
 	VALUE timeout = rb_iv_get(self, "@timeout");
 	if (timeout != Qnil) {
 	    eval_params.timeout = (useconds_t)NUM2LONG(timeout);
+	}
+
+	VALUE mem_softlimit = rb_iv_get(self, "@max_memory");
+	if (mem_softlimit != Qnil) {
+    	eval_params.max_memory = (long)NUM2LONG(mem_softlimit);
 	}
 
 	eval_result.message = NULL;
@@ -593,7 +625,14 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
     if (!eval_result.executed) {
 	VALUE ruby_exception = rb_iv_get(self, "@current_exception");
 	if (ruby_exception == Qnil) {
-	    ruby_exception = eval_result.terminated ? rb_eScriptTerminatedError : rb_eScriptRuntimeError;
+		bool mem_softlimit_reached = (bool)isolate->GetData(3);
+		// If we were terminated or have the memory softlimit flag set
+		if(eval_result.terminated || mem_softlimit_reached) {
+	    	ruby_exception = mem_softlimit_reached ? rb_eV8OutOfMemoryError : rb_eScriptTerminatedError;
+		} else {
+	    	ruby_exception = rb_eScriptRuntimeError;
+		}
+
 	    // exception report about what happened
 	    if(TYPE(backtrace) == T_STRING) {
 		rb_raise(ruby_exception, "%s", RSTRING_PTR(backtrace));
@@ -701,7 +740,7 @@ gvl_ruby_callback(void* data) {
     callback_data.failed = false;
 
     if ((bool)args->GetIsolate()->GetData(1) == true) {
-	args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Terminated execution during tansition from Ruby to JS"));
+	args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Terminated execution during transition from Ruby to JS"));
 	V8::TerminateExecution(args->GetIsolate());
 	return NULL;
     }
@@ -1035,6 +1074,7 @@ extern "C" {
 
 	VALUE rb_eEvalError = rb_define_class_under(rb_mMiniRacer, "EvalError", rb_eError);
 	rb_eScriptTerminatedError = rb_define_class_under(rb_mMiniRacer, "ScriptTerminatedError", rb_eEvalError);
+	rb_eV8OutOfMemoryError = rb_define_class_under(rb_mMiniRacer, "V8OutOfMemoryError", rb_eEvalError);
 	rb_eParseError = rb_define_class_under(rb_mMiniRacer, "ParseError", rb_eEvalError);
 	rb_eScriptRuntimeError = rb_define_class_under(rb_mMiniRacer, "RuntimeError", rb_eEvalError);
 

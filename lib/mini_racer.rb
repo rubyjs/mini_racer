@@ -14,6 +14,7 @@ module MiniRacer
   class EvalError < Error; end
   class ParseError < EvalError; end
   class ScriptTerminatedError < EvalError; end
+  class V8OutOfMemoryError < EvalError; end
 
   class FailedV8Conversion
     attr_reader :info
@@ -144,8 +145,10 @@ module MiniRacer
 
       @functions = {}
       @timeout = nil
+      @max_memory = nil
       @current_exception = nil
       @timeout = options[:timeout]
+      @max_memory = options[:max_memory]
       @isolate = options[:isolate] || Isolate.new(options[:snapshot])
       @disposed = false
 
