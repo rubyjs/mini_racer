@@ -68,6 +68,17 @@ context.eval 'while(true){}'
 # => exception is raised
 ```
 
+### Memory softlimit support
+
+Contexts can specify a memory softlimit for scripts
+
+```ruby
+# terminates script if heap usage exceeds 200mb after V8 garbage collection has run
+context = MiniRacer::Context.new(max_memory: 200000000)
+context.eval 'var a = new Array(10000); while(true) {a = a.concat(new Array(10000)); print("loop " + a.length);}'
+# => V8OutOfMemoryError is raised
+```
+
 ### Rich debugging with "filename" support
 
 ```ruby
