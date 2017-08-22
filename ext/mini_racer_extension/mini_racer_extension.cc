@@ -11,20 +11,6 @@
 
 using namespace v8;
 
-class ArrayBufferAllocator : public v8::ArrayBuffer::Allocator {
- public:
-  virtual void* Allocate(size_t length) {
-    void* data = AllocateUninitialized(length);
-    return data == NULL ? data : memset(data, 0, length);
-  }
-  virtual void* AllocateUninitialized(size_t length) {
-    return malloc(length);
-  }
-  virtual void Free(void* data, size_t) {
-     free(data);
-  }
-};
-
 typedef struct {
     const char* data;
     int raw_size;
@@ -32,7 +18,7 @@ typedef struct {
 
 typedef struct {
     Isolate* isolate;
-    ArrayBufferAllocator* allocator;
+    ArrayBuffer::Allocator* allocator;
     StartupData* startup_data;
     bool interrupted;
     bool disposed;
@@ -453,7 +439,7 @@ static VALUE rb_isolate_init_with_snapshot(VALUE self, VALUE snapshot) {
 
     init_v8();
 
-    isolate_info->allocator = new ArrayBufferAllocator();
+    isolate_info->allocator = v8::ArrayBuffer::Allocator::NewDefaultAllocator();
     isolate_info->interrupted = false;
     isolate_info->refs_count = 1;
 
