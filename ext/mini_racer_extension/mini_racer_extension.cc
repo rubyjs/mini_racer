@@ -53,7 +53,7 @@ typedef struct {
     Local<String>* filename;
     useconds_t timeout;
     EvalResult* result;
-    long max_memory;
+    size_t max_memory;
 } EvalParams;
 
 static VALUE rb_eScriptTerminatedError;
@@ -111,11 +111,11 @@ static void init_v8() {
 static void gc_callback(Isolate *isolate, GCType type, GCCallbackFlags flags) {
     if((bool)isolate->GetData(3)) return;
 
-    long softlimit = *(long*) isolate->GetData(2);
+    size_t softlimit = *(size_t*) isolate->GetData(2);
 
     HeapStatistics* stats = new HeapStatistics();
     isolate->GetHeapStatistics(stats);
-    long used = stats->used_heap_size();
+    size_t used = stats->used_heap_size();
 
     if(used > softlimit) {
         isolate->SetData(3, (void*)true);
@@ -575,7 +575,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
 
 	VALUE mem_softlimit = rb_iv_get(self, "@max_memory");
 	if (mem_softlimit != Qnil) {
-    	eval_params.max_memory = (long)NUM2LONG(mem_softlimit);
+    	eval_params.max_memory = (size_t)NUM2ULONG(mem_softlimit);
 	}
 
 	eval_result.message = NULL;
