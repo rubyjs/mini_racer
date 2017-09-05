@@ -686,4 +686,12 @@ raise FooError, "I like foos"
       context.dispose
     end
   end
+
+  def test_attached_recursion
+    context = MiniRacer::Context.new(timeout: 20)
+    context.attach("a", proc{|a| a})
+    context.attach("b", proc{|a| a})
+
+    context.eval('const obj = {get r(){ b() }}; a(obj);')
+  end
 end
