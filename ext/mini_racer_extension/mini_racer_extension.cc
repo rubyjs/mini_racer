@@ -56,6 +56,13 @@ typedef struct {
     long max_memory;
 } EvalParams;
 
+enum IsolateFlags {
+    IN_GVL,
+    DO_TERMINATE,
+    MEM_SOFTLIMIT_VALUE,
+    MEM_SOFTLIMIT_REACHED,
+};
+
 static VALUE rb_eScriptTerminatedError;
 static VALUE rb_eV8OutOfMemoryError;
 static VALUE rb_eParseError;
@@ -109,16 +116,16 @@ static void init_v8() {
 }
 
 static void gc_callback(Isolate *isolate, GCType type, GCCallbackFlags flags) {
-    if((bool)isolate->GetData(3)) return;
+    if((bool)isolate->GetData(MEM_SOFTLIMIT_REACHED)) return;
 
-    long softlimit = *(long*) isolate->GetData(2);
+    long softlimit = *(long*) isolate->GetData(MEM_SOFTLIMIT_VALUE);
 
     HeapStatistics* stats = new HeapStatistics();
     isolate->GetHeapStatistics(stats);
     long used = stats->used_heap_size();
 
     if(used > softlimit) {
-        isolate->SetData(3, (void*)true);
+        isolate->SetData(MEM_SOFTLIMIT_REACHED, (void*)true);
         V8::TerminateExecution(isolate);
     }
 }
@@ -138,13 +145,13 @@ nogvl_context_eval(void* arg) {
     v8::ScriptOrigin *origin = NULL;
 
     // in gvl flag
-    isolate->SetData(0, (void*)false);
+    isolate->SetData(IN_GVL, (void*)false);
     // terminate ASAP
-    isolate->SetData(1, (void*)false);
+    isolate->SetData(DO_TERMINATE, (void*)false);
     // Memory softlimit
-    isolate->SetData(2, (void*)false);
+    isolate->SetData(MEM_SOFTLIMIT_VALUE, (void*)false);
     // Memory softlimit hit flag
-    isolate->SetData(3, (void*)false);
+    isolate->SetData(MEM_SOFTLIMIT_REACHED, (void*)false);
 
     MaybeLocal<Script> parsed_script;
 
@@ -170,7 +177,7 @@ nogvl_context_eval(void* arg) {
     } else {
 
     if(eval_params->max_memory > 0) {
-        isolate->SetData(2, &eval_params->max_memory);
+        isolate->SetData(MEM_SOFTLIMIT_VALUE, &eval_params->max_memory);
         isolate->AddGCEpilogueCallback(gc_callback);
     }
 
@@ -241,7 +248,7 @@ nogvl_context_eval(void* arg) {
 	}
     }
 
-    isolate->SetData(0, (void*)true);
+    isolate->SetData(IN_GVL, (void*)true);
 
 
     return NULL;
@@ -611,7 +618,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
     if (!eval_result.executed) {
 	VALUE ruby_exception = rb_iv_get(self, "@current_exception");
 	if (ruby_exception == Qnil) {
-		bool mem_softlimit_reached = (bool)isolate->GetData(3);
+		bool mem_softlimit_reached = (bool)isolate->GetData(MEM_SOFTLIMIT_REACHED);
 		// If we were terminated or have the memory softlimit flag set
 		if(eval_result.terminated || mem_softlimit_reached) {
 	    	ruby_exception = mem_softlimit_reached ? rb_eV8OutOfMemoryError : rb_eScriptTerminatedError;
@@ -725,7 +732,7 @@ gvl_ruby_callback(void* data) {
     callback_data.args = ruby_args;
     callback_data.failed = false;
 
-    if ((bool)args->GetIsolate()->GetData(1) == true) {
+    if ((bool)args->GetIsolate()->GetData(DO_TERMINATE) == true) {
 	args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Terminated execution during transition from Ruby to JS"));
 	V8::TerminateExecution(args->GetIsolate());
 	return NULL;
@@ -749,7 +756,7 @@ gvl_ruby_callback(void* data) {
 	xfree(ruby_args);
     }
 
-    if ((bool)args->GetIsolate()->GetData(1) == true) {
+    if ((bool)args->GetIsolate()->GetData(DO_TERMINATE) == true) {
       Isolate* isolate = args->GetIsolate();
       V8::TerminateExecution(isolate);
     }
@@ -759,12 +766,14 @@ gvl_ruby_callback(void* data) {
 
 static void ruby_callback(const FunctionCallbackInfo<Value>& args) {
 
-    bool has_gvl = (bool)args.GetIsolate()->GetData(0);
+    bool has_gvl = (bool)args.GetIsolate()->GetData(IN_GVL);
 
     if(has_gvl) {
 	gvl_ruby_callback((void*)&args);
     } else {
+    args.GetIsolate()->SetData(IN_GVL, (void*)true);
 	rb_thread_call_with_gvl(gvl_ruby_callback, (void*)(&args));
+    args.GetIsolate()->SetData(IN_GVL, (void*)false);
     }
 }
 
@@ -1022,7 +1031,7 @@ rb_context_stop(VALUE self) {
     Isolate* isolate = context_info->isolate_info->isolate;
 
     // flag for termination
-    isolate->SetData(1, (void*)true);
+    isolate->SetData(DO_TERMINATE, (void*)true);
 
     V8::TerminateExecution(isolate);
     rb_funcall(self, rb_intern("stop_attached"), 0);
