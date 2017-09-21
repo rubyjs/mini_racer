@@ -29,8 +29,8 @@ class MiniRacerTest < Minitest::Test
     assert_equal 2.1, context.eval('2.1')
     assert_equal true, context.eval('true')
     assert_equal false, context.eval('false')
-    assert_equal nil, context.eval('null')
-    assert_equal nil, context.eval('undefined')
+    assert_nil context.eval('null')
+    assert_nil context.eval('undefined')
   end
 
   def test_array
