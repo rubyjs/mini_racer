@@ -148,7 +148,9 @@ module MiniRacer
       @max_memory = nil
       @current_exception = nil
       @timeout = options[:timeout]
-      @max_memory = options[:max_memory]
+      if options[:max_memory].is_a?(Numeric) && options[:max_memory] > 0
+        @max_memory = options[:max_memory]
+      end
       @isolate = options[:isolate] || Isolate.new(options[:snapshot])
       @disposed = false
 
