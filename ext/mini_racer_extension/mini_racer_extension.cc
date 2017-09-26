@@ -118,7 +118,11 @@ static void init_v8() {
 static void gc_callback(Isolate *isolate, GCType type, GCCallbackFlags flags) {
     if((bool)isolate->GetData(MEM_SOFTLIMIT_REACHED)) return;
 
+<<<<<<< HEAD
     size_t softlimit = *(size_t*) isolate->GetData(MEM_SOFTLIMIT_VALUE);
+=======
+    size_t softlimit = *(size_t*) isolate->GetData(2);
+>>>>>>> 55dea6ddaea9793d327724fb90d4de190c246bb7
 
     HeapStatistics* stats = new HeapStatistics();
     isolate->GetHeapStatistics(stats);
