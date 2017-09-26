@@ -283,11 +283,15 @@ raise FooError, "I like foos"
     assert_equal("Undefined Conversion", context.eval("test()"))
   end
 
-  def test_fatal_alloc
-    context = MiniRacer::Context.new(max_memory: 200000000)
-    context.attach("print", proc{|a| a})
+  def test_max_memory
+    context = MiniRacer::Context.new(max_memory: 200_000_000)
 
-    assert_raises(MiniRacer::V8OutOfMemoryError) { context.eval('var a = new Array(10000); while(true) {a = a.concat(new Array(10000)); print("loop " + a.length);}') }
+    assert_raises(MiniRacer::V8OutOfMemoryError) { context.eval('let s = 1000; var a = new Array(s); a.fill(0); while(true) {s *= 1.1; let n = new Array(Math.floor(s)); n.fill(0); a = a.concat(n); };') }
+  end
+
+  def test_negative_max_memory
+    context = MiniRacer::Context.new(max_memory: -200_000_000)
+    assert_nil(context.instance_variable_get(:@max_memory))
   end
 
   module Echo
