@@ -582,7 +582,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
 
 	VALUE mem_softlimit = rb_iv_get(self, "@max_memory");
 	if (mem_softlimit != Qnil) {
-    	eval_params.max_memory = (size_t)NUM2ULONG(mem_softlimit);
+        eval_params.max_memory = (size_t)NUM2ULONG(mem_softlimit);
 	}
 
 	eval_result.message = NULL;
