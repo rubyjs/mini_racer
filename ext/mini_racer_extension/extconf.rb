@@ -9,6 +9,7 @@ $CPPFLAGS += " -rdynamic" unless $CPPFLAGS.split.include? "-rdynamic"
 $CPPFLAGS += " -fPIC" unless $CPPFLAGS.split.include? "-rdynamic" or RUBY_PLATFORM =~ /darwin/
 $CPPFLAGS += " -std=c++0x"
 $CPPFLAGS += " -fpermissive"
+$CPPFLAGS += " -Wno-reserved-user-defined-literal" if RUBY_PLATFORM =~ /darwin/
 
 $LDFLAGS.insert 0, " -stdlib=libstdc++ " if RUBY_PLATFORM =~ /darwin/
 
