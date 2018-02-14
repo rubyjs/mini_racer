@@ -9,6 +9,9 @@ matrix:
   include:
     - rvm: 2.4.0
       os: osx
+      osx_image: xcode9.2
+    - rvm: 2.4.0
+      os: osx
       osx_image: xcode8.2
     - rvm: 2.4.0
       os: osx
