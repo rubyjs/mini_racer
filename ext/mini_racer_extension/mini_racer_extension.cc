@@ -1079,6 +1079,93 @@ rb_context_dispose(VALUE self) {
     return Qnil;
 }
 
+#if 0
+static VALUE rb_function_get(VALUE self, VALUE function_name) {
+    ContextInfo* context_info;
+    Data_Get_Struct(self, ContextInfo, context_info);
+
+    if (TYPE(function_name) != T_STRING) {
+        rb_raise(rb_eTypeError, "function_name should be a String");
+    }
+
+    char *fname = RSTRING_PTR(function_name);
+    if (!fname) {
+        return Qnil;
+    }
+
+    Isolate* isolate = context_info->isolate_info->isolate;
+
+    Locker lock(isolate);
+    Isolate::Scope isolate_scope(isolate);
+    HandleScope handle_scope(isolate);
+    TryCatch trycatch(isolate);
+    Local<Context> context = context_info->context->Get(isolate);
+    Context::Scope context_scope(context);
+
+    Local<Function> fun = v8::Local<v8::Function>::Cast(context->Global()->Get(
+            String::NewFromUtf8(isolate, fname)));
+    
+    return convert_v8_to_ruby(isolate, res);
+}
+#endif 
+
+static VALUE
+// rb_function_call(VALUE self, VALUE function_name, VALUE *args) {
+rb_function_call(int argc, VALUE *argv, VALUE self) {
+
+    ContextInfo* context_info;
+    Data_Get_Struct(self, ContextInfo, context_info);
+
+    if (argc < 1) {
+        rb_raise(rb_eArgError, "need at least one argument %d", argc);
+    }
+
+    VALUE function_name = argv[0];
+    if (TYPE(function_name) != T_STRING) {
+        rb_raise(rb_eTypeError, "first arg should be a String");
+    }
+
+    char *fname = RSTRING_PTR(function_name);
+    if (!fname) {
+        return Qnil;
+    }
+
+    Isolate* isolate = context_info->isolate_info->isolate;
+
+    Locker lock(isolate);
+    Isolate::Scope isolate_scope(isolate);
+    HandleScope handle_scope(isolate);
+    TryCatch trycatch(isolate);
+    Local<Context> context = context_info->context->Get(isolate);
+    Context::Scope context_scope(context);
+
+    // examples of such usage can be found in 
+    // https://github.com/v8/v8/blob/36b32aa28db5e993312f4588d60aad5c8330c8a5/test/cctest/test-api.cc#L15711
+
+    Local<Function> fun = v8::Local<v8::Function>::Cast(context->Global()->Get(
+            String::NewFromUtf8(isolate, fname)));
+    
+    int fun_argc = argc - 1;
+
+    v8::Local<Value> *fun_args = NULL;
+
+    if (fun_argc > 0) {
+        fun_args = (v8::Local<Value> *) malloc(sizeof(void *) * fun_argc);
+        if (!fun_args) {
+            return Qnil;
+        }
+        for(int i=0; i < fun_argc; i++) {
+            fun_args[i] = convert_ruby_to_v8(isolate, argv[i+1]);
+        }
+    }
+
+    Local<v8::Value> res = fun->Call(context, context->Global(), argc - 1, fun_args).ToLocalChecked();
+
+    free(fun_args);
+        
+    return convert_v8_to_ruby(isolate, res);
+}
+
 extern "C" {
 
     void Init_mini_racer_extension ( void )
@@ -1108,6 +1195,7 @@ extern "C" {
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
 	rb_define_method(rb_cContext, "dispose_unsafe", (VALUE(*)(...))&rb_context_dispose, 0);
 	rb_define_method(rb_cContext, "heap_stats", (VALUE(*)(...))&rb_heap_stats, 0);
+	rb_define_method(rb_cContext, "function_call", (VALUE(*)(...))&rb_function_call, -1);
 
 	rb_define_alloc_func(rb_cContext, allocate);
 	rb_define_alloc_func(rb_cSnapshot, allocate_snapshot);
