@@ -1096,9 +1096,16 @@ nogvl_function_call(void *args) {
         return NULL;
     }
     Isolate* isolate = call->context_info->isolate_info->isolate;
+
+    // in gvl flag
+    isolate->SetData(IN_GVL, (void*)false);
+    // terminate ASAP
+    isolate->SetData(DO_TERMINATE, (void*)false);
+
     Isolate::Scope isolate_scope(isolate);
     EscapableHandleScope handle_scope(isolate);
     TryCatch trycatch(isolate);
+
     Local<Context> context = call->context_info->context->Get(isolate);
     Context::Scope context_scope(context);
 
@@ -1107,6 +1114,8 @@ nogvl_function_call(void *args) {
     Local<v8::Value> res = fun->Call(context, context->Global(), call->argc, call->argv).ToLocalChecked();
 
     call->result = handle_scope.Escape(res);
+
+    isolate->SetData(IN_GVL, (void*)true);
 
     return NULL;
 }
