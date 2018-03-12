@@ -81,6 +81,11 @@ static std::mutex platform_lock;
 static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
     bool platform_already_initialized = false;
 
+    if(TYPE(flag_as_str) != T_STRING) {
+        rb_raise(rb_eArgError, "wrong type argument %"PRIsVALUE" (should be a string)",
+                rb_obj_class(flag_as_str));
+    }
+
     platform_lock.lock();
 
     if (current_platform == NULL) {
@@ -431,6 +436,11 @@ static VALUE rb_snapshot_load(VALUE self, VALUE str) {
     SnapshotInfo* snapshot_info;
     Data_Get_Struct(self, SnapshotInfo, snapshot_info);
 
+    if(TYPE(str) != T_STRING) {
+        rb_raise(rb_eArgError, "wrong type argument %"PRIsVALUE" (should be a string)",
+                rb_obj_class(str));
+    }
+
     init_v8();
 
     StartupData startup_data = V8::CreateSnapshotDataBlob(RSTRING_PTR(str));
@@ -448,6 +458,11 @@ static VALUE rb_snapshot_load(VALUE self, VALUE str) {
 static VALUE rb_snapshot_warmup(VALUE self, VALUE str) {
     SnapshotInfo* snapshot_info;
     Data_Get_Struct(self, SnapshotInfo, snapshot_info);
+
+    if(TYPE(str) != T_STRING) {
+        rb_raise(rb_eArgError, "wrong type argument %"PRIsVALUE" (should be a string)",
+                rb_obj_class(str));
+    }
 
     init_v8();
 
@@ -551,6 +566,15 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
 
     Data_Get_Struct(self, ContextInfo, context_info);
     Isolate* isolate = context_info->isolate_info->isolate;
+
+    if(TYPE(str) != T_STRING) {
+        rb_raise(rb_eArgError, "wrong type argument %"PRIsVALUE" (should be a string)",
+                rb_obj_class(str));
+    }
+    if(filename != Qnil && TYPE(filename) != T_STRING) {
+        rb_raise(rb_eArgError, "wrong type argument %"PRIsVALUE" (should be nil or a string)",
+                rb_obj_class(filename));
+    }
 
     {
 	Locker lock(isolate);
