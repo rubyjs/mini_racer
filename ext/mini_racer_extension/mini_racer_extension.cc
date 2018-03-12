@@ -60,6 +60,7 @@ typedef struct {
     ContextInfo *context_info;
     char *function_name;
     int argc;
+    bool error;
     Local<Function> fun;
     Local<Value> *argv;
     Local<Value> result;
@@ -1111,9 +1112,14 @@ nogvl_function_call(void *args) {
 
     Local<Function> fun = call->fun;
 
-    Local<v8::Value> res = fun->Call(context, context->Global(), call->argc, call->argv).ToLocalChecked();
-
-    call->result = handle_scope.Escape(res);
+    MaybeLocal<v8::Value> res = fun->Call(context, context->Global(), call->argc, call->argv);
+    if (res.IsEmpty()) {
+        // A better error handling should be added, factoring out exception management
+        // code from nogvl_context_eval
+        call->error = true;
+    } else {
+        call->result = handle_scope.Escape(res.ToLocalChecked());
+    }
 
     isolate->SetData(IN_GVL, (void*)true);
 
@@ -1148,9 +1154,11 @@ rb_function_call(int argc, VALUE *argv, VALUE self) {
 
     FunctionCall call;
 
+    call.error = false;
     call.function_name = fname;
     call.context_info = context_info;
     call.argc = argc - 1;
+    call.argv = NULL;
     VALUE *call_argv = NULL;
     if (call.argc > 0) {
         // skip first argument which is the function name
@@ -1188,8 +1196,13 @@ rb_function_call(int argc, VALUE *argv, VALUE self) {
 
         free(call.argv);
 
-        // TODO - check for call errors
-        res = convert_v8_to_ruby(isolate, call.result);
+        if (!call.error) {
+            res = convert_v8_to_ruby(isolate, call.result);
+        }
+    }
+    if (call.error) {
+        // TODO - better handling of exceptions
+        rb_raise(rb_eScriptRuntimeError, "Error calling %s", call.function_name);
     }
     return res;
 }

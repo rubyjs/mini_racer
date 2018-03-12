@@ -37,6 +37,26 @@ class MiniRacerFunctionTest < Minitest::Test
         end
     end
 
+    def test_non_existing_function
+        context = MiniRacer::Context.new
+        context.eval("function f(x) { return 'I need ' + x + ' galettes' }")
+
+        # f is defined, let's call g
+        assert_raises(MiniRacer::RuntimeError) do
+            context.function_call('g')
+        end
+    end
+
+    def test_throwing_function
+        context = MiniRacer::Context.new
+        context.eval("function f(x) { throw new Error() }")
+
+        # f is defined, let's call g
+        assert_raises(MiniRacer::RuntimeError) do
+            context.function_call('f', 1)
+        end
+    end
+
     def test_args_types
         context = MiniRacer::Context.new
         context.eval("function f(x, y) { return 'I need ' + x + ' ' + y }")
