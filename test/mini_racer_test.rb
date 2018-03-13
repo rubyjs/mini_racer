@@ -33,6 +33,13 @@ class MiniRacerTest < Minitest::Test
     assert_nil context.eval('undefined')
   end
 
+  def test_compile_nil_context
+    context = MiniRacer::Context.new
+    assert_raises(ArgumentError) do
+        assert_equal 2, context.eval(nil)
+    end
+  end
+
   def test_array
     context = MiniRacer::Context.new
     assert_equal [1,"two"], context.eval('[1,"two"]')
@@ -395,6 +402,12 @@ raise FooError, "I like foos"
   def test_invalid_warmup_sources_throw_an_exception
     assert_raises(MiniRacer::SnapshotError) do
       MiniRacer::Snapshot.new('Math.sin = 1;').warmup!('var a = Math.sin(1);')
+    end
+  end
+
+  def test_invalid_warmup_sources_throw_an_exception
+    assert_raises(ArgumentError) do
+      MiniRacer::Snapshot.new('function f() { return 1 }').warmup!([])
     end
   end
 
