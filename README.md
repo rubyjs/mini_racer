@@ -283,6 +283,22 @@ context.eval("a = 2")
 # nothing works on the context from now on, its a shell waiting to be disposed
 ```
 
+### Function call
+
+This calls the function passed as first argument:
+
+```ruby
+context = MiniRacer::Context.new
+context.eval('function hello(name) { return "Hello, " + name + "!" }')
+context.call('hello', 'George')
+# "Hello, George!"
+```
+
+Performance is slightly better than running `eval('hello("George")')` since:
+
+ - compilation of eval'd string is avoided
+ - function arguments don't need to be converted to JSON
+
 ## Performance
 
 The `bench` folder contains benchmark.

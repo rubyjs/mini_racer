@@ -56,6 +56,16 @@ typedef struct {
     size_t max_memory;
 } EvalParams;
 
+typedef struct {
+    ContextInfo *context_info;
+    char *function_name;
+    int argc;
+    bool error;
+    Local<Function> fun;
+    Local<Value> *argv;
+    Local<Value> result;
+} FunctionCall;
+
 enum IsolateFlags {
     IN_GVL,
     DO_TERMINATE,
@@ -1079,6 +1089,122 @@ rb_context_dispose(VALUE self) {
     return Qnil;
 }
 
+static void*
+nogvl_context_call(void *args) {
+
+    FunctionCall *call = (FunctionCall *) args;
+    if (!call) {
+        return NULL;
+    }
+    Isolate* isolate = call->context_info->isolate_info->isolate;
+
+    // in gvl flag
+    isolate->SetData(IN_GVL, (void*)false);
+    // terminate ASAP
+    isolate->SetData(DO_TERMINATE, (void*)false);
+
+    Isolate::Scope isolate_scope(isolate);
+    EscapableHandleScope handle_scope(isolate);
+    TryCatch trycatch(isolate);
+
+    Local<Context> context = call->context_info->context->Get(isolate);
+    Context::Scope context_scope(context);
+
+    Local<Function> fun = call->fun;
+
+    MaybeLocal<v8::Value> res = fun->Call(context, context->Global(), call->argc, call->argv);
+    if (res.IsEmpty()) {
+        // A better error handling should be added, factoring out exception management
+        // code from nogvl_context_eval
+        call->error = true;
+    } else {
+        call->result = handle_scope.Escape(res.ToLocalChecked());
+    }
+
+    isolate->SetData(IN_GVL, (void*)true);
+
+    return NULL;
+}
+
+static void unblock_function(void *args) {
+    FunctionCall *call = (FunctionCall *) args;
+    call->context_info->isolate_info->interrupted = true;
+}
+
+static VALUE
+rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
+
+    ContextInfo* context_info;
+    FunctionCall call;
+    VALUE res = Qnil;
+    VALUE *call_argv = NULL;
+
+    Data_Get_Struct(self, ContextInfo, context_info);
+    Isolate* isolate = context_info->isolate_info->isolate;
+
+    if (argc < 1) {
+        rb_raise(rb_eArgError, "need at least one argument %d", argc);
+    }
+
+    VALUE function_name = argv[0];
+    if (TYPE(function_name) != T_STRING) {
+        rb_raise(rb_eTypeError, "first argument should be a String");
+    }
+
+    char *fname = RSTRING_PTR(function_name);
+    if (!fname) {
+        return Qnil;
+    }
+
+    call.context_info = context_info;
+    call.error = false;
+    call.function_name = fname;
+    call.argc = argc - 1;
+    call.argv = NULL;
+    if (call.argc > 0) {
+        // skip first argument which is the function name
+        call_argv = argv + 1;
+    }
+
+    {
+        Locker lock(isolate);
+        Isolate::Scope isolate_scope(isolate);
+        HandleScope handle_scope(isolate);
+
+        Local<Context> context = context_info->context->Get(isolate);
+        Context::Scope context_scope(context);
+
+        // examples of such usage can be found in
+        // https://github.com/v8/v8/blob/36b32aa28db5e993312f4588d60aad5c8330c8a5/test/cctest/test-api.cc#L15711
+        Local<v8::Function> fun = Local<v8::Function>::Cast(context->Global()->Get(
+                        String::NewFromUtf8(isolate, call.function_name)));
+        call.fun = fun;
+        int fun_argc = call.argc;
+
+        if (fun_argc > 0) {
+            call.argv = (v8::Local<Value> *) malloc(sizeof(void *) * fun_argc);
+            if (!call.argv) {
+                return Qnil;
+            }
+            for(int i=0; i < fun_argc; i++) {
+                call.argv[i] = convert_ruby_to_v8(isolate, call_argv[i]);
+            }
+        }
+
+        rb_thread_call_without_gvl(nogvl_context_call, &call, unblock_function, &call);
+        free(call.argv);
+
+        if (!call.error) {
+            res = convert_v8_to_ruby(isolate, call.result);
+        }
+    }
+    if (call.error) {
+        // TODO - better handling of exceptions
+        rb_raise(rb_eScriptRuntimeError, "Error calling %s", call.function_name);
+    }
+    return res;
+}
+
 extern "C" {
 
     void Init_mini_racer_extension ( void )
@@ -1108,6 +1234,8 @@ extern "C" {
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
 	rb_define_method(rb_cContext, "dispose_unsafe", (VALUE(*)(...))&rb_context_dispose, 0);
 	rb_define_method(rb_cContext, "heap_stats", (VALUE(*)(...))&rb_heap_stats, 0);
+	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 2);
+	rb_define_private_method(rb_cContext, "call_unsafe", (VALUE(*)(...))&rb_context_call_unsafe, -1);
 
 	rb_define_alloc_func(rb_cContext, allocate);
 	rb_define_alloc_func(rb_cSnapshot, allocate_snapshot);
