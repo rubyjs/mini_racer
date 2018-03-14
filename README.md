@@ -290,7 +290,7 @@ This calls the function passed as first argument:
 ```ruby
 context = MiniRacer::Context.new
 context.eval('function hello(name) { return "Hello, " + name + "!" }')
-context.function_call('hello', 'George')
+context.call('hello', 'George')
 # "Hello, George!"
 ```
 

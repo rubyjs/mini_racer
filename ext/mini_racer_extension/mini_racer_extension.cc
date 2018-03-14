@@ -1090,7 +1090,7 @@ rb_context_dispose(VALUE self) {
 }
 
 static void*
-nogvl_context_function_call(void *args) {
+nogvl_context_call(void *args) {
 
     FunctionCall *call = (FunctionCall *) args;
     if (!call) {
@@ -1132,7 +1132,7 @@ static void unblock_function(void *args) {
 }
 
 static VALUE
-rb_context_function_call_unsafe(int argc, VALUE *argv, VALUE self) {
+rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
 
     ContextInfo* context_info;
     FunctionCall call;
@@ -1191,7 +1191,7 @@ rb_context_function_call_unsafe(int argc, VALUE *argv, VALUE self) {
             }
         }
 
-        rb_thread_call_without_gvl(nogvl_context_function_call, &call, unblock_function, &call);
+        rb_thread_call_without_gvl(nogvl_context_call, &call, unblock_function, &call);
         free(call.argv);
 
         if (!call.error) {
@@ -1235,7 +1235,7 @@ extern "C" {
 	rb_define_method(rb_cContext, "dispose_unsafe", (VALUE(*)(...))&rb_context_dispose, 0);
 	rb_define_method(rb_cContext, "heap_stats", (VALUE(*)(...))&rb_heap_stats, 0);
 	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 2);
-	rb_define_private_method(rb_cContext, "function_call_unsafe", (VALUE(*)(...))&rb_context_function_call_unsafe, -1);
+	rb_define_private_method(rb_cContext, "call_unsafe", (VALUE(*)(...))&rb_context_call_unsafe, -1);
 
 	rb_define_alloc_func(rb_cContext, allocate);
 	rb_define_alloc_func(rb_cSnapshot, allocate_snapshot);

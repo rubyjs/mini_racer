@@ -9,11 +9,11 @@ class MiniRacerFunctionTest < Minitest::Test
         assert_equal context.eval('f(10)'), "I need 10 foos"
 
         assert_raises(ArgumentError) do
-            context.function_call
+            context.call
         end
 
         count = 4
-        res = context.function_call('f', count)
+        res = context.call('f', count)
         assert_equal "I need #{count} foos", res
     end
 
@@ -23,7 +23,7 @@ class MiniRacerFunctionTest < Minitest::Test
 
         # f is defined, let's call g
         assert_raises(MiniRacer::RuntimeError) do
-            context.function_call('g')
+            context.call('g')
         end
     end
 
@@ -33,7 +33,7 @@ class MiniRacerFunctionTest < Minitest::Test
 
         # f should throw
         assert_raises(MiniRacer::RuntimeError) do
-            context.function_call('f', 1)
+            context.call('f', 1)
         end
     end
 
@@ -43,7 +43,7 @@ class MiniRacerFunctionTest < Minitest::Test
 
         # f is defined, let's call g
         assert_raises(MiniRacer::RuntimeError) do
-            context.function_call('g')
+            context.call('g')
         end
     end
 
@@ -53,7 +53,7 @@ class MiniRacerFunctionTest < Minitest::Test
 
         # f is defined, let's call g
         assert_raises(MiniRacer::RuntimeError) do
-            context.function_call('f', 1)
+            context.call('f', 1)
         end
     end
 
@@ -61,13 +61,13 @@ class MiniRacerFunctionTest < Minitest::Test
         context = MiniRacer::Context.new
         context.eval("function f(x, y) { return 'I need ' + x + ' ' + y }")
 
-        res = context.function_call('f', 3, "bars")
+        res = context.call('f', 3, "bars")
         assert_equal "I need 3 bars", res
 
-        res = context.function_call('f', {a: 1}, "bars")
+        res = context.call('f', {a: 1}, "bars")
         assert_equal "I need [object Object] bars", res
 
-        res = context.function_call('f', [1,2,3], "bars")
+        res = context.call('f', [1,2,3], "bars")
         assert_equal "I need 1,2,3 bars", res
     end
 
@@ -76,7 +76,7 @@ class MiniRacerFunctionTest < Minitest::Test
         context.eval("function f(x, y) { return { vx: x, vy: y, array: [x, y] } }")
 
         h = { "vx" => 3, "vy" => "bars", "array" => [3, "bars"] }
-        res = context.function_call('f', 3, "bars")
+        res = context.call('f', 3, "bars")
         assert_equal h, res
     end
 
@@ -91,7 +91,7 @@ class MiniRacerFunctionTest < Minitest::Test
         thread_count.times do
             threads << Thread.new do
                 10.times do |i|
-                    context.function_call("f", i)
+                    context.call("f", i)
                 end
             end
         end
