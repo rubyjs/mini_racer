@@ -186,6 +186,19 @@ module MiniRacer
       @eval_thread = nil
     end
 
+    def function_call(function_name, *arguments)
+      raise(ContextDisposedError, 'attempted to call function_call on a disposed context!') if @disposed
+
+      @eval_thread = Thread.current
+      isolate.with_lock do
+        timeout do
+          function_call_unsafe(function_name, *arguments)
+        end
+      end
+    ensure
+      @eval_thread = nil
+    end
+
     def dispose
       if !@disposed
         isolate.with_lock do

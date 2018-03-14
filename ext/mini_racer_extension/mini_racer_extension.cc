@@ -1090,7 +1090,7 @@ rb_context_dispose(VALUE self) {
 }
 
 static void*
-nogvl_function_call(void *args) {
+nogvl_context_function_call(void *args) {
 
     FunctionCall *call = (FunctionCall *) args;
     if (!call) {
@@ -1132,11 +1132,15 @@ static void unblock_function(void *args) {
 }
 
 static VALUE
-rb_function_call(int argc, VALUE *argv, VALUE self) {
+rb_context_function_call_unsafe(int argc, VALUE *argv, VALUE self) {
 
     ContextInfo* context_info;
+    FunctionCall call;
+    VALUE res = Qnil;
+    VALUE *call_argv = NULL;
+
     Data_Get_Struct(self, ContextInfo, context_info);
-    VALUE res;
+    Isolate* isolate = context_info->isolate_info->isolate;
 
     if (argc < 1) {
         rb_raise(rb_eArgError, "need at least one argument %d", argc);
@@ -1144,7 +1148,7 @@ rb_function_call(int argc, VALUE *argv, VALUE self) {
 
     VALUE function_name = argv[0];
     if (TYPE(function_name) != T_STRING) {
-        rb_raise(rb_eTypeError, "first arg should be a String");
+        rb_raise(rb_eTypeError, "first argument should be a String");
     }
 
     char *fname = RSTRING_PTR(function_name);
@@ -1152,31 +1156,26 @@ rb_function_call(int argc, VALUE *argv, VALUE self) {
         return Qnil;
     }
 
-    FunctionCall call;
-
+    call.context_info = context_info;
     call.error = false;
     call.function_name = fname;
-    call.context_info = context_info;
     call.argc = argc - 1;
     call.argv = NULL;
-    VALUE *call_argv = NULL;
     if (call.argc > 0) {
         // skip first argument which is the function name
         call_argv = argv + 1;
     }
 
-    Isolate* isolate = context_info->isolate_info->isolate;
     {
         Locker lock(isolate);
         Isolate::Scope isolate_scope(isolate);
         HandleScope handle_scope(isolate);
-        TryCatch trycatch(isolate);
+
         Local<Context> context = context_info->context->Get(isolate);
         Context::Scope context_scope(context);
 
         // examples of such usage can be found in
         // https://github.com/v8/v8/blob/36b32aa28db5e993312f4588d60aad5c8330c8a5/test/cctest/test-api.cc#L15711
-
         Local<v8::Function> fun = Local<v8::Function>::Cast(context->Global()->Get(
                         String::NewFromUtf8(isolate, call.function_name)));
         call.fun = fun;
@@ -1192,8 +1191,7 @@ rb_function_call(int argc, VALUE *argv, VALUE self) {
             }
         }
 
-        rb_thread_call_without_gvl(nogvl_function_call, &call, unblock_function, &call);
-
+        rb_thread_call_without_gvl(nogvl_context_function_call, &call, unblock_function, &call);
         free(call.argv);
 
         if (!call.error) {
@@ -1236,7 +1234,8 @@ extern "C" {
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
 	rb_define_method(rb_cContext, "dispose_unsafe", (VALUE(*)(...))&rb_context_dispose, 0);
 	rb_define_method(rb_cContext, "heap_stats", (VALUE(*)(...))&rb_heap_stats, 0);
-	rb_define_method(rb_cContext, "function_call", (VALUE(*)(...))&rb_function_call, -1);
+	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 2);
+	rb_define_private_method(rb_cContext, "function_call_unsafe", (VALUE(*)(...))&rb_context_function_call_unsafe, -1);
 
 	rb_define_alloc_func(rb_cContext, allocate);
 	rb_define_alloc_func(rb_cSnapshot, allocate_snapshot);
