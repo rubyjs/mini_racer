@@ -33,6 +33,13 @@ class MiniRacerTest < Minitest::Test
     assert_nil context.eval('undefined')
   end
 
+  def test_compile_nil_context
+    context = MiniRacer::Context.new
+    assert_raises(ArgumentError) do
+        assert_equal 2, context.eval(nil)
+    end
+  end
+
   def test_array
     context = MiniRacer::Context.new
     assert_equal [1,"two"], context.eval('[1,"two"]')
@@ -283,11 +290,15 @@ raise FooError, "I like foos"
     assert_equal("Undefined Conversion", context.eval("test()"))
   end
 
-  def test_fatal_alloc
-    context = MiniRacer::Context.new(max_memory: 200000000)
-    context.attach("print", proc{|a| a})
+  def test_max_memory
+    context = MiniRacer::Context.new(max_memory: 200_000_000)
 
-    assert_raises(MiniRacer::V8OutOfMemoryError) { context.eval('var a = new Array(10000); while(true) {a = a.concat(new Array(10000)); print("loop " + a.length);}') }
+    assert_raises(MiniRacer::V8OutOfMemoryError) { context.eval('let s = 1000; var a = new Array(s); a.fill(0); while(true) {s *= 1.1; let n = new Array(Math.floor(s)); n.fill(0); a = a.concat(n); };') }
+  end
+
+  def test_negative_max_memory
+    context = MiniRacer::Context.new(max_memory: -200_000_000)
+    assert_nil(context.instance_variable_get(:@max_memory))
   end
 
   module Echo
@@ -391,6 +402,12 @@ raise FooError, "I like foos"
   def test_invalid_warmup_sources_throw_an_exception
     assert_raises(MiniRacer::SnapshotError) do
       MiniRacer::Snapshot.new('Math.sin = 1;').warmup!('var a = Math.sin(1);')
+    end
+  end
+
+  def test_invalid_warmup_sources_throw_an_exception
+    assert_raises(ArgumentError) do
+      MiniRacer::Snapshot.new('function f() { return 1 }').warmup!([])
     end
   end
 

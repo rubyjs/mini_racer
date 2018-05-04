@@ -148,7 +148,9 @@ module MiniRacer
       @max_memory = nil
       @current_exception = nil
       @timeout = options[:timeout]
-      @max_memory = options[:max_memory]
+      if options[:max_memory].is_a?(Numeric) && options[:max_memory] > 0
+        @max_memory = options[:max_memory]
+      end
       @isolate = options[:isolate] || Isolate.new(options[:snapshot])
       @disposed = false
 
@@ -178,6 +180,19 @@ module MiniRacer
         @current_exception = nil
         timeout do
           eval_unsafe(str, filename)
+        end
+      end
+    ensure
+      @eval_thread = nil
+    end
+
+    def call(function_name, *arguments)
+      raise(ContextDisposedError, 'attempted to call function on a disposed context!') if @disposed
+
+      @eval_thread = Thread.current
+      isolate.with_lock do
+        timeout do
+          call_unsafe(function_name, *arguments)
         end
       end
     ensure
