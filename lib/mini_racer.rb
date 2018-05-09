@@ -59,14 +59,8 @@ module MiniRacer
         raise ArgumentError, "snapshot must be a Snapshot object, passed a #{snapshot.inspect}"
       end
 
-      @lock = Mutex.new
-
       # defined in the C class
       init_with_snapshot(snapshot)
-    end
-
-    def with_lock
-      @lock.synchronize { yield }
     end
   end
 
@@ -136,8 +130,6 @@ module MiniRacer
       end
     end
 
-    attr_reader :isolate
-
     def initialize(options = nil)
       options ||= {}
 
@@ -151,7 +143,8 @@ module MiniRacer
       if options[:max_memory].is_a?(Numeric) && options[:max_memory] > 0
         @max_memory = options[:max_memory]
       end
-      @isolate = options[:isolate] || Isolate.new(options[:snapshot])
+      # false signals it should be fetched if requested
+      @isolate = options[:isolate] || false
       @disposed = false
 
       @callback_mutex = Mutex.new
@@ -159,10 +152,14 @@ module MiniRacer
       @thread_raise_called = false
       @eval_thread = nil
 
-      isolate.with_lock do
-        # defined in the C class
-        init_with_isolate(@isolate)
-      end
+      # defined in the C class
+      init_unsafe(options[:isolate], options[:snapshot])
+    end
+
+    def isolate
+      return @isolate if @isolate != false
+      # defined in the C class
+      @isolate = create_isolate_value
     end
 
     def load(filename)
@@ -176,7 +173,7 @@ module MiniRacer
       filename = options && options[:filename].to_s
 
       @eval_thread = Thread.current
-      isolate.with_lock do
+      isolate_mutex.synchronize do
         @current_exception = nil
         timeout do
           eval_unsafe(str, filename)
@@ -190,7 +187,7 @@ module MiniRacer
       raise(ContextDisposedError, 'attempted to call function on a disposed context!') if @disposed
 
       @eval_thread = Thread.current
-      isolate.with_lock do
+      isolate_mutex.synchronize do
         timeout do
           call_unsafe(function_name, *arguments)
         end
@@ -200,16 +197,17 @@ module MiniRacer
     end
 
     def dispose
-      if !@disposed
-        isolate.with_lock do
-          dispose_unsafe
-        end
-        @disposed = true
+      return if @disposed
+      isolate_mutex.synchronize do
+        dispose_unsafe
       end
+      @disposed = true
+      @isolate = nil # allow it to be garbage collected, if set
     end
 
 
     def attach(name, callback)
+      raise(ContextDisposedError, 'attempted to call function on a disposed context!') if @disposed
 
       wrapped = lambda do |*args|
         begin
@@ -233,7 +231,7 @@ module MiniRacer
         end
       end
 
-      isolate.with_lock do
+      isolate_mutex.synchronize do
         external = ExternalFunction.new(name, wrapped, self)
         @functions["#{name}"] = external
       end

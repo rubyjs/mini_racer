@@ -384,13 +384,13 @@ raise FooError, "I like foos"
 
     snapshot = MiniRacer::Snapshot.new(snapshot_source)
 
-    warmump_source = <<-JS
+    warmup_source = <<-JS
       Math.tan(1);
       var a = f();
       Math.sin = 1;
     JS
 
-    warmed_up_snapshot = snapshot.warmup!(warmump_source)
+    warmed_up_snapshot = snapshot.warmup!(warmup_source)
 
     context = MiniRacer::Context.new(snapshot: snapshot)
 
@@ -710,5 +710,34 @@ raise FooError, "I like foos"
     context.attach("b", proc{|a| a})
 
     context.eval('const obj = {get r(){ b() }}; a(obj);')
+  end
+
+  def test_no_disposal_of_isolate_when_it_is_referenced
+    isolate = MiniRacer::Isolate.new
+    context = MiniRacer::Context.new(isolate: isolate)
+    context.dispose
+    context2 = MiniRacer::Context.new(isolate: isolate) # Received signal 11 SEGV_MAPERR
+  end
+
+  def test_context_starts_with_no_isolate_value
+    context = MiniRacer::Context.new
+    assert_equal context.instance_variable_get('@isolate'), false
+  end
+
+  def test_context_isolate_value_is_kept
+    context = MiniRacer::Context.new
+    isolate = context.isolate
+    assert_same isolate, context.isolate
+  end
+
+  def test_isolate_is_nil_after_disposal
+    context = MiniRacer::Context.new
+    context.dispose
+    assert_nil context.isolate
+
+    context = MiniRacer::Context.new
+    context.isolate
+    context.dispose
+    assert_nil context.isolate
   end
 end
