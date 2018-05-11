@@ -120,7 +120,7 @@ typedef struct {
     bool error;
     Local<Function> fun;
     Local<Value> *argv;
-    Local<Value> result;
+    EvalResult result;
 } FunctionCall;
 
 enum IsolateFlags {
@@ -205,6 +205,85 @@ static void gc_callback(Isolate *isolate, GCType type, GCCallbackFlags flags) {
     }
 }
 
+// to be called with active lock and scope
+static void prepare_result(MaybeLocal<Value> v8res,
+                           TryCatch& trycatch,
+                           Isolate* isolate,
+                           Local<Context> context,
+                           EvalResult& evalRes /* out */) {
+
+    // just don't touch .parsed
+    evalRes.terminated = false;
+    evalRes.json = false;
+    evalRes.value = nullptr;
+    evalRes.message = nullptr;
+    evalRes.backtrace = nullptr;
+    evalRes.executed = !v8res.IsEmpty();
+
+    if (evalRes.executed) {
+        // arrays and objects get converted to json
+        Local<Value> local_value = v8res.ToLocalChecked();
+        if ((local_value->IsObject() || local_value->IsArray()) &&
+                !local_value->IsDate() && !local_value->IsFunction()) {
+            Local<Object> JSON = context->Global()->Get(
+                        String::NewFromUtf8(isolate, "JSON"))->ToObject();
+
+            Local<Function> stringify = JSON->Get(v8::String::NewFromUtf8(isolate, "stringify"))
+                    .As<Function>();
+
+            Local<Object> object = local_value->ToObject();
+            const unsigned argc = 1;
+            Local<Value> argv[argc] = { object };
+            MaybeLocal<Value> json = stringify->Call(JSON, argc, argv);
+
+            if (json.IsEmpty()) {
+                evalRes.executed = false;
+            } else {
+                evalRes.json = true;
+                Persistent<Value>* persistent = new Persistent<Value>();
+                persistent->Reset(isolate, json.ToLocalChecked());
+                evalRes.value = persistent;
+            }
+
+        } else {
+            Persistent<Value>* persistent = new Persistent<Value>();
+            persistent->Reset(isolate, local_value);
+            evalRes.value = persistent;
+        }
+    }
+
+    if (!evalRes.executed || !evalRes.parsed) {
+        if (trycatch.HasCaught()) {
+            if (!trycatch.Exception()->IsNull()) {
+                evalRes.message = new Persistent<Value>();
+                Local<Message> message = trycatch.Message();
+                char buf[1000];
+                int len;
+                len = snprintf(buf, sizeof(buf), "%s at %s:%i:%i", *String::Utf8Value(message->Get()),
+                               *String::Utf8Value(message->GetScriptResourceName()->ToString()),
+                               message->GetLineNumber(),
+                               message->GetStartColumn());
+                if ((size_t) len >= sizeof(buf)) {
+                    len = sizeof(buf) - 1;
+                    buf[len] = '\0';
+                }
+
+                Local<String> v8_message = String::NewFromUtf8(isolate, buf, NewStringType::kNormal, len).ToLocalChecked();
+                evalRes.message->Reset(isolate, v8_message);
+            } else if(trycatch.HasTerminated()) {
+                evalRes.terminated = true;
+                evalRes.message = new Persistent<Value>();
+                Local<String> tmp = String::NewFromUtf8(isolate, "JavaScript was terminated (either by timeout or explicitly)");
+                evalRes.message->Reset(isolate, tmp);
+            }
+            if (!trycatch.StackTrace().IsEmpty()) {
+                evalRes.backtrace = new Persistent<Value>();
+                evalRes.backtrace->Reset(isolate, trycatch.StackTrace()->ToString());
+            }
+        }
+    }
+}
+
 void*
 nogvl_context_eval(void* arg) {
 
@@ -246,90 +325,29 @@ nogvl_context_eval(void* arg) {
     result->json = false;
     result->value = NULL;
 
+    MaybeLocal<Value> maybe_value;
     if (!result->parsed) {
 	result->message = new Persistent<Value>();
 	result->message->Reset(isolate, trycatch.Exception());
     } else {
+        // parsing successful
+        if (eval_params->max_memory > 0) {
+            isolate->SetData(MEM_SOFTLIMIT_VALUE, &eval_params->max_memory);
+            isolate->AddGCEpilogueCallback(gc_callback);
+        }
 
-    if(eval_params->max_memory > 0) {
-        isolate->SetData(MEM_SOFTLIMIT_VALUE, &eval_params->max_memory);
-        isolate->AddGCEpilogueCallback(gc_callback);
+        maybe_value = parsed_script.ToLocalChecked()->Run(context);
     }
 
-	MaybeLocal<Value> maybe_value = parsed_script.ToLocalChecked()->Run(context);
-
-	result->executed = !maybe_value.IsEmpty();
-
-	if (result->executed) {
-
-	    // arrays and objects get converted to json
-	    Local<Value> local_value = maybe_value.ToLocalChecked();
-	    if ((local_value->IsObject() || local_value->IsArray()) &&
-		    !local_value->IsDate() && !local_value->IsFunction()) {
-		Local<Object> JSON = context->Global()->Get(
-		    String::NewFromUtf8(isolate, "JSON"))->ToObject();
-
-		Local<Function> stringify = JSON->Get(v8::String::NewFromUtf8(isolate, "stringify"))
-		     .As<Function>();
-
-		Local<Object> object = local_value->ToObject();
-		const unsigned argc = 1;
-		Local<Value> argv[argc] = { object };
-		MaybeLocal<Value> json = stringify->Call(JSON, argc, argv);
-
-		if (json.IsEmpty()) {
-		    result->executed = false;
-		} else {
-		    result->json = true;
-		    Persistent<Value>* persistent = new Persistent<Value>();
-		    persistent->Reset(isolate, json.ToLocalChecked());
-		    result->value = persistent;
-		}
-
-	    } else {
-		Persistent<Value>* persistent = new Persistent<Value>();
-		persistent->Reset(isolate, local_value);
-		result->value = persistent;
-	    }
-	}
-    }
-
-    if (!result->executed || !result->parsed) {
-	if (trycatch.HasCaught()) {
-	    if (!trycatch.Exception()->IsNull()) {
-		result->message = new Persistent<Value>();
-		Local<Message> message = trycatch.Message();
-		char buf[1000];
-		int len;
-		len = snprintf(buf, sizeof(buf), "%s at %s:%i:%i", *String::Utf8Value(message->Get()),
-			           *String::Utf8Value(message->GetScriptResourceName()->ToString()),
-				    message->GetLineNumber(),
-				    message->GetStartColumn());
-
-		Local<String> v8_message = String::NewFromUtf8(isolate, buf, NewStringType::kNormal, (int)len).ToLocalChecked();
-		result->message->Reset(isolate, v8_message);
-	    } else if(trycatch.HasTerminated()) {
-
-
-		result->terminated = true;
-		result->message = new Persistent<Value>();
-		Local<String> tmp = String::NewFromUtf8(isolate, "JavaScript was terminated (either by timeout or explicitly)");
-		result->message->Reset(isolate, tmp);
-	    }
-	    if (!trycatch.StackTrace().IsEmpty()) {
-		result->backtrace = new Persistent<Value>();
-		result->backtrace->Reset(isolate, trycatch.StackTrace()->ToString());
-	    }
-	}
-    }
+    prepare_result(maybe_value, trycatch, isolate, context, *result);
 
     isolate->SetData(IN_GVL, (void*)true);
-
 
     return NULL;
 }
 
-static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
+// assumes isolate locking is in place
+static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Value> value) {
 
     Isolate::Scope isolate_scope(isolate);
     HandleScope scope(isolate);
@@ -412,7 +430,13 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
     return rb_enc_str_new(*String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
 }
 
-static Handle<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
+// assumes isolate locking is in place
+static VALUE convert_v8_to_ruby(Isolate* isolate, const Persistent<Value>& value) {
+    HandleScope scope(isolate);
+    return convert_v8_to_ruby(isolate, Local<Value>::New(isolate, value));
+}
+
+static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
     EscapableHandleScope scope(isolate);
 
     Local<Array> array;
@@ -640,15 +664,98 @@ static VALUE rb_context_init_unsafe(VALUE self, VALUE isolate, VALUE snap) {
     return Qnil;
 }
 
+static VALUE convert_result_to_ruby(VALUE self /* context */,
+                                    Isolate* isolate, EvalResult& result) {
+    VALUE message = Qnil;
+    VALUE backtrace = Qnil;
+    
+    {
+        Locker lock(isolate);
+        if (result.message) {
+            message = convert_v8_to_ruby(isolate, *result.message);
+            result.message->Reset();
+            delete result.message;
+            result.message = nullptr;
+        }
+
+        if (result.backtrace) {
+            backtrace = convert_v8_to_ruby(isolate, *result.backtrace);
+            result.backtrace->Reset();
+            delete result.backtrace;
+        }
+    }
+    
+    // NOTE: this is very important, we can not do an rb_raise from within
+    // a v8 scope, if we do the scope is never cleaned up properly and we leak
+    if (!result.parsed) {
+        if(TYPE(message) == T_STRING) {
+            rb_raise(rb_eParseError, "%s", RSTRING_PTR(message));
+        } else {
+            rb_raise(rb_eParseError, "Unknown JavaScript Error during parse");
+        }
+    }
+
+    if (!result.executed) {
+        VALUE ruby_exception = rb_iv_get(self, "@current_exception");
+        if (ruby_exception == Qnil) {
+            bool mem_softlimit_reached = (bool)isolate->GetData(MEM_SOFTLIMIT_REACHED);
+            // If we were terminated or have the memory softlimit flag set
+            if (result.terminated || mem_softlimit_reached) {
+                ruby_exception = mem_softlimit_reached ? rb_eV8OutOfMemoryError : rb_eScriptTerminatedError;
+            } else {
+                ruby_exception = rb_eScriptRuntimeError;
+            }
+
+            // exception report about what happened
+            if (TYPE(backtrace) == T_STRING) {
+                rb_raise(ruby_exception, "%s", RSTRING_PTR(backtrace));
+            } else if(TYPE(message) == T_STRING) {
+                rb_raise(ruby_exception, "%s", RSTRING_PTR(message));
+            } else {
+                rb_raise(ruby_exception, "Unknown JavaScript Error during execution");
+            }
+        } else {
+            VALUE rb_str = rb_funcall(ruby_exception, rb_intern("to_s"), 0);
+            rb_raise(CLASS_OF(ruby_exception), "%s", RSTRING_PTR(rb_str));
+        }
+    }
+
+    VALUE ret = Qnil;
+    
+    // New scope for return value
+    {
+        Locker lock(isolate);
+        Isolate::Scope isolate_scope(isolate);
+        HandleScope handle_scope(isolate);
+
+        Local<Value> tmp = Local<Value>::New(isolate, *result.value);
+
+        if (result.json) {
+            Local<String> rstr = tmp->ToString();
+            VALUE json_string = rb_enc_str_new(*String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
+            ret = rb_funcall(rb_mJSON, rb_intern("parse"), 1, json_string);
+        } else {
+            ret = convert_v8_to_ruby(isolate, tmp);
+        }
+
+        result.value->Reset();
+        delete result.value;
+    }
+
+    if (rb_funcall(ret, rb_intern("class"), 0) == rb_cFailedV8Conversion) {
+        // TODO try to recover stack trace from the conversion error
+        rb_raise(rb_eScriptRuntimeError, "Error converting JS object to Ruby object");
+    }
+
+
+    return ret;
+}
+
 static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
 
     EvalParams eval_params;
     EvalResult eval_result;
     ContextInfo* context_info;
-    VALUE result;
-
-    VALUE message = Qnil;
-    VALUE backtrace = Qnil;
 
     Data_Get_Struct(self, ContextInfo, context_info);
     Isolate* isolate = context_info->isolate_info->isolate;
@@ -699,84 +806,9 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
 	eval_result.backtrace = NULL;
 
 	rb_thread_call_without_gvl(nogvl_context_eval, &eval_params, unblock_eval, &eval_params);
-
-	if (eval_result.message != NULL) {
-	    Local<Value> tmp = Local<Value>::New(isolate, *eval_result.message);
-	    message = convert_v8_to_ruby(isolate, tmp);
-	    eval_result.message->Reset();
-	    delete eval_result.message;
-	}
-
-	if (eval_result.backtrace != NULL) {
-	    Local<Value> tmp = Local<Value>::New(isolate, *eval_result.backtrace);
-	    backtrace = convert_v8_to_ruby(isolate, tmp);
-	    eval_result.backtrace->Reset();
-	    delete eval_result.backtrace;
-	}
     }
 
-    // NOTE: this is very important, we can not do an rb_raise from within
-    // a v8 scope, if we do the scope is never cleaned up properly and we leak
-    if (!eval_result.parsed) {
-	if(TYPE(message) == T_STRING) {
-	    rb_raise(rb_eParseError, "%s", RSTRING_PTR(message));
-	} else {
-	    rb_raise(rb_eParseError, "Unknown JavaScript Error during parse");
-	}
-    }
-
-    if (!eval_result.executed) {
-	VALUE ruby_exception = rb_iv_get(self, "@current_exception");
-	if (ruby_exception == Qnil) {
-		bool mem_softlimit_reached = (bool)isolate->GetData(MEM_SOFTLIMIT_REACHED);
-		// If we were terminated or have the memory softlimit flag set
-		if(eval_result.terminated || mem_softlimit_reached) {
-	    	ruby_exception = mem_softlimit_reached ? rb_eV8OutOfMemoryError : rb_eScriptTerminatedError;
-		} else {
-	    	ruby_exception = rb_eScriptRuntimeError;
-		}
-
-	    // exception report about what happened
-	    if(TYPE(backtrace) == T_STRING) {
-		rb_raise(ruby_exception, "%s", RSTRING_PTR(backtrace));
-	    } else if(TYPE(message) == T_STRING) {
-		rb_raise(ruby_exception, "%s", RSTRING_PTR(message));
-	    } else {
-		rb_raise(ruby_exception, "Unknown JavaScript Error during execution");
-	    }
-	} else {
-            VALUE rb_str = rb_funcall(ruby_exception, rb_intern("to_s"), 0);
-	    rb_raise(CLASS_OF(ruby_exception), "%s", RSTRING_PTR(rb_str));
-	}
-    }
-
-    // New scope for return value
-    {
-	Locker lock(isolate);
-	Isolate::Scope isolate_scope(isolate);
-	HandleScope handle_scope(isolate);
-
-	Local<Value> tmp = Local<Value>::New(isolate, *eval_result.value);
-
-	if (eval_result.json) {
-	    Local<String> rstr = tmp->ToString();
-	    VALUE json_string = rb_enc_str_new(*String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
-	    result = rb_funcall(rb_mJSON, rb_intern("parse"), 1, json_string);
-	} else {
-	    result = convert_v8_to_ruby(isolate, tmp);
-	}
-
-	eval_result.value->Reset();
-	delete eval_result.value;
-    }
-
-    if (rb_funcall(result, rb_intern("class"), 0) == rb_cFailedV8Conversion) {
-	// TODO try to recover stack trace from the conversion error
-	rb_raise(rb_eScriptRuntimeError, "Error converting JS object to Ruby object");
-    }
-
-
-    return result;
+    return convert_result_to_ruby(self, isolate, eval_result);
 }
 
 typedef struct {
@@ -1164,14 +1196,11 @@ nogvl_context_call(void *args) {
 
     Local<Function> fun = call->fun;
 
+    EvalResult& eval_res = call->result;
+    eval_res.parsed = true;
+
     MaybeLocal<v8::Value> res = fun->Call(context, context->Global(), call->argc, call->argv);
-    if (res.IsEmpty()) {
-        // A better error handling should be added, factoring out exception management
-        // code from nogvl_context_eval
-        call->error = true;
-    } else {
-        call->result = handle_scope.Escape(res.ToLocalChecked());
-    }
+    prepare_result(res, trycatch, isolate, context, eval_res);
 
     isolate->SetData(IN_GVL, (void*)true);
 
@@ -1188,7 +1217,6 @@ rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
 
     ContextInfo* context_info;
     FunctionCall call;
-    VALUE res = Qnil;
     VALUE *call_argv = NULL;
 
     Data_Get_Struct(self, ContextInfo, context_info);
@@ -1245,16 +1273,9 @@ rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
 
         rb_thread_call_without_gvl(nogvl_context_call, &call, unblock_function, &call);
         free(call.argv);
+    }
 
-        if (!call.error) {
-            res = convert_v8_to_ruby(isolate, call.result);
-        }
-    }
-    if (call.error) {
-        // TODO - better handling of exceptions
-        rb_raise(rb_eScriptRuntimeError, "Error calling %s", call.function_name);
-    }
-    return res;
+    return convert_result_to_ruby(self, isolate, call.result);
 }
 
 static VALUE rb_context_create_isolate_value(VALUE self) {
@@ -1303,13 +1324,12 @@ extern "C" {
 	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 2);
 	rb_define_private_method(rb_cContext, "call_unsafe", (VALUE(*)(...))&rb_context_call_unsafe, -1);
 	rb_define_private_method(rb_cContext, "isolate_mutex", (VALUE(*)(...))&rb_context_isolate_mutex, 0);
+	rb_define_private_method(rb_cContext, "init_unsafe",(VALUE(*)(...))&rb_context_init_unsafe, 2);
 
 	rb_define_alloc_func(rb_cContext, allocate);
 	rb_define_alloc_func(rb_cSnapshot, allocate_snapshot);
 	rb_define_alloc_func(rb_cIsolate, allocate_isolate);
 
-	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 2);
-	rb_define_private_method(rb_cContext, "init_unsafe",(VALUE(*)(...))&rb_context_init_unsafe, 2);
 	rb_define_private_method(rb_cExternalFunction, "notify_v8", (VALUE(*)(...))&rb_external_function_notify_v8, 0);
 	rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);
 
