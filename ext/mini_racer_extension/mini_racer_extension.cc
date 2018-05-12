@@ -130,6 +130,7 @@ enum IsolateFlags {
     MEM_SOFTLIMIT_REACHED,
 };
 
+static VALUE rb_cContext;
 static VALUE rb_cSnapshot;
 static VALUE rb_cIsolate;
 
@@ -347,7 +348,8 @@ nogvl_context_eval(void* arg) {
 }
 
 // assumes isolate locking is in place
-static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Value> value) {
+static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
+                                Local<Value> value) {
 
     Isolate::Scope isolate_scope(isolate);
     HandleScope scope(isolate);
@@ -377,7 +379,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Value> value) {
       Local<Array> arr = Local<Array>::Cast(value);
       for(uint32_t i=0; i < arr->Length(); i++) {
 	  Local<Value> element = arr->Get(i);
-	  VALUE rb_elem = convert_v8_to_ruby(isolate, element);
+	  VALUE rb_elem = convert_v8_to_ruby(isolate, context, element);
 	  if (rb_funcall(rb_elem, rb_intern("class"), 0) == rb_cFailedV8Conversion) {
 	    return rb_elem;
 	  }
@@ -401,16 +403,15 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Value> value) {
     if (value->IsObject()) {
 	VALUE rb_hash = rb_hash_new();
 	TryCatch trycatch(isolate);
-	Local<Context> context = Context::New(isolate);
 
 	Local<Object> object = value->ToObject();
-	MaybeLocal<Array> maybe_props = object->GetOwnPropertyNames(context);
+	auto maybe_props = object->GetOwnPropertyNames(context);
 	if (!maybe_props.IsEmpty()) {
 	    Local<Array> props = maybe_props.ToLocalChecked();
 	    for(uint32_t i=0; i < props->Length(); i++) {
 	     Local<Value> key = props->Get(i);
-	     VALUE rb_key = convert_v8_to_ruby(isolate, key);
-	     Local<Value> value = object->Get(key);
+	     VALUE rb_key = convert_v8_to_ruby(isolate, context, key);
+	     Local<Value> prop_value = object->Get(key);
 	     // this may have failed due to Get raising
 
 	     if (trycatch.HasCaught()) {
@@ -419,7 +420,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Value> value) {
 		 return rb_funcall(rb_cFailedV8Conversion, rb_intern("new"), 1, rb_str_new2(""));
 	     }
 
-	     VALUE rb_value = convert_v8_to_ruby(isolate, value);
+	     VALUE rb_value = convert_v8_to_ruby(isolate, context, prop_value);
 	     rb_hash_aset(rb_hash, rb_key, rb_value);
 	    }
 	}
@@ -430,10 +431,22 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Value> value) {
     return rb_enc_str_new(*String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
 }
 
-// assumes isolate locking is in place
-static VALUE convert_v8_to_ruby(Isolate* isolate, const Persistent<Value>& value) {
+static VALUE convert_v8_to_ruby(Isolate* isolate,
+                                const Persistent<Context>& context,
+                                Local<Value> value) {
     HandleScope scope(isolate);
-    return convert_v8_to_ruby(isolate, Local<Value>::New(isolate, value));
+    return convert_v8_to_ruby(isolate,
+                              Local<Context>::New(isolate, context),
+                              value);
+}
+
+static VALUE convert_v8_to_ruby(Isolate* isolate,
+                                const Persistent<Context>& context,
+                                const Persistent<Value>& value) {
+    HandleScope scope(isolate);
+    return convert_v8_to_ruby(isolate,
+                              Local<Context>::New(isolate, context),
+                              Local<Value>::New(isolate, value));
 }
 
 static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
@@ -665,21 +678,26 @@ static VALUE rb_context_init_unsafe(VALUE self, VALUE isolate, VALUE snap) {
 }
 
 static VALUE convert_result_to_ruby(VALUE self /* context */,
-                                    Isolate* isolate, EvalResult& result) {
+                                    EvalResult& result) {
+    ContextInfo *context_info;
+    Data_Get_Struct(self, ContextInfo, context_info);
+
+    Isolate *isolate = context_info->isolate_info->isolate;
+    Persistent<Context> *p_ctx = context_info->context;
+
     VALUE message = Qnil;
     VALUE backtrace = Qnil;
-    
     {
         Locker lock(isolate);
         if (result.message) {
-            message = convert_v8_to_ruby(isolate, *result.message);
+            message = convert_v8_to_ruby(isolate, *p_ctx, *result.message);
             result.message->Reset();
             delete result.message;
             result.message = nullptr;
         }
 
         if (result.backtrace) {
-            backtrace = convert_v8_to_ruby(isolate, *result.backtrace);
+            backtrace = convert_v8_to_ruby(isolate, *p_ctx, *result.backtrace);
             result.backtrace->Reset();
             delete result.backtrace;
         }
@@ -735,7 +753,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
             VALUE json_string = rb_enc_str_new(*String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
             ret = rb_funcall(rb_mJSON, rb_intern("parse"), 1, json_string);
         } else {
-            ret = convert_v8_to_ruby(isolate, tmp);
+            ret = convert_v8_to_ruby(isolate, *p_ctx, tmp);
         }
 
         result.value->Reset();
@@ -808,7 +826,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
 	rb_thread_call_without_gvl(nogvl_context_eval, &eval_params, unblock_eval, &eval_params);
     }
 
-    return convert_result_to_ruby(self, isolate, eval_result);
+    return convert_result_to_ruby(self, eval_result);
 }
 
 typedef struct {
@@ -847,23 +865,30 @@ gvl_ruby_callback(void* data) {
     VALUE callback;
     VALUE result;
     VALUE self;
-
+    VALUE parent;
     {
-	HandleScope scope(args->GetIsolate());
-	Handle<External> external = Handle<External>::Cast(args->Data());
+        HandleScope scope(args->GetIsolate());
+        Local<External> external = Local<External>::Cast(args->Data());
 
-	VALUE* self_pointer = (VALUE*)(external->Value());
-	self = *self_pointer;
-	callback = rb_iv_get(self, "@callback");
+        self = *(VALUE*)(external->Value());
+        callback = rb_iv_get(self, "@callback");
+
+        parent = rb_iv_get(self, "@parent");
+        if (NIL_P(parent) || !rb_obj_is_kind_of(parent, rb_cContext)) {
+            return NULL;
+        }
+
+        ContextInfo* context_info;
+        Data_Get_Struct(parent, ContextInfo, context_info);
 
 	if (length > 0) {
 	    ruby_args = ALLOC_N(VALUE, length);
 	}
 
-
 	for (int i = 0; i < length; i++) {
 	    Local<Value> value = ((*args)[i]).As<Value>();
-	    ruby_args[i] = convert_v8_to_ruby(args->GetIsolate(), value);
+	    ruby_args[i] = convert_v8_to_ruby(args->GetIsolate(),
+					      *context_info->context, value);
 	}
     }
 
@@ -884,7 +909,6 @@ gvl_ruby_callback(void* data) {
 			(VALUE(*)(...))&rescue_callback, (VALUE)(&callback_data), rb_eException, (VALUE)0);
 
     if(callback_data.failed) {
-	VALUE parent = rb_iv_get(self, "@parent");
 	rb_iv_set(parent, "@current_exception", result);
 	args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Ruby exception"));
     }
@@ -1275,7 +1299,7 @@ rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
         free(call.argv);
     }
 
-    return convert_result_to_ruby(self, isolate, call.result);
+    return convert_result_to_ruby(self, call.result);
 }
 
 static VALUE rb_context_create_isolate_value(VALUE self) {
@@ -1296,7 +1320,7 @@ extern "C" {
     void Init_mini_racer_extension ( void )
     {
 	VALUE rb_mMiniRacer = rb_define_module("MiniRacer");
-	VALUE rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);
+	rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);
 	rb_cSnapshot = rb_define_class_under(rb_mMiniRacer, "Snapshot", rb_cObject);
 	rb_cIsolate = rb_define_class_under(rb_mMiniRacer, "Isolate", rb_cObject);
 	VALUE rb_cPlatform = rb_define_class_under(rb_mMiniRacer, "Platform", rb_cObject);
