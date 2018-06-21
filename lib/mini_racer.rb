@@ -256,7 +256,7 @@ module MiniRacer
 
       rp,wp = IO.pipe
 
-      Thread.new do
+      t = Thread.new do
         begin
           result = IO.select([rp],[],[],(@timeout/1000.0))
           if !result
@@ -276,6 +276,10 @@ module MiniRacer
       end
 
       wp.write("done")
+
+      # ensure we do not leak a thread in state
+      t.join
+
       rval
 
     end
