@@ -202,7 +202,7 @@ static void gc_callback(Isolate *isolate, GCType type, GCCallbackFlags flags) {
 
     if(used > softlimit) {
         isolate->SetData(MEM_SOFTLIMIT_REACHED, (void*)true);
-        V8::TerminateExecution(isolate);
+        isolate->TerminateExecution();
     }
 }
 
@@ -626,11 +626,11 @@ static VALUE rb_isolate_init_with_snapshot(VALUE self, VALUE snapshot) {
     return Qnil;
 }
 
-static VALUE rb_isolate_idle_notification(VALUE self, VALUE idle_time_in_ms) {
+static VALUE rb_isolate_idle_notification_deadline(VALUE self, VALUE idle_time_in_s) {
     IsolateInfo* isolate_info;
     Data_Get_Struct(self, IsolateInfo, isolate_info);
 
-    return isolate_info->isolate->IdleNotification(NUM2INT(idle_time_in_ms)) ? Qtrue : Qfalse;
+    return isolate_info->isolate->IdleNotificationDeadline(NUM2DBL(idle_time_in_s)) ? Qtrue : Qfalse;
 }
 
 static VALUE rb_context_init_unsafe(VALUE self, VALUE isolate, VALUE snap) {
@@ -901,7 +901,7 @@ gvl_ruby_callback(void* data) {
 
     if ((bool)args->GetIsolate()->GetData(DO_TERMINATE) == true) {
 	args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Terminated execution during transition from Ruby to JS"));
-	V8::TerminateExecution(args->GetIsolate());
+	args->GetIsolate()->TerminateExecution();
 	return NULL;
     }
 
@@ -924,7 +924,7 @@ gvl_ruby_callback(void* data) {
 
     if ((bool)args->GetIsolate()->GetData(DO_TERMINATE) == true) {
       Isolate* isolate = args->GetIsolate();
-      V8::TerminateExecution(isolate);
+      isolate->TerminateExecution();
     }
 
     return NULL;
@@ -1180,7 +1180,7 @@ rb_context_stop(VALUE self) {
     // flag for termination
     isolate->SetData(DO_TERMINATE, (void*)true);
 
-    V8::TerminateExecution(isolate);
+    isolate->TerminateExecution();
     rb_funcall(self, rb_intern("stop_attached"), 0);
 
     return Qnil;
@@ -1361,7 +1361,7 @@ extern "C" {
 	rb_define_method(rb_cSnapshot, "warmup!", (VALUE(*)(...))&rb_snapshot_warmup, 1);
 	rb_define_private_method(rb_cSnapshot, "load", (VALUE(*)(...))&rb_snapshot_load, 1);
 
-	rb_define_method(rb_cIsolate, "idle_notification", (VALUE(*)(...))&rb_isolate_idle_notification, 1);
+	rb_define_method(rb_cIsolate, "idle_notification_deadline", (VALUE(*)(...))&rb_isolate_idle_notification_deadline, 1);
 	rb_define_private_method(rb_cIsolate, "init_with_snapshot",(VALUE(*)(...))&rb_isolate_init_with_snapshot, 1);
 
 	rb_define_singleton_method(rb_cPlatform, "set_flag_as_str!", (VALUE(*)(...))&rb_platform_set_flag_as_str, 1);

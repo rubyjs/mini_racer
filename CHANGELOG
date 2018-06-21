@@ -1,3 +1,8 @@
+- Unreleased
+
+  - Deprecate Isolate#idle_notification in favour of Isolate#idle_notification_deadline @ignisf
+  - Account for changes in the upstream V8 API @ignisf
+  - Bump dependency of V8 to 6.7
 
 23-08-2017
 
