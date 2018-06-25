@@ -502,7 +502,8 @@ raise FooError, "I like foos"
   def test_isolate_can_be_notified_of_idle_time
     isolate = MiniRacer::Isolate.new
 
-    assert(isolate.idle_notification_deadline(1))
+    # returns true if embedder should stop calling
+    assert(isolate.idle_notification(1000))
   end
 
   def test_concurrent_access_over_the_same_isolate_1

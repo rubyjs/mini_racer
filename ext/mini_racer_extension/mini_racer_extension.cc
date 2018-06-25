@@ -626,11 +626,15 @@ static VALUE rb_isolate_init_with_snapshot(VALUE self, VALUE snapshot) {
     return Qnil;
 }
 
-static VALUE rb_isolate_idle_notification_deadline(VALUE self, VALUE idle_time_in_s) {
+static VALUE rb_isolate_idle_notification(VALUE self, VALUE idle_time_in_ms) {
     IsolateInfo* isolate_info;
     Data_Get_Struct(self, IsolateInfo, isolate_info);
 
-    return isolate_info->isolate->IdleNotificationDeadline(NUM2DBL(idle_time_in_s)) ? Qtrue : Qfalse;
+    if (current_platform == NULL) return Qfalse;
+
+    double duration = NUM2DBL(idle_time_in_ms) / 1000.0;
+    double now = current_platform->MonotonicallyIncreasingTime();
+    return isolate_info->isolate->IdleNotificationDeadline(now + duration) ? Qtrue : Qfalse;
 }
 
 static VALUE rb_context_init_unsafe(VALUE self, VALUE isolate, VALUE snap) {
@@ -1361,7 +1365,7 @@ extern "C" {
 	rb_define_method(rb_cSnapshot, "warmup!", (VALUE(*)(...))&rb_snapshot_warmup, 1);
 	rb_define_private_method(rb_cSnapshot, "load", (VALUE(*)(...))&rb_snapshot_load, 1);
 
-	rb_define_method(rb_cIsolate, "idle_notification_deadline", (VALUE(*)(...))&rb_isolate_idle_notification_deadline, 1);
+	rb_define_method(rb_cIsolate, "idle_notification", (VALUE(*)(...))&rb_isolate_idle_notification, 1);
 	rb_define_private_method(rb_cIsolate, "init_with_snapshot",(VALUE(*)(...))&rb_isolate_init_with_snapshot, 1);
 
 	rb_define_singleton_method(rb_cPlatform, "set_flag_as_str!", (VALUE(*)(...))&rb_platform_set_flag_as_str, 1);
