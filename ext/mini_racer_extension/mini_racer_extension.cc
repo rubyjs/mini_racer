@@ -706,7 +706,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
             delete result.backtrace;
         }
     }
-    
+
     // NOTE: this is very important, we can not do an rb_raise from within
     // a v8 scope, if we do the scope is never cleaned up properly and we leak
     if (!result.parsed) {
@@ -743,7 +743,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
     }
 
     VALUE ret = Qnil;
-    
+
     // New scope for return value
     {
         Locker lock(isolate);
@@ -935,15 +935,14 @@ gvl_ruby_callback(void* data) {
 }
 
 static void ruby_callback(const FunctionCallbackInfo<Value>& args) {
-
     bool has_gvl = (bool)args.GetIsolate()->GetData(IN_GVL);
 
     if(has_gvl) {
 	gvl_ruby_callback((void*)&args);
     } else {
-    args.GetIsolate()->SetData(IN_GVL, (void*)true);
+	args.GetIsolate()->SetData(IN_GVL, (void*)true);
 	rb_thread_call_with_gvl(gvl_ruby_callback, (void*)(&args));
-    args.GetIsolate()->SetData(IN_GVL, (void*)false);
+	args.GetIsolate()->SetData(IN_GVL, (void*)false);
     }
 }
 
@@ -1242,7 +1241,6 @@ static void unblock_function(void *args) {
 
 static VALUE
 rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
-
     ContextInfo* context_info;
     FunctionCall call;
     VALUE *call_argv = NULL;
@@ -1284,23 +1282,31 @@ rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
 
         // examples of such usage can be found in
         // https://github.com/v8/v8/blob/36b32aa28db5e993312f4588d60aad5c8330c8a5/test/cctest/test-api.cc#L15711
-        Local<v8::Function> fun = Local<v8::Function>::Cast(context->Global()->Get(
-                        String::NewFromUtf8(isolate, call.function_name)));
-        call.fun = fun;
-        int fun_argc = call.argc;
+	Local<String> fname = String::NewFromUtf8(isolate, call.function_name);
+	MaybeLocal<v8::Value> val = context->Global()->Get(fname);
 
-        if (fun_argc > 0) {
-            call.argv = (v8::Local<Value> *) malloc(sizeof(void *) * fun_argc);
-            if (!call.argv) {
-                return Qnil;
-            }
-            for(int i=0; i < fun_argc; i++) {
-                call.argv[i] = convert_ruby_to_v8(isolate, call_argv[i]);
-            }
-        }
+	if (val.IsEmpty() || !val.ToLocalChecked()->IsFunction()) {
+	    return Qnil;
+	} else {
 
-        rb_thread_call_without_gvl(nogvl_context_call, &call, unblock_function, &call);
-        free(call.argv);
+	    Local<v8::Function> fun = Local<v8::Function>::Cast(val.ToLocalChecked());
+	    call.fun = fun;
+	    int fun_argc = call.argc;
+
+	    if (fun_argc > 0) {
+		call.argv = (v8::Local<Value> *) malloc(sizeof(void *) * fun_argc);
+		if (!call.argv) {
+		    return Qnil;
+		}
+		for(int i=0; i < fun_argc; i++) {
+		    call.argv[i] = convert_ruby_to_v8(isolate, call_argv[i]);
+		}
+	    }
+
+	    rb_thread_call_without_gvl(nogvl_context_call, &call, unblock_function, &call);
+	    free(call.argv);
+
+	}
     }
 
     return convert_result_to_ruby(self, call.result);

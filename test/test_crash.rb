@@ -19,6 +19,48 @@ def test
   puts "we are done"
 end
 
+def test2
+
+  context = MiniRacer::Context.new(timeout: 5)
+
+  context.attach("marsh", proc do |a, b, c|
+    return [a,b,c] if a.is_a?(MiniRacer::FailedV8Conversion) || b.is_a?(MiniRacer::FailedV8Conversion) || c.is_a?(MiniRacer::FailedV8Conversion)
+
+    a[rand(10000).to_s] = "a"
+    b[rand(10000).to_s] = "b"
+    c[rand(10000).to_s] = "c"
+    [a,b,c]
+  end)
+
+  begin
+    context.eval("var a = [{},{},{}]; while(true) { a = marsh(a[0],a[1],a[2]); }")
+  rescue
+  end
+
+end
+
+def test3
+  snapshot = MiniRacer::Snapshot.new('Math.sin = 1;')
+
+  begin
+    snapshot.warmup!('var a = Math.sin(1);')
+  rescue
+    # do nothing
+  end
+
+  context = MiniRacer::Context.new(snapshot: snapshot)
+
+  assert_equal 1, context.eval('Math.sin')
+end
+
+test3
+
+# 500.times do
+#   test2
+# end
+
+exit
+
 test
 GC.start
 

@@ -35,7 +35,7 @@ class MiniRacerFunctionTest < Minitest::Test
       context.call('f', 1)
     end
     assert_equal err.message, 'Error: foo bar'
-    assert_match /1:23/, err.backtrace[0]
+    assert_match(/1:23/, err.backtrace[0])
   end
 
   def test_args_types
