@@ -906,6 +906,9 @@ gvl_ruby_callback(void* data) {
     if ((bool)args->GetIsolate()->GetData(DO_TERMINATE) == true) {
 	args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Terminated execution during transition from Ruby to JS"));
 	args->GetIsolate()->TerminateExecution();
+	if (length > 0) {
+	    xfree(ruby_args);
+	}
 	return NULL;
     }
 
