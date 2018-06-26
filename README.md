@@ -10,6 +10,12 @@ It was created as an alternative to the excellent [therubyracer](https://github.
 
 MiniRacer has an adapter for [execjs](https://github.com/rails/execjs) so it can be used directly with Rails projects to minify assets, run babel or compile CoffeeScript.
 
+### A note about Ruby version Support
+
+MiniRacer only supports non-EOL versions of Ruby. See [Ruby](https://www.ruby-lang.org/en/downloads) to see the list of non-EOL Rubies.
+
+If you require support for older versions of Ruby install an older version of the gem.
+
 ## Features
 
 ### Simple eval for JavaScript

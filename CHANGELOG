@@ -1,6 +1,9 @@
 - Unreleased
 
-  - Deprecate Isolate#idle_notification in favour of Isolate#idle_notification_deadline @ignisf
+  - FEATURE: context#call to allow for cheaper invocation of functions
+  - FIX: rare memory leak when terminating a long running attached function
+  - FIX: rare segfault when terminating a long running attached function
+  - FIX: Reimplement Isolate#idle_notification using idle_notification_deadline, API remains the same @ignisf
   - Account for changes in the upstream V8 API @ignisf
   - Bump dependency of V8 to 6.7
 
