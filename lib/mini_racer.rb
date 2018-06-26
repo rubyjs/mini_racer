@@ -211,21 +211,29 @@ module MiniRacer
 
       wrapped = lambda do |*args|
         begin
-          @callback_mutex.synchronize{
-            @callback_running = true
+
+          begin
+            @callback_mutex.synchronize{
+              @callback_running = true
+            }
+            callback.call(*args)
+          ensure
+            @callback_mutex.synchronize{
+              @callback_running = false
+            }
+          end
+
+          # wait up to 2 seconds for this to be interrupted
+          # will very rarely be called cause #raise is called
+          # in another mutex
+          @callback_mutex.synchronize {
+            if @thread_raise_called
+              sleep 2
+            end
           }
 
-          callback.call(*args)
         ensure
           @callback_mutex.synchronize {
-            @callback_running = false
-
-            # this is some odd code, but it is required
-            # if we raised on this thread we better wait for it
-            # otherwise we may end up raising in an unsafe spot
-            if @thread_raise_called
-              sleep 0.1
-            end
             @thread_raise_called = false
           }
         end
