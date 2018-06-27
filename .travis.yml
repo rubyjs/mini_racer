@@ -3,7 +3,7 @@ rvm:
   - 2.3
   - 2.4
   - 2.5
-  - master
+  - ruby-head
 matrix:
   include:
     - rvm: 2.5.1
