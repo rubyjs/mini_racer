@@ -35,6 +35,7 @@ def test2
   begin
     context.eval("var a = [{},{},{}]; while(true) { a = marsh(a[0],a[1],a[2]); }")
   rescue
+    p "BOOM"
   end
 
 end
@@ -53,11 +54,10 @@ def test3
   assert_equal 1, context.eval('Math.sin')
 end
 
-test3
 
-# 500.times do
-#   test2
-# end
+500_000.times do
+  test2
+end
 
 exit
 

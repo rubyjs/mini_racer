@@ -836,7 +836,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
 typedef struct {
     VALUE callback;
     int length;
-    VALUE* args;
+    VALUE ruby_args;
     bool failed;
 } protected_callback_data;
 
@@ -846,7 +846,9 @@ VALUE protected_callback(VALUE rdata) {
     VALUE result;
 
     if (data->length > 0) {
-	result = rb_funcall2(data->callback, rb_intern("call"), data->length, data->args);
+	result = rb_funcall2(data->callback, rb_intern("call"), data->length,
+			     RARRAY_PTR(data->ruby_args));
+	RB_GC_GUARD(data->ruby_args);
     } else {
 	result = rb_funcall(data->callback, rb_intern("call"), 0);
     }
@@ -864,7 +866,7 @@ void*
 gvl_ruby_callback(void* data) {
 
     FunctionCallbackInfo<Value>* args = (FunctionCallbackInfo<Value>*)data;
-    VALUE* ruby_args = NULL;
+    VALUE ruby_args = Qnil;
     int length = args->Length();
     VALUE callback;
     VALUE result;
@@ -886,13 +888,14 @@ gvl_ruby_callback(void* data) {
         Data_Get_Struct(parent, ContextInfo, context_info);
 
 	if (length > 0) {
-	    ruby_args = ALLOC_N(VALUE, length);
+	    ruby_args = rb_ary_tmp_new(length);
 	}
 
 	for (int i = 0; i < length; i++) {
 	    Local<Value> value = ((*args)[i]).As<Value>();
-	    ruby_args[i] = convert_v8_to_ruby(args->GetIsolate(),
+	    VALUE tmp = convert_v8_to_ruby(args->GetIsolate(),
 					      *context_info->context, value);
+	    rb_ary_push(ruby_args, tmp);
 	}
     }
 
@@ -900,14 +903,15 @@ gvl_ruby_callback(void* data) {
     protected_callback_data callback_data;
     callback_data.length = length;
     callback_data.callback = callback;
-    callback_data.args = ruby_args;
+    callback_data.ruby_args = ruby_args;
     callback_data.failed = false;
 
     if ((bool)args->GetIsolate()->GetData(DO_TERMINATE) == true) {
 	args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Terminated execution during transition from Ruby to JS"));
 	args->GetIsolate()->TerminateExecution();
 	if (length > 0) {
-	    xfree(ruby_args);
+	    rb_ary_clear(ruby_args);
+	    rb_gc_force_recycle(ruby_args);
 	}
 	return NULL;
     }
@@ -926,7 +930,8 @@ gvl_ruby_callback(void* data) {
     }
 
     if (length > 0) {
-	xfree(ruby_args);
+	rb_ary_clear(ruby_args);
+	rb_gc_force_recycle(ruby_args);
     }
 
     if ((bool)args->GetIsolate()->GetData(DO_TERMINATE) == true) {
