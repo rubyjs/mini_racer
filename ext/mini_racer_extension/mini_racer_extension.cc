@@ -562,7 +562,7 @@ static VALUE rb_snapshot_load(VALUE self, VALUE str) {
     return Qnil;
 }
 
-static VALUE rb_snapshot_warmup(VALUE self, VALUE str) {
+static VALUE rb_snapshot_warmup_unsafe(VALUE self, VALUE str) {
     SnapshotInfo* snapshot_info;
     Data_Get_Struct(self, SnapshotInfo, snapshot_info);
 
@@ -1275,6 +1275,8 @@ rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
         call_argv = argv + 1;
     }
 
+    bool missingFunction = false;
+
     {
         Locker lock(isolate);
         Isolate::Scope isolate_scope(isolate);
@@ -1289,7 +1291,7 @@ rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
 	MaybeLocal<v8::Value> val = context->Global()->Get(fname);
 
 	if (val.IsEmpty() || !val.ToLocalChecked()->IsFunction()) {
-	    return Qnil;
+	    missingFunction = true;
 	} else {
 
 	    Local<v8::Function> fun = Local<v8::Function>::Cast(val.ToLocalChecked());
@@ -1310,6 +1312,10 @@ rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
 	    free(call.argv);
 
 	}
+    }
+
+    if (missingFunction) {
+	rb_raise(rb_eScriptRuntimeError, "Unknown JavaScript method invoked");
     }
 
     return convert_result_to_ruby(self, call.result);
@@ -1371,7 +1377,7 @@ extern "C" {
 	rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);
 
 	rb_define_method(rb_cSnapshot, "size", (VALUE(*)(...))&rb_snapshot_size, 0);
-	rb_define_method(rb_cSnapshot, "warmup!", (VALUE(*)(...))&rb_snapshot_warmup, 1);
+	rb_define_method(rb_cSnapshot, "warmup_unsafe!", (VALUE(*)(...))&rb_snapshot_warmup_unsafe, 1);
 	rb_define_private_method(rb_cSnapshot, "load", (VALUE(*)(...))&rb_snapshot_load, 1);
 
 	rb_define_method(rb_cIsolate, "idle_notification", (VALUE(*)(...))&rb_isolate_idle_notification, 1);

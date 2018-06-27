@@ -212,11 +212,13 @@ module MiniRacer
       wrapped = lambda do |*args|
         begin
 
+          r = nil
+
           begin
             @callback_mutex.synchronize{
               @callback_running = true
             }
-            callback.call(*args)
+            r = callback.call(*args)
           ensure
             @callback_mutex.synchronize{
               @callback_running = false
@@ -231,6 +233,8 @@ module MiniRacer
               sleep 2
             end
           }
+
+          r
 
         ensure
           @callback_mutex.synchronize {
@@ -311,8 +315,33 @@ module MiniRacer
   # `size` and `warmup!` public methods are defined in the C class
   class Snapshot
     def initialize(str = '')
+      # ensure it first can load
+      begin
+        ctx = MiniRacer::Context.new
+        ctx.eval(str)
+      rescue MiniRacer::RuntimeError => e
+        raise MiniRacer::SnapshotError.new,  e.message
+      end
+
+      @source = str
+
       # defined in the C class
       load(str)
+    end
+
+    def warmup!(src)
+      # we have to do something here
+      # we are bloating memory a bit but it is more correct
+      # than hitting an exception when attempty to compile invalid source
+      begin
+        ctx = MiniRacer::Context.new
+        ctx.eval(@source)
+        ctx.eval(src)
+      rescue MiniRacer::RuntimeError => e
+        raise MiniRacer::SnapshotError.new,  e.message
+      end
+
+      warmup_unsafe!(src)
     end
   end
 end
