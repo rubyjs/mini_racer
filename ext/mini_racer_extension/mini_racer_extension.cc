@@ -1015,11 +1015,11 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
 
     // always raise out of V8 context
     if (parse_error) {
-	rb_raise(rb_eParseError, "Invalid object %s", RSTRING_PTR(parent_object));
+	rb_raise(rb_eParseError, "Invalid object %" PRIsVALUE, parent_object);
     }
 
     if (attach_error) {
-	rb_raise(rb_eParseError, "Was expecting %s to be an object", RSTRING_PTR(parent_object));
+	rb_raise(rb_eParseError, "Was expecting %" PRIsVALUE" to be an object", parent_object);
     }
 
     return Qnil;
