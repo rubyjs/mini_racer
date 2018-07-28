@@ -320,6 +320,11 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Handle<Value> &value) {
         return rb_time_new(secs, nanos);
     }
 
+    if (value->IsSymbol())
+    {
+        return Qnil;
+    }
+
     if (value->IsObject()) {
 	VALUE rb_hash = rb_hash_new();
 	TryCatch trycatch(isolate);

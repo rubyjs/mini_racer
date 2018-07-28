@@ -236,6 +236,13 @@ raise FooError, "I like foos"
     assert_equal((test_time.tv_usec/1000.0).floor, (result.tv_usec/1000.0).floor)
   end
 
+  def test_return_symbol
+    context = MiniRacer::Context.new
+    context.attach("test", proc{|a| a})
+
+    assert_nil(context.eval("test(Symbol(\"foo\"));"))
+  end
+
   def test_datetime_missing
     date_time_backup = Object.send(:remove_const, :DateTime)
 
