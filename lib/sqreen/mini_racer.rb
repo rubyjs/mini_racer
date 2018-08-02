@@ -1,7 +1,16 @@
-require "mini_racer/version"
-require "mini_racer_extension"
+require "sqreen/mini_racer/version"
 require "thread"
 require "json"
+require "prv_ext_loader"
+require "pathname"
+
+module Sqreen
+  shlib = $LOAD_PATH
+    .map { |p| (Pathname.new(p) + 'sq_mini_racer_extension.so') }
+    .find { |p| p.file? }
+
+  raise LoadError, "could not find sq_mini_racer.so" unless shlib
+  PrvExtLoader.load shlib.to_s
 
 module MiniRacer
 
@@ -344,4 +353,5 @@ module MiniRacer
       warmup_unsafe!(src)
     end
   end
+end
 end

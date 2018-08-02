@@ -7,5 +7,7 @@ Gemfile.lock
 /pkg/
 /spec/reports/
 /tmp/
-lib/mini_racer_extension.so
+lib/*.so
+/lib/sq_mini_racer/
+/ext/mini_racer_extension/mini_racer.creator.*
 *.bundle
