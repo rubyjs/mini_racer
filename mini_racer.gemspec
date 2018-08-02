@@ -1,11 +1,11 @@
 # coding: utf-8
 lib = File.expand_path('../lib', __FILE__)
 $LOAD_PATH.unshift(lib) unless $LOAD_PATH.include?(lib)
-require 'mini_racer/version'
+require 'sqreen/mini_racer/version'
 
 Gem::Specification.new do |spec|
-  spec.name          = "mini_racer"
-  spec.version       = MiniRacer::VERSION
+  spec.name          = "sq_mini_racer"
+  spec.version       = Sqreen::MiniRacer::VERSION
   spec.authors       = ["Sam Saffron"]
   spec.email         = ["sam.saffron@gmail.com"]
 
@@ -30,5 +30,5 @@ Gem::Specification.new do |spec|
 
   spec.extensions = ["ext/mini_racer_extension/extconf.rb"]
 
-  spec.required_ruby_version = '>= 2.3'
+  spec.required_ruby_version = '>= 1.9.3'
 end

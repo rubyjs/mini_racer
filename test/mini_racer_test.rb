@@ -2,6 +2,7 @@ require 'securerandom'
 require 'date'
 require 'test_helper'
 
+module Sqreen
 class MiniRacerTest < Minitest::Test
   # see `test_platform_set_flags_works` below
   MiniRacer::Platform.set_flags! :use_strict
@@ -19,7 +20,7 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_that_it_has_a_version_number
-    refute_nil ::MiniRacer::VERSION
+    refute_nil MiniRacer::VERSION
   end
 
   def test_types
@@ -741,4 +742,5 @@ raise FooError, "I like foos"
     context.dispose
     assert_nil context.isolate
   end
+end
 end
