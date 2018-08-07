@@ -954,6 +954,10 @@ gvl_ruby_callback(void* data) {
     return NULL;
 }
 
+#if RUBY_API_VERSION_MAJOR < 2
+extern "C" void *rb_thread_call_with_gvl(void *(*func)(void *), void *data1);
+#endif
+
 static void ruby_callback(const FunctionCallbackInfo<Value>& args) {
     bool has_gvl = (bool)args.GetIsolate()->GetData(IN_GVL);
 
@@ -961,11 +965,7 @@ static void ruby_callback(const FunctionCallbackInfo<Value>& args) {
 	gvl_ruby_callback((void*)&args);
     } else {
 	args.GetIsolate()->SetData(IN_GVL, (void*)true);
-#if RUBY_API_VERSION_MAJOR > 1
 	rb_thread_call_with_gvl(gvl_ruby_callback, (void*)(&args));
-#else
-	rb_thread_blocking_region(gvl_ruby_callback, (void*)(&args));
-#endif
 	args.GetIsolate()->SetData(IN_GVL, (void*)false);
     }
 }
