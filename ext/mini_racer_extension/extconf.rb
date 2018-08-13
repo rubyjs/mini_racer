@@ -1,5 +1,5 @@
 require 'mkmf'
-require 'libv8'
+require 'fileutils'
 
 have_library('pthread')
 have_library('objc') if RUBY_PLATFORM =~ /darwin/
@@ -9,6 +9,7 @@ $CPPFLAGS += " -rdynamic" unless $CPPFLAGS.split.include? "-rdynamic"
 $CPPFLAGS += " -fPIC" unless $CPPFLAGS.split.include? "-rdynamic" or RUBY_PLATFORM =~ /darwin/
 $CPPFLAGS += " -std=c++0x"
 $CPPFLAGS += " -fpermissive"
+$CPPFLAGS += " -fno-omit-frame-pointer"
 $CPPFLAGS += " -Wno-reserved-user-defined-literal" if RUBY_PLATFORM =~ /darwin/
 
 $LDFLAGS.insert 0, " -stdlib=libstdc++ " if RUBY_PLATFORM =~ /darwin/
@@ -50,6 +51,37 @@ if enable_config('debug')
   CONFIG['debugflags'] << ' -ggdb3 -O0'
 end
 
-Libv8.configure_makefile
+LIBV8_VERSION = '6.7.288.46.1'
+libv8_rb = Dir.glob('**/libv8.rb').first
+FileUtils.mkdir_p('gemdir')
+unless libv8_rb
+  puts "Will try downloading libv8 gem, version #{LIBV8_VERSION}"
+  `gem install --version '= #{LIBV8_VERSION}' --install-dir gemdir libv8`
+  unless $?.success?
+    warn <<EOS
 
-create_makefile 'mini_racer_extension'
+WARNING: Could not download a private copy of the libv8 gem. Please make
+sure that you have internet access and that the `gem` binary is available.
+
+EOS
+  end
+
+  libv8_rb = Dir.glob('**/libv8.rb').first
+  unless libv8_rb
+    warn <<EOS
+
+WARNING: Could not find libv8 after the local copy of libv8 having supposedly
+been installed.
+
+EOS
+  end
+end
+
+if libv8_rb
+  $:.unshift(File.dirname(libv8_rb) + '/../ext')
+  $:.unshift File.dirname(libv8_rb)
+end
+
+require 'libv8'
+Libv8.configure_makefile
+create_makefile 'sq_mini_racer_extension'

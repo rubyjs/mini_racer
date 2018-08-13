@@ -10,8 +10,11 @@ end
 
 task :default => [:compile, :test]
 
-gem = Gem::Specification.load( File.dirname(__FILE__) + '/mini_racer.gemspec' )
-Rake::ExtensionTask.new( 'mini_racer_extension', gem )
+gem = Gem::Specification.load( File.dirname(__FILE__) + '/sq_mini_racer.gemspec' )
+Rake::ExtensionTask.new( 'mini_racer_extension', gem ) do |ext|
+  ext.name = 'sq_mini_racer_extension'
+end
+Rake::ExtensionTask.new('prv_ext_loader', gem)
 
 
 # via http://blog.flavorjon.es/2009/06/easily-valgrind-gdb-your-ruby-c.html

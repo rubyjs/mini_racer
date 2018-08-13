@@ -1,6 +1,7 @@
 require 'test_helper'
 require 'timeout'
 
+module Sqreen
 class MiniRacerFunctionTest < Minitest::Test
   def test_fun
     context = MiniRacer::Context.new
@@ -85,4 +86,5 @@ class MiniRacerFunctionTest < Minitest::Test
     # Dummy test, completing should be enough to show we don't hang
     assert_equal thread_count, joined_thread_count
   end
+end
 end
