@@ -1,12 +1,16 @@
+# Sqreen's fork of mini\_racer
+
+This is a fork of [`mini_racer`](https://github.com/discourse/mini_racer), changed to allow coexistence with other versions of mainline mini\_racer and with therubyracer, and to improve compatibility with old versions of Ruby. Otherwise, it should track mainstream mini\_racer. It provides extra functionality to the [`sqreen`](https://rubygems.org/gems/sqreen/) gem.
+
 # MiniRacer
 
-[![Build Status](https://travis-ci.org/discourse/mini_racer.svg?branch=master)](https://travis-ci.org/discourse/mini_racer)
+[![Build Status](https://travis-ci.org/sqreen/mini_racer.svg?branch=master)](https://travis-ci.org/sqreen/mini_racer)
 
 Minimal, modern embedded V8 for Ruby.
 
 MiniRacer provides a minimal two way bridge between the V8 JavaScript engine and Ruby.
 
-It was created as an alternative to the excellent [therubyracer](https://github.com/cowboyd/therubyracer). Unlike therubyracer, mini_racer only implements a minimal bridge. This reduces the surface area making upgrading v8 much simpler and exhaustive testing simpler.
+It was created as an alternative to the excellent [therubyracer](https://github.com/cowboyd/therubyracer). Unlike therubyracer, mini\_racer only implements a minimal bridge. This reduces the surface area making upgrading v8 much simpler and exhaustive testing simpler.
 
 MiniRacer has an adapter for [execjs](https://github.com/rails/execjs) so it can be used directly with Rails projects to minify assets, run babel or compile CoffeeScript.
 
