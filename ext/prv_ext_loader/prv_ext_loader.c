@@ -66,6 +66,9 @@ static void *_dln_load(const char *file)
 
     INIT_FUNCNAME(&buf, file);
 
+#if defined(__APPLE__) && !defined(RTLD_DEEPBIND)
+# define RTLD_DEEPBIND 0
+#endif
     /* Load file */
     if ((handle = dlopen(file, RTLD_LAZY|RTLD_LOCAL|RTLD_DEEPBIND)) == NULL) {
         DLN_ERROR();

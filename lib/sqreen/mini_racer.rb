@@ -5,11 +5,12 @@ require "prv_ext_loader"
 require "pathname"
 
 module Sqreen
+  name = 'sq_mini_racer_extension.' + RbConfig::CONFIG['DLEXT']
   shlib = $LOAD_PATH
-    .map { |p| (Pathname.new(p) + 'sq_mini_racer_extension.so') }
+    .map { |p| (Pathname.new(p) + name) }
     .find { |p| p.file? }
 
-  raise LoadError, "could not find sq_mini_racer.so" unless shlib
+  raise LoadError, "could not find #{name}" unless shlib
   PrvExtLoader.load shlib.to_s
 
 # rubocop:disable IndentationConsistency
