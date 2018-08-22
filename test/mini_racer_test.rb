@@ -363,6 +363,15 @@ raise FooError, "I like foos"
     assert(snapshot.size > 0)
   end
 
+  def test_snapshot_dump
+    snapshot = MiniRacer::Snapshot.new('var foo = "bar";')
+    dump = snapshot.dump
+
+    assert_equal(String, dump.class)
+    assert_equal(Encoding::ASCII_8BIT, dump.encoding)
+    assert_equal(snapshot.size, dump.length)
+  end
+
   def test_invalid_snapshots_throw_an_exception
     assert_raises(MiniRacer::SnapshotError) do
       MiniRacer::Snapshot.new('var foo = bar;')
