@@ -165,6 +165,21 @@ context.eval('counter')
 
 ```
 
+#### Dumping snapshots
+
+It is also possible to dump a `MiniRacer::Snapshot` and reuse is across isolated processes. This makes it so you only have to pay for the performance of creating a snapshot once. For example, you could build a snapshot of your JavaScript code in CI, then use it on your production servers.
+
+```ruby
+snapshot = MiniRacer::Snapshot.new('function renderToString() { return "<span>Hey!</span>"; }')
+File.write('my_snapshot.bin', snapshot.dump) # could also be a Redis cache :)
+
+restored_snapshot = MiniRacer::Snapshot.from_blob(File.read('my_snapshot.bin'))
+context = MiniRacer::Context.new(snapshot: snapshot)
+
+context.eval('renderToString()')
+# => "<span>Hey!</span>"
+```
+
 ### Shared isolates
 
 By default, MiniRacer's contexts each have their own isolate (V8 runtime). For efficiency, it is possible to re-use an isolate across contexts:

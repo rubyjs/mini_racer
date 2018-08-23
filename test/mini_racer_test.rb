@@ -372,6 +372,22 @@ raise FooError, "I like foos"
     assert_equal(snapshot.size, dump.length)
   end
 
+  def test_snapshot_from_blob
+    snapshot = MiniRacer::Snapshot.new('var foo = "bar";')
+    blob = snapshot.dump
+    blob_snapshot = MiniRacer::Snapshot.from_blob(blob)
+    context = MiniRacer::Context.new(snapshot: blob_snapshot)
+
+    assert_equal 'bar', context.eval('foo')
+    assert_equal blob.length, blob_snapshot.size
+  end
+
+  def test_snapshot_from_blob_when_passed_nil
+    assert_raises(ArgumentError) do
+      MiniRacer::Snapshot.from_blob(nil)
+    end
+  end
+
   def test_invalid_snapshots_throw_an_exception
     assert_raises(MiniRacer::SnapshotError) do
       MiniRacer::Snapshot.new('var foo = bar;')

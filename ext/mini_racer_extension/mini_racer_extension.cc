@@ -1148,6 +1148,30 @@ VALUE allocate_snapshot(VALUE klass) {
     return Data_Wrap_Struct(klass, NULL, deallocate_snapshot, (void*)snapshot_info);
 }
 
+static VALUE rb_snapshot_from_blob(VALUE klass, VALUE str) {
+    VALUE snapshot = allocate_snapshot(klass);
+
+    SnapshotInfo* snapshot_info;
+    Data_Get_Struct(snapshot, SnapshotInfo, snapshot_info);
+
+    if(TYPE(str) != T_STRING) {
+        rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE " (should be a string)",
+                rb_obj_class(str));
+    }
+
+    size_t blob_size = (size_t)RSTRING_LEN(str);
+
+    // Copy the passed in blob string
+    char* blob = calloc(blob_size, sizeof(char));
+    memcpy(blob, StringValuePtr(str), blob_size);
+
+    snapshot_info->data = blob;
+    snapshot_info->raw_size = blob_size;
+
+    return snapshot;
+}
+
+
 VALUE allocate_isolate(VALUE klass) {
     IsolateInfo* isolate_info = new IsolateInfo();
 
@@ -1392,6 +1416,7 @@ extern "C" {
 	rb_define_method(rb_cSnapshot, "dump", (VALUE(*)(...))&rb_snapshot_dump, 0);
 	rb_define_method(rb_cSnapshot, "warmup_unsafe!", (VALUE(*)(...))&rb_snapshot_warmup_unsafe, 1);
 	rb_define_private_method(rb_cSnapshot, "load", (VALUE(*)(...))&rb_snapshot_load, 1);
+	rb_define_singleton_method(rb_cSnapshot, "from_blob", (VALUE(*)(...))&rb_snapshot_from_blob, 1);
 
 	rb_define_method(rb_cIsolate, "idle_notification", (VALUE(*)(...))&rb_isolate_idle_notification, 1);
 	rb_define_private_method(rb_cIsolate, "init_with_snapshot",(VALUE(*)(...))&rb_isolate_init_with_snapshot, 1);
