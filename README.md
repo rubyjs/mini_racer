@@ -1,6 +1,8 @@
 # MiniRacer
 
 [![Build Status](https://travis-ci.org/discourse/mini_racer.svg?branch=master)](https://travis-ci.org/discourse/mini_racer)
+[![Code Quality: Javascript](https://img.shields.io/lgtm/grade/javascript/g/discourse/mini_racer.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/discourse/mini_racer/context:javascript)
+[![Total Alerts](https://img.shields.io/lgtm/alerts/g/discourse/mini_racer.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/discourse/mini_racer/alerts)
 
 Minimal, modern embedded V8 for Ruby.
 
