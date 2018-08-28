@@ -406,7 +406,7 @@ raise FooError, "I like foos"
     end
   end
 
-  def test_invalid_warmup_sources_throw_an_exception
+  def test_invalid_warmup_sources_throw_an_exception_2
     assert_raises(ArgumentError) do
       MiniRacer::Snapshot.new('function f() { return 1 }').warmup!([])
     end
@@ -718,7 +718,7 @@ raise FooError, "I like foos"
     isolate = MiniRacer::Isolate.new
     context = MiniRacer::Context.new(isolate: isolate)
     context.dispose
-    context2 = MiniRacer::Context.new(isolate: isolate) # Received signal 11 SEGV_MAPERR
+    MiniRacer::Context.new(isolate: isolate) # Received signal 11 SEGV_MAPERR
   end
 
   def test_context_starts_with_no_isolate_value
