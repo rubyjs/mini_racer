@@ -12,7 +12,7 @@ $CPPFLAGS += " -fpermissive"
 $CPPFLAGS += " -fno-omit-frame-pointer"
 $CPPFLAGS += " -Wno-reserved-user-defined-literal" if RUBY_PLATFORM =~ /darwin/
 
-$LDFLAGS.insert 0, " -stdlib=libstdc++ " if RUBY_PLATFORM =~ /darwin/
+$LDFLAGS.insert 0, $1.to_i < 18 ? " -stdlib=libstdc++ " : " -stdlib=libc++ " if RUBY_PLATFORM =~ /darwin(\d+)/
 
 if ENV['CXX']
   puts "SETTING CXX"
