@@ -28,6 +28,14 @@ matrix:
     - os: linux
       dist: trusty
       sudo: true
+      env:
+        - LOAD_MINI_RACER=1
+      rvm: 2.5
+    - os: linux
+      dist: trusty
+      sudo: true
+      env:
+        - LOAD_THERUBYRACER=1
       rvm: 2.5
     - os: linux
       dist: trusty
