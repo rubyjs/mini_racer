@@ -66,7 +66,7 @@ libv8_rb = Dir.glob('**/libv8.rb').first
 FileUtils.mkdir_p('gemdir')
 unless libv8_rb
   puts "Will try downloading libv8 gem, version #{LIBV8_VERSION}"
-  `#{fixup_libtinfo} gem install --platform ruby --version '= #{LIBV8_VERSION}' --install-dir gemdir libv8`
+  `#{fixup_libtinfo} gem install --version '= #{LIBV8_VERSION}' --install-dir gemdir libv8`
   unless $?.success?
     warn <<EOS
 
