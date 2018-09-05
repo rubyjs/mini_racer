@@ -12,7 +12,7 @@ $CPPFLAGS += " -fpermissive"
 $CPPFLAGS += " -fno-omit-frame-pointer"
 $CPPFLAGS += " -Wno-reserved-user-defined-literal" if RUBY_PLATFORM =~ /darwin/
 
-$LDFLAGS.insert 0, " -stdlib=libstdc++ " if RUBY_PLATFORM =~ /darwin/
+$LDFLAGS.insert 0, $1.to_i < 18 ? " -stdlib=libstdc++ " : " -stdlib=libc++ " if RUBY_PLATFORM =~ /darwin(\d+)/
 
 if ENV['CXX']
   puts "SETTING CXX"
@@ -51,12 +51,22 @@ if enable_config('debug')
   CONFIG['debugflags'] << ' -ggdb3 -O0'
 end
 
+def fixup_libtinfo
+  dirs = %w[/lib64 /usr/lib64 /lib /usr/lib]
+  found_v5 = dirs.map { |d| "#{d}/libtinfo.so.5" }.find &File.method(:file?)
+  return '' if found_v5
+  found_v6 = dirs.map { |d| "#{d}/libtinfo.so.6" }.find &File.method(:file?)
+  return '' unless found_v6
+  FileUtils.ln_s found_v6, 'gemdir/libtinfo.so.5', :force => true
+  "LD_LIBRARY_PATH='#{File.expand_path('gemdir')}:#{ENV['LD_LIBRARY_PATH']}"
+end
+
 LIBV8_VERSION = '6.7.288.46.1'
 libv8_rb = Dir.glob('**/libv8.rb').first
 FileUtils.mkdir_p('gemdir')
 unless libv8_rb
   puts "Will try downloading libv8 gem, version #{LIBV8_VERSION}"
-  `gem install --version '= #{LIBV8_VERSION}' --install-dir gemdir libv8`
+  `#{fixup_libtinfo} gem install --version '= #{LIBV8_VERSION}' --install-dir gemdir libv8`
   unless $?.success?
     warn <<EOS
 

@@ -570,6 +570,13 @@ static VALUE rb_snapshot_load(VALUE self, VALUE str) {
     return Qnil;
 }
 
+static VALUE rb_snapshot_dump(VALUE self, VALUE str) {
+    SnapshotInfo* snapshot_info;
+    Data_Get_Struct(self, SnapshotInfo, snapshot_info);
+
+    return rb_str_new(snapshot_info->data, snapshot_info->raw_size);
+}
+
 static VALUE rb_snapshot_warmup_unsafe(VALUE self, VALUE str) {
     SnapshotInfo* snapshot_info;
     Data_Get_Struct(self, SnapshotInfo, snapshot_info);
@@ -1406,6 +1413,7 @@ extern "C" {
 	rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);
 
 	rb_define_method(rb_cSnapshot, "size", (VALUE(*)(...))&rb_snapshot_size, 0);
+	rb_define_method(rb_cSnapshot, "dump", (VALUE(*)(...))&rb_snapshot_dump, 0);
 	rb_define_method(rb_cSnapshot, "warmup_unsafe!", (VALUE(*)(...))&rb_snapshot_warmup_unsafe, 1);
 	rb_define_private_method(rb_cSnapshot, "load", (VALUE(*)(...))&rb_snapshot_load, 1);
 
