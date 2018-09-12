@@ -1,4 +1,11 @@
 #include <stdio.h>
+
+// workaround for Ruby 2.3.0 and perhaps certain 2.2 versions
+// see https://bugs.ruby-lang.org/issues/11962
+#include <ruby/config.h>
+# undef HAVE_BUILTIN___BUILTIN_CHOOSE_EXPR_CONSTANT_P
+# undef HAVE_BUILTIN___BUILTIN_TYPES_COMPATIBLE_P
+
 #include <ruby.h>
 #include <ruby/version.h>
 #if RUBY_API_VERSION_MAJOR > 1
