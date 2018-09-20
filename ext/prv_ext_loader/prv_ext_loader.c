@@ -66,7 +66,7 @@ static void *_dln_load(const char *file)
 
     INIT_FUNCNAME(&buf, file);
 
-#if defined(__APPLE__) && !defined(RTLD_DEEPBIND)
+#ifndef RTLD_DEEPBIND
 # define RTLD_DEEPBIND 0
 #endif
     /* Load file */
