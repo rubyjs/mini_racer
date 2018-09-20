@@ -61,12 +61,22 @@ def fixup_libtinfo
   "LD_LIBRARY_PATH='#{File.expand_path('gemdir')}:#{ENV['LD_LIBRARY_PATH']}"
 end
 
+def libv8_gem_name
+  is_musl = false
+  begin
+    is_musl = !!(File.read('/proc/self/maps') =~ /ld-musl-x86_64/)
+  rescue; end
+
+  is_musl ? 'libv8-alpine' : 'libv8'
+end
+
 LIBV8_VERSION = '6.7.288.46.1'
 libv8_rb = Dir.glob('**/libv8.rb').first
 FileUtils.mkdir_p('gemdir')
 unless libv8_rb
-  puts "Will try downloading libv8 gem, version #{LIBV8_VERSION}"
-  `#{fixup_libtinfo} gem install --version '= #{LIBV8_VERSION}' --install-dir gemdir libv8`
+  gem_name = libv8_gem_name
+  puts "Will try downloading #{gem_name} gem, version #{LIBV8_VERSION}"
+  `#{fixup_libtinfo} gem install --version '= #{LIBV8_VERSION}' --install-dir gemdir #{gem_name}`
   unless $?.success?
     warn <<EOS
 
