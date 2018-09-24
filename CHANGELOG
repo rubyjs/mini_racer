@@ -1,5 +1,9 @@
 - 06-07-2018
 
+- 0.2.1
+
+  - FEATURE: Mojave macOS support
+
 - 0.2.0
   - FEATURE: context#call to allow for cheaper invocation of functions
   - FIX: rare memory leak when terminating a long running attached function
