@@ -1,8 +1,19 @@
-require "mini_racer/version"
-require "mini_racer_extension"
+require "sqreen/mini_racer/version"
 require "thread"
 require "json"
+require "prv_ext_loader"
+require "pathname"
 
+module Sqreen
+  name = 'sq_mini_racer_extension.' + RbConfig::CONFIG['DLEXT']
+  shlib = $LOAD_PATH
+    .map { |p| (Pathname.new(p) + name) }
+    .find { |p| p.file? }
+
+  raise LoadError, "could not find #{name}" unless shlib
+  PrvExtLoader.load shlib.to_s
+
+# rubocop:disable IndentationConsistency
 module MiniRacer
 
   class Error < ::StandardError; end
@@ -66,8 +77,8 @@ module MiniRacer
 
   class Platform
     class << self
-      def set_flags!(*args, **kwargs)
-        flags_to_strings([args, kwargs]).each do |flag|
+      def set_flags!(*args)
+        flags_to_strings(args).each do |flag|
           # defined in the C class
           set_flag_as_str!(flag)
         end
@@ -344,4 +355,5 @@ module MiniRacer
       warmup_unsafe!(src)
     end
   end
+end
 end

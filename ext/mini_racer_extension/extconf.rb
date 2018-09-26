@@ -1,5 +1,5 @@
 require 'mkmf'
-require 'libv8'
+require 'fileutils'
 
 IS_DARWIN = RUBY_PLATFORM =~ /darwin/
 
@@ -11,6 +11,7 @@ $CPPFLAGS += " -rdynamic" unless $CPPFLAGS.split.include? "-rdynamic"
 $CPPFLAGS += " -fPIC" unless $CPPFLAGS.split.include? "-rdynamic" or IS_DARWIN
 $CPPFLAGS += " -std=c++0x"
 $CPPFLAGS += " -fpermissive"
+$CPPFLAGS += " -fno-omit-frame-pointer"
 
 $CPPFLAGS += " -Wno-reserved-user-defined-literal" if IS_DARWIN
 
@@ -63,6 +64,57 @@ if enable_config('debug')
   CONFIG['debugflags'] << ' -ggdb3 -O0'
 end
 
-Libv8.configure_makefile
+def fixup_libtinfo
+  dirs = %w[/lib64 /usr/lib64 /lib /usr/lib]
+  found_v5 = dirs.map { |d| "#{d}/libtinfo.so.5" }.find &File.method(:file?)
+  return '' if found_v5
+  found_v6 = dirs.map { |d| "#{d}/libtinfo.so.6" }.find &File.method(:file?)
+  return '' unless found_v6
+  FileUtils.ln_s found_v6, 'gemdir/libtinfo.so.5', :force => true
+  "LD_LIBRARY_PATH='#{File.expand_path('gemdir')}:#{ENV['LD_LIBRARY_PATH']}"
+end
 
-create_makefile 'mini_racer_extension'
+def libv8_gem_name
+  is_musl = false
+  begin
+    is_musl = !!(File.read('/proc/self/maps') =~ /ld-musl-x86_64/)
+  rescue; end
+
+  is_musl ? 'libv8-alpine' : 'libv8'
+end
+
+LIBV8_VERSION = '6.7.288.46.1'
+libv8_rb = Dir.glob('**/libv8.rb').first
+FileUtils.mkdir_p('gemdir')
+unless libv8_rb
+  gem_name = libv8_gem_name
+  puts "Will try downloading #{gem_name} gem, version #{LIBV8_VERSION}"
+  `#{fixup_libtinfo} gem install --version '= #{LIBV8_VERSION}' --install-dir gemdir #{gem_name}`
+  unless $?.success?
+    warn <<EOS
+
+WARNING: Could not download a private copy of the libv8 gem. Please make
+sure that you have internet access and that the `gem` binary is available.
+
+EOS
+  end
+
+  libv8_rb = Dir.glob('**/libv8.rb').first
+  unless libv8_rb
+    warn <<EOS
+
+WARNING: Could not find libv8 after the local copy of libv8 having supposedly
+been installed.
+
+EOS
+  end
+end
+
+if libv8_rb
+  $:.unshift(File.dirname(libv8_rb) + '/../ext')
+  $:.unshift File.dirname(libv8_rb)
+end
+
+require 'libv8'
+Libv8.configure_makefile
+create_makefile 'sq_mini_racer_extension'

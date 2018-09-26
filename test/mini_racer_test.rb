@@ -2,6 +2,7 @@ require 'securerandom'
 require 'date'
 require 'test_helper'
 
+module Sqreen
 class MiniRacerTest < Minitest::Test
   # see `test_platform_set_flags_works` below
   MiniRacer::Platform.set_flags! :use_strict
@@ -19,7 +20,7 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_that_it_has_a_version_number
-    refute_nil ::MiniRacer::VERSION
+    refute_nil MiniRacer::VERSION
   end
 
   def test_types
@@ -414,7 +415,7 @@ raise FooError, "I like foos"
     end
   end
 
-  def test_invalid_warmup_sources_throw_an_exception
+  def test_invalid_warmup_sources_throw_an_exception_2
     assert_raises(ArgumentError) do
       MiniRacer::Snapshot.new('function f() { return 1 }').warmup!([])
     end
@@ -726,7 +727,7 @@ raise FooError, "I like foos"
     isolate = MiniRacer::Isolate.new
     context = MiniRacer::Context.new(isolate: isolate)
     context.dispose
-    context2 = MiniRacer::Context.new(isolate: isolate) # Received signal 11 SEGV_MAPERR
+    MiniRacer::Context.new(isolate: isolate) # Received signal 11 SEGV_MAPERR
   end
 
   def test_context_starts_with_no_isolate_value
@@ -750,4 +751,5 @@ raise FooError, "I like foos"
     context.dispose
     assert_nil context.isolate
   end
+end
 end

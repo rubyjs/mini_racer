@@ -1,6 +1,16 @@
 #include <stdio.h>
+
+// workaround for Ruby 2.3.0 and perhaps certain 2.2 versions
+// see https://bugs.ruby-lang.org/issues/11962
+#include <ruby/config.h>
+# undef HAVE_BUILTIN___BUILTIN_CHOOSE_EXPR_CONSTANT_P
+# undef HAVE_BUILTIN___BUILTIN_TYPES_COMPATIBLE_P
+
 #include <ruby.h>
+#include <ruby/version.h>
+#if RUBY_API_VERSION_MAJOR > 1
 #include <ruby/thread.h>
+#endif
 #include <v8.h>
 #include <libplatform/libplatform.h>
 #include <ruby/encoding.h>
@@ -9,6 +19,7 @@
 #include <mutex>
 #include <atomic>
 #include <math.h>
+#include "compat.hpp"
 
 using namespace v8;
 
@@ -154,7 +165,7 @@ static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
 
     if(TYPE(flag_as_str) != T_STRING) {
         rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE" (should be a string)",
-                rb_obj_class(flag_as_str));
+                RB_OBJ_CLASSNAME(flag_as_str));
     }
 
     platform_lock.lock();
@@ -285,7 +296,11 @@ static void prepare_result(MaybeLocal<Value> v8res,
     }
 }
 
-void*
+#if RUBY_API_VERSION_MAJOR > 1
+static void*
+#else
+static VALUE
+#endif
 nogvl_context_eval(void* arg) {
 
     EvalParams* eval_params = (EvalParams*)arg;
@@ -344,7 +359,7 @@ nogvl_context_eval(void* arg) {
 
     isolate->SetData(IN_GVL, (void*)true);
 
-    return NULL;
+    return 0;
 }
 
 // assumes isolate locking is in place
@@ -545,7 +560,7 @@ static VALUE rb_snapshot_load(VALUE self, VALUE str) {
 
     if(TYPE(str) != T_STRING) {
         rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE " (should be a string)",
-                rb_obj_class(str));
+                RB_OBJ_CLASSNAME(str));
     }
 
     init_v8();
@@ -575,7 +590,7 @@ static VALUE rb_snapshot_warmup_unsafe(VALUE self, VALUE str) {
 
     if(TYPE(str) != T_STRING) {
         rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE " (should be a string)",
-                rb_obj_class(str));
+                RB_OBJ_CLASSNAME(str));
     }
 
     init_v8();
@@ -791,11 +806,11 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
 
     if(TYPE(str) != T_STRING) {
         rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE " (should be a string)",
-                rb_obj_class(str));
+                RB_OBJ_CLASSNAME(str));
     }
     if(filename != Qnil && TYPE(filename) != T_STRING) {
         rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE " (should be nil or a string)",
-                rb_obj_class(filename));
+                RB_OBJ_CLASSNAME(filename));
     }
 
     {
@@ -834,7 +849,11 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
 	eval_result.message = NULL;
 	eval_result.backtrace = NULL;
 
+#if RUBY_API_VERSION_MAJOR > 1
 	rb_thread_call_without_gvl(nogvl_context_eval, &eval_params, unblock_eval, &eval_params);
+#else
+	rb_thread_blocking_region(nogvl_context_eval, &eval_params, unblock_eval, &eval_params);
+#endif
     }
 
     return convert_result_to_ruby(self, eval_result);
@@ -949,6 +968,10 @@ gvl_ruby_callback(void* data) {
     return NULL;
 }
 
+#if RUBY_API_VERSION_MAJOR < 2
+extern "C" void *rb_thread_call_with_gvl(void *(*func)(void *), void *data1);
+#endif
+
 static void ruby_callback(const FunctionCallbackInfo<Value>& args) {
     bool has_gvl = (bool)args.GetIsolate()->GetData(IN_GVL);
 
@@ -1022,11 +1045,11 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
 
     // always raise out of V8 context
     if (parse_error) {
-	rb_raise(rb_eParseError, "Invalid object %" PRIsVALUE, parent_object);
+    rb_raise(rb_eParseError, "Invalid object %" PRIsVALUE, RB_OBJ_STRING(parent_object));
     }
 
     if (attach_error) {
-	rb_raise(rb_eParseError, "Was expecting %" PRIsVALUE" to be an object", parent_object);
+    rb_raise(rb_eParseError, "Was expecting %" PRIsVALUE" to be an object", RB_OBJ_STRING(parent_object));
     }
 
     return Qnil;
@@ -1215,12 +1238,16 @@ rb_context_dispose(VALUE self) {
     return Qnil;
 }
 
+#if RUBY_API_VERSION_MAJOR > 1
 static void*
+#else
+static VALUE
+#endif
 nogvl_context_call(void *args) {
 
     FunctionCall *call = (FunctionCall *) args;
     if (!call) {
-        return NULL;
+        return 0;
     }
     Isolate* isolate = call->context_info->isolate_info->isolate;
 
@@ -1246,7 +1273,7 @@ nogvl_context_call(void *args) {
 
     isolate->SetData(IN_GVL, (void*)true);
 
-    return NULL;
+    return 0;
 }
 
 static void unblock_function(void *args) {
@@ -1319,8 +1346,11 @@ rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
 		    call.argv[i] = convert_ruby_to_v8(isolate, call_argv[i]);
 		}
 	    }
-
+#if RUBY_API_VERSION_MAJOR > 1
 	    rb_thread_call_without_gvl(nogvl_context_call, &call, unblock_function, &call);
+#else
+	    rb_thread_blocking_region(nogvl_context_call, &call, unblock_function, &call);
+#endif
 	    free(call.argv);
 
 	}
@@ -1348,9 +1378,10 @@ static VALUE rb_context_create_isolate_value(VALUE self) {
 
 extern "C" {
 
-    void Init_mini_racer_extension ( void )
+    void Init_sq_mini_racer_extension ( void )
     {
-	VALUE rb_mMiniRacer = rb_define_module("MiniRacer");
+        VALUE rb_mSqreen = rb_define_module("Sqreen");
+        VALUE rb_mMiniRacer = rb_define_module_under(rb_mSqreen, "MiniRacer");
 	rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);
 	rb_cSnapshot = rb_define_class_under(rb_mMiniRacer, "Snapshot", rb_cObject);
 	rb_cIsolate = rb_define_class_under(rb_mMiniRacer, "Isolate", rb_cObject);

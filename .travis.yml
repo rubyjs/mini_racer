@@ -1,22 +1,64 @@
 language: ruby
-rvm:
-  - 2.3
-  - 2.4
-  - 2.5
-  - ruby-head
 matrix:
   include:
-    - rvm: 2.5.1
-      os: osx
-      osx_image: xcode9.4
-    - rvm: 2.4.0
-      os: osx
-      osx_image: xcode8.3
-    - rvm: 2.4.0
-      os: osx
+    - os: linux
+      dist: trusty
+      sudo: true
+      rvm: 1.9
+    - os: linux
+      dist: trusty
+      sudo: true
+      rvm: 2.0
+    - os: linux
+      dist: trusty
+      sudo: true
+      rvm: 2.1
+    - os: linux
+      dist: trusty
+      sudo: true
+      rvm: 2.2
+    - os: linux
+      dist: trusty
+      sudo: true
+      rvm: 2.3
+    - os: linux
+      dist: trusty
+      sudo: true
+      rvm: 2.4
+    - os: linux
+      dist: trusty
+      sudo: true
+      env:
+        - LOAD_MINI_RACER=1
+      rvm: 2.5
+    - os: linux
+      dist: trusty
+      sudo: true
+      env:
+        - LOAD_THERUBYRACER=1
+      rvm: 2.5
+    - os: linux
+      dist: trusty
+      sudo: true
+      rvm: ruby-head
+    - os: osx
       osx_image: xcode7.3
-dist: trusty
-sudo: true
+      rvm: 2.1
+    - os: osx
+      osx_image: xcode8.3
+      rvm: 2.1
+    - os: osx
+      osx_image: xcode9.4
+      rvm: 2.1
+    - os: osx
+      osx_image: xcode9.4
+      rvm: 2.1
+    - os: osx
+      osx_image: xcode10
+      rvm: 2.3
+    - os: osx
+      osx_image: xcode10
+      rvm: 2.5
 before_install:
   - gem update --system
   - gem install bundler -v 1.16.2
