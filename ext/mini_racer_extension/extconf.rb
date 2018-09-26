@@ -1,18 +1,31 @@
 require 'mkmf'
 require 'fileutils'
 
+IS_DARWIN = RUBY_PLATFORM =~ /darwin/
+
 have_library('pthread')
-have_library('objc') if RUBY_PLATFORM =~ /darwin/
+have_library('objc') if IS_DARWIN
 $CPPFLAGS += " -Wall" unless $CPPFLAGS.split.include? "-Wall"
 $CPPFLAGS += " -g" unless $CPPFLAGS.split.include? "-g"
 $CPPFLAGS += " -rdynamic" unless $CPPFLAGS.split.include? "-rdynamic"
-$CPPFLAGS += " -fPIC" unless $CPPFLAGS.split.include? "-rdynamic" or RUBY_PLATFORM =~ /darwin/
+$CPPFLAGS += " -fPIC" unless $CPPFLAGS.split.include? "-rdynamic" or IS_DARWIN
 $CPPFLAGS += " -std=c++0x"
 $CPPFLAGS += " -fpermissive"
 $CPPFLAGS += " -fno-omit-frame-pointer"
-$CPPFLAGS += " -Wno-reserved-user-defined-literal" if RUBY_PLATFORM =~ /darwin/
 
-$LDFLAGS.insert 0, $1.to_i < 18 ? " -stdlib=libstdc++ " : " -stdlib=libc++ " if RUBY_PLATFORM =~ /darwin(\d+)/
+$CPPFLAGS += " -Wno-reserved-user-defined-literal" if IS_DARWIN
+
+MAC_OS_VERSION = begin
+  if IS_DARWIN
+    # note, RUBY_PLATFORM is hardcoded on compile, it can not be trusted
+    # sw_vers can be trusted so use it
+    `sw_vers -productVersion`.to_f rescue 0.0
+  else
+    0.0
+  end
+end
+
+$LDFLAGS.insert 0, MAC_OS_VERSION < 10.14 ? " -stdlib=libstdc++ " : " -stdlib=libc++ " if IS_DARWIN
 
 if ENV['CXX']
   puts "SETTING CXX"
@@ -41,7 +54,7 @@ installing GCC 4.8. See mini_racer's README.md for more information.
 EOS
 end
 
-CONFIG['LDSHARED'] = '$(CXX) -shared' unless RUBY_PLATFORM =~ /darwin/
+CONFIG['LDSHARED'] = '$(CXX) -shared' unless IS_DARWIN
 if CONFIG['warnflags']
   CONFIG['warnflags'].gsub!('-Wdeclaration-after-statement', '')
   CONFIG['warnflags'].gsub!('-Wimplicit-function-declaration', '')
