@@ -15,17 +15,7 @@ $CPPFLAGS += " -fno-omit-frame-pointer"
 
 $CPPFLAGS += " -Wno-reserved-user-defined-literal" if IS_DARWIN
 
-MAC_OS_VERSION = begin
-  if IS_DARWIN
-    # note, RUBY_PLATFORM is hardcoded on compile, it can not be trusted
-    # sw_vers can be trusted so use it
-    `sw_vers -productVersion`.to_f rescue 0.0
-  else
-    0.0
-  end
-end
-
-$LDFLAGS.insert 0, MAC_OS_VERSION < 10.14 ? " -stdlib=libstdc++ " : " -stdlib=libc++ " if IS_DARWIN
+$LDFLAGS.insert(0, " -stdlib=libc++ ") if IS_DARWIN
 
 if ENV['CXX']
   puts "SETTING CXX"
