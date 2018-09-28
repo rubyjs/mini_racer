@@ -1,6 +1,9 @@
-- Unreleased
+- 28-09-2018
 
-  - Drop macOS feature detection and always link against libc++ macOS
+- 0.2.3
+
+  - Drop all conditional logic from Mini Racer compilation for clang, always
+	  rely on MacOS being High Sierra or up
 
 - 26-09-2018
 
