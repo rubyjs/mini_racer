@@ -1,3 +1,7 @@
+- Unreleased
+
+  - Drop macOS feature detection and always link against libc++ macOS
+
 - 26-09-2018
 
 - 0.2.2
