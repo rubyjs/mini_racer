@@ -2,9 +2,11 @@ require 'mkmf'
 require 'fileutils'
 
 IS_DARWIN = RUBY_PLATFORM =~ /darwin/
+IS_SOLARIS = RUBY_PLATFORM =~ /solaris/
 
 have_library('pthread')
 have_library('objc') if IS_DARWIN
+$CPPFLAGS.gsub! /-std=\w+/, ''
 $CPPFLAGS += " -Wall" unless $CPPFLAGS.split.include? "-Wall"
 $CPPFLAGS += " -g" unless $CPPFLAGS.split.include? "-g"
 $CPPFLAGS += " -rdynamic" unless $CPPFLAGS.split.include? "-rdynamic"
@@ -65,6 +67,8 @@ def fixup_libtinfo
 end
 
 def libv8_gem_name
+  return "libv8-solaris" if IS_SOLARIS
+
   is_musl = false
   begin
     is_musl = !!(File.read('/proc/self/maps') =~ /ld-musl-x86_64/)
