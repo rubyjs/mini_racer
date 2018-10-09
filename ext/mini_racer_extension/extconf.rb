@@ -77,13 +77,44 @@ def libv8_gem_name
   is_musl ? 'libv8-alpine' : 'libv8'
 end
 
+# old rubygem versions prefer source gems to binary ones
+# ... and their --platform switch is broken too, as it leaves the 'ruby'
+# platform in Gem.platforms.
+def force_platform_gem
+  gem_version = `gem --version`
+  return 'gem' unless $?.success?
+
+  return 'gem' if gem_version.to_f.zero? || gem_version.to_f >= 2.3
+  return 'gem' if RUBY_PLATFORM != 'x86_64-linux'
+
+  gem_binary = `which gem`
+  return 'gem' unless $?.success?
+
+  ruby = File.foreach(gem_binary.strip).first.sub(/^#!/, '').strip
+  unless File.file? ruby
+    warn "No valid ruby: #{ruby}"
+    return 'gem'
+  end
+
+  require 'tempfile'
+  file = Tempfile.new('sq_mini_racer')
+  file << <<EOS
+require 'rubygems'
+Gem.platforms.reject! { |it| it == 'ruby' }
+#{IO.read(gem_binary.strip)}
+EOS
+  file.close
+  "#{ruby} '#{file.path}'"
+end
+
 LIBV8_VERSION = '6.7.288.46.1'
 libv8_rb = Dir.glob('**/libv8.rb').first
 FileUtils.mkdir_p('gemdir')
 unless libv8_rb
   gem_name = libv8_gem_name
-  puts "Will try downloading #{gem_name} gem, version #{LIBV8_VERSION}"
-  `#{fixup_libtinfo} gem install --version '= #{LIBV8_VERSION}' --install-dir gemdir #{gem_name}`
+  cmd = "#{fixup_libtinfo} #{force_platform_gem} install --version '= #{LIBV8_VERSION}' --install-dir gemdir #{gem_name}"
+  puts "Will try downloading #{gem_name} gem: #{cmd}"
+  `#{cmd}`
   unless $?.success?
     warn <<EOS
 
