@@ -2,6 +2,6 @@ module Sqreen
 module MiniRacer
   # part before qualifier is the number of the last upstream release
   # since we synced with it
-  VERSION = "0.2.3.sqreen2"
+  VERSION = "0.2.3.sqreen3"
 end
 end

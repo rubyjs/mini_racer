@@ -63,7 +63,7 @@ def fixup_libtinfo
   found_v6 = dirs.map { |d| "#{d}/libtinfo.so.6" }.find &File.method(:file?)
   return '' unless found_v6
   FileUtils.ln_s found_v6, 'gemdir/libtinfo.so.5', :force => true
-  "LD_LIBRARY_PATH='#{File.expand_path('gemdir')}:#{ENV['LD_LIBRARY_PATH']}"
+  "LD_LIBRARY_PATH='#{File.expand_path('gemdir')}:#{ENV['LD_LIBRARY_PATH']}'"
 end
 
 def libv8_gem_name
