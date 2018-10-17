@@ -320,7 +320,7 @@ module MiniRacer
         ctx = MiniRacer::Context.new
         ctx.eval(str)
       rescue MiniRacer::RuntimeError => e
-        raise MiniRacer::SnapshotError.new,  e.message
+        raise MiniRacer::SnapshotError.new, e.message, e.backtrace
       end
 
       @source = str
@@ -338,7 +338,7 @@ module MiniRacer
         ctx.eval(@source)
         ctx.eval(src)
       rescue MiniRacer::RuntimeError => e
-        raise MiniRacer::SnapshotError.new,  e.message
+        raise MiniRacer::SnapshotError.new, e.message, e.backtrace
       end
 
       warmup_unsafe!(src)
