@@ -70,6 +70,10 @@ public:
         }
     }
 
+    int refs() {
+	return refs_count;
+    }
+
     static void* operator new(size_t size) {
         return ruby_xmalloc(size);
     }
@@ -1071,21 +1075,50 @@ void free_isolate(IsolateInfo* isolate_info) {
     delete isolate_info->allocator;
 }
 
+static void *free_context_raw(void* arg) {
+    ContextInfo* context_info = (ContextInfo*)arg;
+    IsolateInfo* isolate_info = context_info->isolate_info;
+    Persistent<Context>* context = context_info->context;
+
+    if (context && isolate_info && isolate_info->isolate) {
+        Locker lock(isolate_info->isolate);
+        v8::Isolate::Scope isolate_scope(isolate_info->isolate);
+        context->Reset();
+        delete context;
+    }
+
+    if (isolate_info) {
+        isolate_info->release();
+    }
+
+    xfree(context_info);
+    return NULL;
+}
+
 // destroys everything except freeing the ContextInfo struct (see deallocate())
 static void free_context(ContextInfo* context_info) {
 
     IsolateInfo* isolate_info = context_info->isolate_info;
 
+    ContextInfo* context_info_copy = ALLOC(ContextInfo);
+    context_info_copy->isolate_info = context_info->isolate_info;
+    context_info_copy->context = context_info->context;
+
+    if (isolate_info && isolate_info->refs() > 1) {
+	pthread_t free_context_thread;
+	if (pthread_create(&free_context_thread, NULL, free_context_raw, (void*)context_info_copy)) {
+            fprintf(stderr, "WARNING failed to release memory in MiniRacer, thread to release could not be created, process will leak memory\n");
+	}
+
+    } else {
+	free_context_raw(context_info_copy);
+    }
+
     if (context_info->context && isolate_info && isolate_info->isolate) {
-        Locker lock(isolate_info->isolate);
-        v8::Isolate::Scope isolate_scope(isolate_info->isolate);
-        context_info->context->Reset();
-        delete context_info->context;
 	context_info->context = NULL;
     }
 
     if (isolate_info) {
-        isolate_info->release();
         context_info->isolate_info = NULL;
     }
 }
