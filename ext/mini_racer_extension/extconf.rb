@@ -6,7 +6,7 @@ IS_SOLARIS = RUBY_PLATFORM =~ /solaris/
 
 have_library('pthread')
 have_library('objc') if IS_DARWIN
-$CPPFLAGS.gsub! /-std=\w+/, ''
+$CPPFLAGS.gsub! /-std=[^\s]+/, ''
 $CPPFLAGS += " -Wall" unless $CPPFLAGS.split.include? "-Wall"
 $CPPFLAGS += " -g" unless $CPPFLAGS.split.include? "-g"
 $CPPFLAGS += " -rdynamic" unless $CPPFLAGS.split.include? "-rdynamic"
