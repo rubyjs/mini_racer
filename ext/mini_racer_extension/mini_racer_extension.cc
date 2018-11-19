@@ -281,9 +281,9 @@ static void prepare_result(MaybeLocal<Value> v8res,
                 Local<String> tmp = String::NewFromUtf8(isolate, "JavaScript was terminated (either by timeout or explicitly)");
                 evalRes.message->Reset(isolate, tmp);
             }
-            if (!trycatch.StackTrace().IsEmpty()) {
+            if (!trycatch.StackTrace(context).IsEmpty()) {
                 evalRes.backtrace = new Persistent<Value>();
-                evalRes.backtrace->Reset(isolate, trycatch.StackTrace()->ToString());
+                evalRes.backtrace->Reset(isolate, trycatch.StackTrace(context).ToLocalChecked()->ToString());
             }
         }
     }
