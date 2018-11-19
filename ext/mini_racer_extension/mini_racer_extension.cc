@@ -266,8 +266,8 @@ static void prepare_result(MaybeLocal<Value> v8res,
                 int len;
                 len = snprintf(buf, sizeof(buf), "%s at %s:%i:%i", *String::Utf8Value(isolate, message->Get()),
                                *String::Utf8Value(isolate, message->GetScriptResourceName()->ToString()),
-                               message->GetLineNumber(),
-                               message->GetStartColumn());
+                               message->GetLineNumber(context).ToChecked(),
+                               message->GetStartColumn(context).ToChecked());
                 if ((size_t) len >= sizeof(buf)) {
                     len = sizeof(buf) - 1;
                     buf[len] = '\0';
