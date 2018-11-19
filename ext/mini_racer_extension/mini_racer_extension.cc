@@ -264,8 +264,8 @@ static void prepare_result(MaybeLocal<Value> v8res,
                 Local<Message> message = trycatch.Message();
                 char buf[1000];
                 int len;
-                len = snprintf(buf, sizeof(buf), "%s at %s:%i:%i", *String::Utf8Value(message->Get()),
-                               *String::Utf8Value(message->GetScriptResourceName()->ToString()),
+                len = snprintf(buf, sizeof(buf), "%s at %s:%i:%i", *String::Utf8Value(isolate, message->Get()),
+                               *String::Utf8Value(isolate, message->GetScriptResourceName()->ToString()),
                                message->GetLineNumber(),
                                message->GetStartColumn());
                 if ((size_t) len >= sizeof(buf)) {
@@ -432,7 +432,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
     }
 
     Local<String> rstr = value->ToString();
-    return rb_enc_str_new(*String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
+    return rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
 }
 
 static VALUE convert_v8_to_ruby(Isolate* isolate,
@@ -765,7 +765,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
 
         if (result.json) {
             Local<String> rstr = tmp->ToString();
-            VALUE json_string = rb_enc_str_new(*String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
+            VALUE json_string = rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
             ret = rb_funcall(rb_mJSON, rb_intern("parse"), 1, json_string);
         } else {
             ret = convert_v8_to_ruby(isolate, *p_ctx, tmp);
