@@ -263,11 +263,21 @@ static void prepare_result(MaybeLocal<Value> v8res,
                 evalRes.message = new Persistent<Value>();
                 Local<Message> message = trycatch.Message();
                 char buf[1000];
-                int len;
+                int len, line, column;
+
+                if (!message->GetLineNumber(context).To(&line)) {
+                  line = 0;
+                }
+
+                if (!message->GetStartColumn(context).To(&column)) {
+                  column = 0;
+                }
+
                 len = snprintf(buf, sizeof(buf), "%s at %s:%i:%i", *String::Utf8Value(isolate, message->Get()),
                                *String::Utf8Value(isolate, message->GetScriptResourceName()->ToString()),
-                               message->GetLineNumber(context).ToChecked(),
-                               message->GetStartColumn(context).ToChecked());
+                               line,
+                               column);
+
                 if ((size_t) len >= sizeof(buf)) {
                     len = sizeof(buf) - 1;
                     buf[len] = '\0';
