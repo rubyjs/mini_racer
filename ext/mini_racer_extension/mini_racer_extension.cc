@@ -1271,6 +1271,19 @@ rb_context_dispose(VALUE self) {
     return Qnil;
 }
 
+static VALUE
+rb_context_low_memory_notification(VALUE self) {
+
+    ContextInfo* context_info;
+    Data_Get_Struct(self, ContextInfo, context_info);
+
+    if (context_info->isolate_info && context_info->isolate_info->isolate) {
+        context_info->isolate_info->isolate->LowMemoryNotification();
+    }
+
+    return Qnil;
+}
+
 #if RUBY_API_VERSION_MAJOR > 1
 static void*
 #else
@@ -1438,7 +1451,8 @@ extern "C" {
 
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
 	rb_define_method(rb_cContext, "dispose_unsafe", (VALUE(*)(...))&rb_context_dispose, 0);
-	rb_define_method(rb_cContext, "heap_stats", (VALUE(*)(...))&rb_heap_stats, 0);
+       rb_define_method(rb_cContext, "low_memory_notification", (VALUE(*)(...))&rb_context_low_memory_notification, 0);
+       rb_define_method(rb_cContext, "heap_stats", (VALUE(*)(...))&rb_heap_stats, 0);
 	rb_define_private_method(rb_cContext, "create_isolate_value",(VALUE(*)(...))&rb_context_create_isolate_value, 0);
 	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 2);
 	rb_define_private_method(rb_cContext, "call_unsafe", (VALUE(*)(...))&rb_context_call_unsafe, -1);
