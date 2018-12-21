@@ -1,6 +1,6 @@
 require 'securerandom'
 require 'date'
-require 'test_helper'
+require_relative 'test_helper'
 
 module Sqreen
 class MiniRacerTest < Minitest::Test
@@ -148,6 +148,16 @@ class MiniRacerTest < Minitest::Test
   def test_es6_arrow_functions
     context = MiniRacer::Context.new
     assert_equal 42, context.eval('var adder=(x,y)=>x+y; adder(21,21);')
+  end
+
+  def test_low_memory_notification
+    context = MiniRacer::Context.new
+    context.eval("this.a = []; for (var i = 0; i < 100000; i++) { this.a[i] = i*2 }")
+    context.eval("this.a = undefined")
+    before = context.heap_stats[:total_heap_size]
+    context.low_memory_notification
+    after = context.heap_stats[:total_heap_size]
+    assert before > after
   end
 
   def test_concurrent_access
@@ -374,9 +384,14 @@ raise FooError, "I like foos"
   end
 
   def test_invalid_snapshots_throw_an_exception
-    assert_raises(MiniRacer::SnapshotError) do
+    begin
       MiniRacer::Snapshot.new('var foo = bar;')
+    rescue MiniRacer::SnapshotError => e
+      assert(e.backtrace[0].include? 'JavaScript')
+      got_error = true
     end
+
+    assert(got_error, "should raise")
   end
 
   def test_an_empty_snapshot_is_valid

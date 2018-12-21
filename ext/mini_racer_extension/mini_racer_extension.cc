@@ -81,6 +81,10 @@ public:
         }
     }
 
+    int refs() {
+	return refs_count;
+    }
+
     static void* operator new(size_t size) {
         return ruby_xmalloc(size);
     }
@@ -207,9 +211,9 @@ static void gc_callback(Isolate *isolate, GCType type, GCCallbackFlags flags) {
 
     size_t softlimit = *(size_t*) isolate->GetData(MEM_SOFTLIMIT_VALUE);
 
-    HeapStatistics* stats = new HeapStatistics();
-    isolate->GetHeapStatistics(stats);
-    size_t used = stats->used_heap_size();
+    HeapStatistics stats;
+    isolate->GetHeapStatistics(&stats);
+    size_t used = stats.used_heap_size();
 
     if(used > softlimit) {
         isolate->SetData(MEM_SOFTLIMIT_REACHED, (void*)true);
@@ -271,8 +275,8 @@ static void prepare_result(MaybeLocal<Value> v8res,
                 Local<Message> message = trycatch.Message();
                 char buf[1000];
                 int len;
-                len = snprintf(buf, sizeof(buf), "%s at %s:%i:%i", *String::Utf8Value(message->Get()),
-                               *String::Utf8Value(message->GetScriptResourceName()->ToString()),
+                len = snprintf(buf, sizeof(buf), "%s at %s:%i:%i", *String::Utf8Value(isolate, message->Get()),
+                               *String::Utf8Value(isolate, message->GetScriptResourceName()->ToString()),
                                message->GetLineNumber(),
                                message->GetStartColumn());
                 if ((size_t) len >= sizeof(buf)) {
@@ -288,9 +292,9 @@ static void prepare_result(MaybeLocal<Value> v8res,
                 Local<String> tmp = String::NewFromUtf8(isolate, "JavaScript was terminated (either by timeout or explicitly)");
                 evalRes.message->Reset(isolate, tmp);
             }
-            if (!trycatch.StackTrace().IsEmpty()) {
+            if (!trycatch.StackTrace(context).IsEmpty()) {
                 evalRes.backtrace = new Persistent<Value>();
-                evalRes.backtrace->Reset(isolate, trycatch.StackTrace()->ToString());
+                evalRes.backtrace->Reset(isolate, trycatch.StackTrace(context).ToLocalChecked()->ToString());
             }
         }
     }
@@ -443,7 +447,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
     }
 
     Local<String> rstr = value->ToString();
-    return rb_enc_str_new(*String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
+    return rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
 }
 
 static VALUE convert_v8_to_ruby(Isolate* isolate,
@@ -776,7 +780,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
 
         if (result.json) {
             Local<String> rstr = tmp->ToString();
-            VALUE json_string = rb_enc_str_new(*String::Utf8Value(rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
+            VALUE json_string = rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
             ret = rb_funcall(rb_mJSON, rb_intern("parse"), 1, json_string);
         } else {
             ret = convert_v8_to_ruby(isolate, *p_ctx, tmp);
@@ -1094,21 +1098,50 @@ void free_isolate(IsolateInfo* isolate_info) {
     delete isolate_info->allocator;
 }
 
+static void *free_context_raw(void* arg) {
+    ContextInfo* context_info = (ContextInfo*)arg;
+    IsolateInfo* isolate_info = context_info->isolate_info;
+    Persistent<Context>* context = context_info->context;
+
+    if (context && isolate_info && isolate_info->isolate) {
+        Locker lock(isolate_info->isolate);
+        v8::Isolate::Scope isolate_scope(isolate_info->isolate);
+        context->Reset();
+        delete context;
+    }
+
+    if (isolate_info) {
+        isolate_info->release();
+    }
+
+    xfree(context_info);
+    return NULL;
+}
+
 // destroys everything except freeing the ContextInfo struct (see deallocate())
 static void free_context(ContextInfo* context_info) {
 
     IsolateInfo* isolate_info = context_info->isolate_info;
 
+    ContextInfo* context_info_copy = ALLOC(ContextInfo);
+    context_info_copy->isolate_info = context_info->isolate_info;
+    context_info_copy->context = context_info->context;
+
+    if (isolate_info && isolate_info->refs() > 1) {
+	pthread_t free_context_thread;
+	if (pthread_create(&free_context_thread, NULL, free_context_raw, (void*)context_info_copy)) {
+            fprintf(stderr, "WARNING failed to release memory in MiniRacer, thread to release could not be created, process will leak memory\n");
+	}
+
+    } else {
+	free_context_raw(context_info_copy);
+    }
+
     if (context_info->context && isolate_info && isolate_info->isolate) {
-        Locker lock(isolate_info->isolate);
-        v8::Isolate::Scope isolate_scope(isolate_info->isolate);
-        context_info->context->Reset();
-        delete context_info->context;
 	context_info->context = NULL;
     }
 
     if (isolate_info) {
-        isolate_info->release();
         context_info->isolate_info = NULL;
     }
 }
@@ -1234,6 +1267,19 @@ rb_context_dispose(VALUE self) {
     Data_Get_Struct(self, ContextInfo, context_info);
 
     free_context(context_info);
+
+    return Qnil;
+}
+
+static VALUE
+rb_context_low_memory_notification(VALUE self) {
+
+    ContextInfo* context_info;
+    Data_Get_Struct(self, ContextInfo, context_info);
+
+    if (context_info->isolate_info && context_info->isolate_info->isolate) {
+        context_info->isolate_info->isolate->LowMemoryNotification();
+    }
 
     return Qnil;
 }
@@ -1405,7 +1451,8 @@ extern "C" {
 
 	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
 	rb_define_method(rb_cContext, "dispose_unsafe", (VALUE(*)(...))&rb_context_dispose, 0);
-	rb_define_method(rb_cContext, "heap_stats", (VALUE(*)(...))&rb_heap_stats, 0);
+       rb_define_method(rb_cContext, "low_memory_notification", (VALUE(*)(...))&rb_context_low_memory_notification, 0);
+       rb_define_method(rb_cContext, "heap_stats", (VALUE(*)(...))&rb_heap_stats, 0);
 	rb_define_private_method(rb_cContext, "create_isolate_value",(VALUE(*)(...))&rb_context_create_isolate_value, 0);
 	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 2);
 	rb_define_private_method(rb_cContext, "call_unsafe", (VALUE(*)(...))&rb_context_call_unsafe, -1);
