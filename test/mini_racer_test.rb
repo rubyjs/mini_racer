@@ -374,9 +374,14 @@ raise FooError, "I like foos"
   end
 
   def test_invalid_snapshots_throw_an_exception
-    assert_raises(MiniRacer::SnapshotError) do
+    begin
       MiniRacer::Snapshot.new('var foo = bar;')
+    rescue MiniRacer::SnapshotError => e
+      assert(e.backtrace[0].include? 'JavaScript')
+      got_error = true
     end
+
+    assert(got_error, "should raise")
   end
 
   def test_an_empty_snapshot_is_valid
