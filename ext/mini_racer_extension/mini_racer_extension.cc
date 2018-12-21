@@ -200,9 +200,9 @@ static void gc_callback(Isolate *isolate, GCType type, GCCallbackFlags flags) {
 
     size_t softlimit = *(size_t*) isolate->GetData(MEM_SOFTLIMIT_VALUE);
 
-    HeapStatistics* stats = new HeapStatistics();
-    isolate->GetHeapStatistics(stats);
-    size_t used = stats->used_heap_size();
+    HeapStatistics stats;
+    isolate->GetHeapStatistics(&stats);
+    size_t used = stats.used_heap_size();
 
     if(used > softlimit) {
         isolate->SetData(MEM_SOFTLIMIT_REACHED, (void*)true);
