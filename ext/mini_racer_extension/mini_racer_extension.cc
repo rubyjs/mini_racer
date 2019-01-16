@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <string.h>
+#include <assert.h>
 
 // workaround for Ruby 2.3.0 and perhaps certain 2.2 versions
 // see https://bugs.ruby-lang.org/issues/11962
@@ -20,6 +22,7 @@
 #include <atomic>
 #include <math.h>
 #include "compat.hpp"
+#include "simdutf8check.h"
 
 using namespace v8;
 
@@ -82,7 +85,7 @@ public:
     }
 
     int refs() {
-	return refs_count;
+        return refs_count;
     }
 
     static void* operator new(size_t size) {
@@ -330,13 +333,13 @@ nogvl_context_eval(void* arg) {
     MaybeLocal<Script> parsed_script;
 
     if (eval_params->filename) {
-	origin = new v8::ScriptOrigin(*eval_params->filename);
+        origin = new v8::ScriptOrigin(*eval_params->filename);
     }
 
     parsed_script = Script::Compile(context, *eval_params->eval, origin);
 
     if (origin) {
-	delete origin;
+        delete origin;
     }
 
     result->parsed = !parsed_script.IsEmpty();
@@ -347,8 +350,8 @@ nogvl_context_eval(void* arg) {
 
     MaybeLocal<Value> maybe_value;
     if (!result->parsed) {
-	result->message = new Persistent<Value>();
-	result->message->Reset(isolate, trycatch.Exception());
+        result->message = new Persistent<Value>();
+        result->message->Reset(isolate, trycatch.Exception());
     } else {
         // parsing successful
         if (eval_params->max_memory > 0) {
@@ -374,41 +377,41 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
     HandleScope scope(isolate);
 
     if (value->IsNull() || value->IsUndefined()){
-	return Qnil;
+        return Qnil;
     }
 
     if (value->IsInt32()) {
-     return INT2FIX(value->Int32Value());
+        return INT2FIX(value->Int32Value());
     }
 
     if (value->IsNumber()) {
-      return rb_float_new(value->NumberValue());
+        return rb_float_new(value->NumberValue());
     }
 
     if (value->IsTrue()) {
-      return Qtrue;
+        return Qtrue;
     }
 
     if (value->IsFalse()) {
-      return Qfalse;
+        return Qfalse;
     }
 
     if (value->IsArray()) {
       VALUE rb_array = rb_ary_new();
       Local<Array> arr = Local<Array>::Cast(value);
       for(uint32_t i=0; i < arr->Length(); i++) {
-	  Local<Value> element = arr->Get(i);
-	  VALUE rb_elem = convert_v8_to_ruby(isolate, context, element);
-	  if (rb_funcall(rb_elem, rb_intern("class"), 0) == rb_cFailedV8Conversion) {
-	    return rb_elem;
-	  }
+          Local<Value> element = arr->Get(i);
+          VALUE rb_elem = convert_v8_to_ruby(isolate, context, element);
+          if (rb_funcall(rb_elem, rb_intern("class"), 0) == rb_cFailedV8Conversion) {
+            return rb_elem;
+          }
           rb_ary_push(rb_array, rb_elem);
       }
       return rb_array;
     }
 
     if (value->IsFunction()){
-	return rb_funcall(rb_cJavaScriptFunction, rb_intern("new"), 0);
+        return rb_funcall(rb_cJavaScriptFunction, rb_intern("new"), 0);
     }
 
     if (value->IsDate()){
@@ -420,30 +423,30 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
     }
 
     if (value->IsObject()) {
-	VALUE rb_hash = rb_hash_new();
-	TryCatch trycatch(isolate);
+        VALUE rb_hash = rb_hash_new();
+        TryCatch trycatch(isolate);
 
-	Local<Object> object = value->ToObject();
-	auto maybe_props = object->GetOwnPropertyNames(context);
-	if (!maybe_props.IsEmpty()) {
-	    Local<Array> props = maybe_props.ToLocalChecked();
-	    for(uint32_t i=0; i < props->Length(); i++) {
-	     Local<Value> key = props->Get(i);
-	     VALUE rb_key = convert_v8_to_ruby(isolate, context, key);
-	     Local<Value> prop_value = object->Get(key);
-	     // this may have failed due to Get raising
+        Local<Object> object = value->ToObject();
+        auto maybe_props = object->GetOwnPropertyNames(context);
+        if (!maybe_props.IsEmpty()) {
+            Local<Array> props = maybe_props.ToLocalChecked();
+            for(uint32_t i=0; i < props->Length(); i++) {
+             Local<Value> key = props->Get(i);
+             VALUE rb_key = convert_v8_to_ruby(isolate, context, key);
+             Local<Value> prop_value = object->Get(key);
+             // this may have failed due to Get raising
 
-	     if (trycatch.HasCaught()) {
-		 // TODO isolate code that translates execption to ruby
-		 // exception so we can properly return it
-		 return rb_funcall(rb_cFailedV8Conversion, rb_intern("new"), 1, rb_str_new2(""));
-	     }
+             if (trycatch.HasCaught()) {
+             // TODO isolate code that translates execption to ruby
+             // exception so we can properly return it
+             return rb_funcall(rb_cFailedV8Conversion, rb_intern("new"), 1, rb_str_new2(""));
+             }
 
-	     VALUE rb_value = convert_v8_to_ruby(isolate, context, prop_value);
-	     rb_hash_aset(rb_hash, rb_key, rb_value);
-	    }
-	}
-	return rb_hash;
+             VALUE rb_value = convert_v8_to_ruby(isolate, context, prop_value);
+             rb_hash_aset(rb_hash, rb_key, rb_value);
+            }
+        }
+        return rb_hash;
     }
 
     Local<String> rstr = value->ToString();
@@ -468,7 +471,84 @@ static VALUE convert_v8_to_ruby(Isolate* isolate,
                               Local<Value>::New(isolate, value));
 }
 
-static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
+static VALUE encode_as_utf8(VALUE string)
+{
+    return rb_funcall(string, rb_intern("encode"), 1, rb_str_new2("UTF-8"));
+}
+
+#ifdef __AVX2__
+static bool (*best_utf8_validate_func(void))(const char *, size_t)
+{
+    __builtin_cpu_init();
+    if (__builtin_cpu_supports("avx2")) {
+        return validate_utf8_fast_avx;
+    } else {
+        return validate_utf8_fast;
+    }
+}
+#endif
+
+static inline Local<Value> convert_ruby_str_to_v8(
+        HandleScope& scope, Isolate *isolate, VALUE value)
+{
+    static const rb_encoding *utf8_enc = rb_utf8_encoding();
+    static const rb_encoding *ascii8bit_enc = rb_ascii8bit_encoding();
+    static const rb_encoding *usascii_enc = rb_usascii_encoding();
+    static const rb_encoding *latin1_enc = rb_enc_find("ISO-8859-1");
+    assert(latin1_enc != nullptr);
+#ifndef __AVX2__
+# define validate_utf8 validate_utf8_fast
+#else
+    static const (*validate_utf8)(const char *, size_t) =
+            best_utf8_validate_func();
+#endif
+
+    rb_encoding *enc = rb_enc_get(value);
+    char *str = RSTRING_PTR(value);
+    long len = RSTRING_LEN(value);
+    if (len < 0 || len > INT_MAX) {
+        return Null(isolate);
+    }
+    bool is_valid_utf8 = enc == utf8_enc &&
+            validate_utf8(str, static_cast<size_t>(len));
+
+    MaybeLocal<String> v8str;
+    int int_len = static_cast<int>(len);
+    if (is_valid_utf8) {
+convert_from_utf8:
+        v8str = String::NewFromUtf8(
+                    isolate, str, NewStringType::kNormal, int_len);
+    } else if (enc == utf8_enc || enc == ascii8bit_enc ||
+               enc == usascii_enc || enc == latin1_enc ||
+               rb_funcall(value, rb_intern("valid_encoding?"), 0) == Qfalse) {
+treat_as_latin1:
+        // if ASCII, it could be that the string is invalid
+        // ignore that possibility (effectively treat it as latin1)
+        v8str = String::NewFromOneByte(
+                    isolate, reinterpret_cast<uint8_t *>(str),
+                    NewStringType::kNormal, int_len);
+    } else {
+        int state;
+        VALUE result = rb_protect(encode_as_utf8, value, &state);
+
+        //Ran into an exception!
+        if (state) {
+            rb_set_errinfo(Qnil);
+            goto treat_as_latin1;
+        } else if (rb_enc_get(result) != utf8_enc) {
+            // conversion did not result in UTF-8. Odd!
+            goto treat_as_latin1;
+        } else {
+            str = RSTRING_PTR(result);
+            int_len = RSTRING_LEN(result);
+            goto convert_from_utf8;
+        }
+    }
+    return v8str.ToLocalChecked();
+}
+
+static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value)
+{
     EscapableHandleScope scope(isolate);
 
     Local<Array> array;
@@ -481,67 +561,85 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
     VALUE klass;
 
     switch (TYPE(value)) {
-    case T_FIXNUM:
-        fixnum = NUM2LONG(value);
-        if (fixnum > INT_MAX)
+        case T_FIXNUM:
         {
-            return scope.Escape(Number::New(isolate, (double)fixnum));
-        }
-        return scope.Escape(Integer::New(isolate, (int)fixnum));
-    case T_FLOAT:
-	return scope.Escape(Number::New(isolate, NUM2DBL(value)));
-    case T_STRING:
-	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, (int)RSTRING_LEN(value)).ToLocalChecked());
-    case T_NIL:
-	return scope.Escape(Null(isolate));
-    case T_TRUE:
-	return scope.Escape(True(isolate));
-    case T_FALSE:
-	return scope.Escape(False(isolate));
-    case T_ARRAY:
-	length = RARRAY_LEN(value);
-	array = Array::New(isolate, (int)length);
-	for(i=0; i<length; i++) {
-	    array->Set(i, convert_ruby_to_v8(isolate, rb_ary_entry(value, i)));
-	}
-	return scope.Escape(array);
-    case T_HASH:
-	object = Object::New(isolate);
-	hash_as_array = rb_funcall(value, rb_intern("to_a"), 0);
-	length = RARRAY_LEN(hash_as_array);
-	for(i=0; i<length; i++) {
-	    pair = rb_ary_entry(hash_as_array, i);
-	    object->Set(convert_ruby_to_v8(isolate, rb_ary_entry(pair, 0)),
-			convert_ruby_to_v8(isolate, rb_ary_entry(pair, 1)));
-	}
-	return scope.Escape(object);
-    case T_SYMBOL:
-	value = rb_funcall(value, rb_intern("to_s"), 0);
-	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, (int)RSTRING_LEN(value)).ToLocalChecked());
-    case T_DATA:
-        klass = rb_funcall(value, rb_intern("class"), 0);
-        if (klass == rb_cTime || klass == rb_cDateTime)
-        {
-            if (klass == rb_cDateTime)
+            fixnum = NUM2LONG(value);
+            if (fixnum > INT_MAX)
             {
-                value = rb_funcall(value, rb_intern("to_time"), 0);
+                return scope.Escape(Number::New(isolate, (double)fixnum));
             }
-            value = rb_funcall(value, rb_intern("to_f"), 0);
-            return scope.Escape(Date::New(isolate, NUM2DBL(value) * 1000));
+            return scope.Escape(Integer::New(isolate, (int)fixnum));
         }
-    case T_OBJECT:
-    case T_CLASS:
-    case T_ICLASS:
-    case T_MODULE:
-    case T_REGEXP:
-    case T_MATCH:
-    case T_STRUCT:
-    case T_BIGNUM:
-    case T_FILE:
-    case T_UNDEF:
-    case T_NODE:
-    default:
-      return scope.Escape(String::NewFromUtf8(isolate, "Undefined Conversion"));
+        case T_FLOAT:
+            return scope.Escape(Number::New(isolate, NUM2DBL(value)));
+        case T_STRING:
+            return scope.Escape(convert_ruby_str_to_v8(scope, isolate, value));
+        case T_NIL:
+            return scope.Escape(Null(isolate));
+        case T_TRUE:
+            return scope.Escape(True(isolate));
+        case T_FALSE:
+            return scope.Escape(False(isolate));
+        case T_ARRAY:
+        {
+            length = RARRAY_LEN(value);
+            array = Array::New(isolate, (int)length);
+            for(i=0; i<length; i++) {
+                array->Set(i, convert_ruby_to_v8(isolate, rb_ary_entry(value, i)));
+            }
+            return scope.Escape(array);
+        }
+        case T_HASH:
+        {
+            object = Object::New(isolate);
+            hash_as_array = rb_funcall(value, rb_intern("to_a"), 0);
+            length = RARRAY_LEN(hash_as_array);
+            for(i=0; i<length; i++) {
+                pair = rb_ary_entry(hash_as_array, i);
+                object->Set(convert_ruby_to_v8(isolate, rb_ary_entry(pair, 0)),
+                            convert_ruby_to_v8(isolate, rb_ary_entry(pair, 1)));
+            }
+            return scope.Escape(object);
+        }
+        case T_SYMBOL:
+        {
+            value = rb_funcall(value, rb_intern("to_s"), 0);
+            return scope.Escape(convert_ruby_str_to_v8(scope, isolate, value));
+        }
+        case T_DATA:
+        {
+            klass = rb_funcall(value, rb_intern("class"), 0);
+            if (klass == rb_cTime || klass == rb_cDateTime)
+            {
+                if (klass == rb_cDateTime)
+                {
+                    value = rb_funcall(value, rb_intern("to_time"), 0);
+                }
+                value = rb_funcall(value, rb_intern("to_f"), 0);
+                return scope.Escape(Date::New(isolate, NUM2DBL(value) * 1000));
+            }
+            // break intentionally missing
+        }
+        case T_OBJECT:
+        case T_CLASS:
+        case T_ICLASS:
+        case T_MODULE:
+        case T_REGEXP:
+        case T_MATCH:
+        case T_STRUCT:
+        case T_BIGNUM:
+        case T_FILE:
+        case T_UNDEF:
+        case T_NODE:
+        default:
+        {
+            if (rb_respond_to(value, rb_intern("to_s"))) {
+                // TODO: if this throws we're screwed
+                value = rb_funcall(value, rb_intern("to_s"), 0);
+                return scope.Escape(convert_ruby_str_to_v8(scope, isolate, value));
+            }
+            return scope.Escape(String::NewFromUtf8(isolate, "Undefined Conversion"));
+        }
     }
 
 }
@@ -690,13 +788,13 @@ static VALUE rb_context_init_unsafe(VALUE self, VALUE isolate, VALUE snap) {
         // the ruby lock is needed if this isn't a new isolate
         IsolateInfo::Lock ruby_lock(isolate_info->mutex);
         Locker lock(isolate_info->isolate);
-	Isolate::Scope isolate_scope(isolate_info->isolate);
-	HandleScope handle_scope(isolate_info->isolate);
+        Isolate::Scope isolate_scope(isolate_info->isolate);
+        HandleScope handle_scope(isolate_info->isolate);
 
-	Local<Context> context = Context::New(isolate_info->isolate);
+        Local<Context> context = Context::New(isolate_info->isolate);
 
-	context_info->context = new Persistent<Context>();
-	context_info->context->Reset(isolate_info->isolate, context);
+        context_info->context = new Persistent<Context>();
+        context_info->context->Reset(isolate_info->isolate, context);
     }
 
     if (Qnil == rb_cDateTime && rb_funcall(rb_cObject, rb_intern("const_defined?"), 1, rb_str_new2("DateTime")) == Qtrue)
@@ -818,45 +916,45 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
     }
 
     {
-	Locker lock(isolate);
-	Isolate::Scope isolate_scope(isolate);
-	HandleScope handle_scope(isolate);
+        Locker lock(isolate);
+        Isolate::Scope isolate_scope(isolate);
+        HandleScope handle_scope(isolate);
 
-	Local<String> eval = String::NewFromUtf8(isolate, RSTRING_PTR(str),
-				NewStringType::kNormal, (int)RSTRING_LEN(str)).ToLocalChecked();
+        Local<String> eval = String::NewFromUtf8(isolate, RSTRING_PTR(str),
+                    NewStringType::kNormal, (int)RSTRING_LEN(str)).ToLocalChecked();
 
-	Local<String> local_filename;
+        Local<String> local_filename;
 
-	if (filename != Qnil) {
-	    local_filename = String::NewFromUtf8(isolate, RSTRING_PTR(filename),
-		    NewStringType::kNormal, (int)RSTRING_LEN(filename)).ToLocalChecked();
-	    eval_params.filename = &local_filename;
-	} else {
-	    eval_params.filename = NULL;
-	}
+        if (filename != Qnil) {
+            local_filename = String::NewFromUtf8(isolate, RSTRING_PTR(filename),
+                NewStringType::kNormal, (int)RSTRING_LEN(filename)).ToLocalChecked();
+            eval_params.filename = &local_filename;
+        } else {
+            eval_params.filename = NULL;
+        }
 
-	eval_params.context_info = context_info;
-	eval_params.eval = &eval;
-	eval_params.result = &eval_result;
-	eval_params.timeout = 0;
-	eval_params.max_memory = 0;
-	VALUE timeout = rb_iv_get(self, "@timeout");
-	if (timeout != Qnil) {
-	    eval_params.timeout = (useconds_t)NUM2LONG(timeout);
-	}
+        eval_params.context_info = context_info;
+        eval_params.eval = &eval;
+        eval_params.result = &eval_result;
+        eval_params.timeout = 0;
+        eval_params.max_memory = 0;
+        VALUE timeout = rb_iv_get(self, "@timeout");
+        if (timeout != Qnil) {
+            eval_params.timeout = (useconds_t)NUM2LONG(timeout);
+        }
 
-	VALUE mem_softlimit = rb_iv_get(self, "@max_memory");
-	if (mem_softlimit != Qnil) {
-        eval_params.max_memory = (size_t)NUM2ULONG(mem_softlimit);
-	}
+        VALUE mem_softlimit = rb_iv_get(self, "@max_memory");
+        if (mem_softlimit != Qnil) {
+            eval_params.max_memory = (size_t)NUM2ULONG(mem_softlimit);
+        }
 
-	eval_result.message = NULL;
-	eval_result.backtrace = NULL;
+        eval_result.message = NULL;
+        eval_result.backtrace = NULL;
 
 #if RUBY_API_VERSION_MAJOR > 1
-	rb_thread_call_without_gvl(nogvl_context_eval, &eval_params, unblock_eval, &eval_params);
+        rb_thread_call_without_gvl(nogvl_context_eval, &eval_params, unblock_eval, &eval_params);
 #else
-	rb_thread_blocking_region(nogvl_context_eval, &eval_params, unblock_eval, &eval_params);
+        rb_thread_blocking_region(nogvl_context_eval, &eval_params, unblock_eval, &eval_params);
 #endif
     }
 
@@ -870,17 +968,16 @@ typedef struct {
     bool failed;
 } protected_callback_data;
 
-static
-VALUE protected_callback(VALUE rdata) {
+static VALUE protected_callback(VALUE rdata) {
     protected_callback_data* data = (protected_callback_data*)rdata;
     VALUE result;
 
     if (data->length > 0) {
-	result = rb_funcall2(data->callback, rb_intern("call"), data->length,
-			     RARRAY_PTR(data->ruby_args));
-	RB_GC_GUARD(data->ruby_args);
+        result = rb_funcall2(data->callback, rb_intern("call"), data->length,
+                     RARRAY_PTR(data->ruby_args));
+        RB_GC_GUARD(data->ruby_args);
     } else {
-	result = rb_funcall(data->callback, rb_intern("call"), 0);
+        result = rb_funcall(data->callback, rb_intern("call"), 0);
     }
     return result;
 }
@@ -917,16 +1014,16 @@ gvl_ruby_callback(void* data) {
         ContextInfo* context_info;
         Data_Get_Struct(parent, ContextInfo, context_info);
 
-	if (length > 0) {
-	    ruby_args = rb_ary_tmp_new(length);
-	}
+        if (length > 0) {
+            ruby_args = rb_ary_tmp_new(length);
+        }
 
-	for (int i = 0; i < length; i++) {
-	    Local<Value> value = ((*args)[i]).As<Value>();
-	    VALUE tmp = convert_v8_to_ruby(args->GetIsolate(),
-					      *context_info->context, value);
-	    rb_ary_push(ruby_args, tmp);
-	}
+        for (int i = 0; i < length; i++) {
+            Local<Value> value = ((*args)[i]).As<Value>();
+            VALUE tmp = convert_v8_to_ruby(args->GetIsolate(),
+                              *context_info->context, value);
+            rb_ary_push(ruby_args, tmp);
+        }
     }
 
     // may raise exception stay clear of handle scope
@@ -937,31 +1034,31 @@ gvl_ruby_callback(void* data) {
     callback_data.failed = false;
 
     if ((bool)args->GetIsolate()->GetData(DO_TERMINATE) == true) {
-	args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Terminated execution during transition from Ruby to JS"));
-	args->GetIsolate()->TerminateExecution();
-	if (length > 0) {
-	    rb_ary_clear(ruby_args);
-	    rb_gc_force_recycle(ruby_args);
-	}
-	return NULL;
+        args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Terminated execution during transition from Ruby to JS"));
+        args->GetIsolate()->TerminateExecution();
+        if (length > 0) {
+            rb_ary_clear(ruby_args);
+            rb_gc_force_recycle(ruby_args);
+        }
+        return NULL;
     }
 
     result = rb_rescue2((VALUE(*)(...))&protected_callback, (VALUE)(&callback_data),
-			(VALUE(*)(...))&rescue_callback, (VALUE)(&callback_data), rb_eException, (VALUE)0);
+            (VALUE(*)(...))&rescue_callback, (VALUE)(&callback_data), rb_eException, (VALUE)0);
 
     if(callback_data.failed) {
-	rb_iv_set(parent, "@current_exception", result);
-	args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Ruby exception"));
+        rb_iv_set(parent, "@current_exception", result);
+        args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Ruby exception"));
     }
     else {
-	HandleScope scope(args->GetIsolate());
-	Handle<Value> v8_result = convert_ruby_to_v8(args->GetIsolate(), result);
-	args->GetReturnValue().Set(v8_result);
+        HandleScope scope(args->GetIsolate());
+        Handle<Value> v8_result = convert_ruby_to_v8(args->GetIsolate(), result);
+        args->GetReturnValue().Set(v8_result);
     }
 
     if (length > 0) {
-	rb_ary_clear(ruby_args);
-	rb_gc_force_recycle(ruby_args);
+        rb_ary_clear(ruby_args);
+        rb_gc_force_recycle(ruby_args);
     }
 
     if ((bool)args->GetIsolate()->GetData(DO_TERMINATE) == true) {
@@ -980,11 +1077,11 @@ static void ruby_callback(const FunctionCallbackInfo<Value>& args) {
     bool has_gvl = (bool)args.GetIsolate()->GetData(IN_GVL);
 
     if(has_gvl) {
-	gvl_ruby_callback((void*)&args);
+        gvl_ruby_callback((void*)&args);
     } else {
-	args.GetIsolate()->SetData(IN_GVL, (void*)true);
-	rb_thread_call_with_gvl(gvl_ruby_callback, (void*)(&args));
-	args.GetIsolate()->SetData(IN_GVL, (void*)false);
+        args.GetIsolate()->SetData(IN_GVL, (void*)true);
+        rb_thread_call_with_gvl(gvl_ruby_callback, (void*)(&args));
+        args.GetIsolate()->SetData(IN_GVL, (void*)false);
     }
 }
 
@@ -1005,46 +1102,46 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
     Isolate* isolate = context_info->isolate_info->isolate;
 
     {
-	Locker lock(isolate);
-	Isolate::Scope isolate_scope(isolate);
-	HandleScope handle_scope(isolate);
+        Locker lock(isolate);
+        Isolate::Scope isolate_scope(isolate);
+        HandleScope handle_scope(isolate);
 
-	Local<Context> context = context_info->context->Get(isolate);
-	Context::Scope context_scope(context);
+        Local<Context> context = context_info->context->Get(isolate);
+        Context::Scope context_scope(context);
 
-	Local<String> v8_str = String::NewFromUtf8(isolate, RSTRING_PTR(name),
-						  NewStringType::kNormal, (int)RSTRING_LEN(name)).ToLocalChecked();
+        Local<String> v8_str = String::NewFromUtf8(isolate, RSTRING_PTR(name),
+                              NewStringType::kNormal, (int)RSTRING_LEN(name)).ToLocalChecked();
 
-	// copy self so we can access from v8 external
-	VALUE* self_copy;
-	Data_Get_Struct(self, VALUE, self_copy);
-	*self_copy = self;
+        // copy self so we can access from v8 external
+        VALUE* self_copy;
+        Data_Get_Struct(self, VALUE, self_copy);
+        *self_copy = self;
 
-	Local<Value> external = External::New(isolate, self_copy);
+        Local<Value> external = External::New(isolate, self_copy);
 
-	if (parent_object == Qnil) {
-	    context->Global()->Set(v8_str, FunctionTemplate::New(isolate, ruby_callback, external)->GetFunction());
-	} else {
+        if (parent_object == Qnil) {
+            context->Global()->Set(v8_str, FunctionTemplate::New(isolate, ruby_callback, external)->GetFunction());
+        } else {
 
-	    Local<String> eval = String::NewFromUtf8(isolate, RSTRING_PTR(parent_object_eval),
-						      NewStringType::kNormal, (int)RSTRING_LEN(parent_object_eval)).ToLocalChecked();
+            Local<String> eval = String::NewFromUtf8(isolate, RSTRING_PTR(parent_object_eval),
+                                  NewStringType::kNormal, (int)RSTRING_LEN(parent_object_eval)).ToLocalChecked();
 
-	    MaybeLocal<Script> parsed_script = Script::Compile(context, eval);
-	    if (parsed_script.IsEmpty()) {
-		parse_error = true;
-	    } else {
-		MaybeLocal<Value> maybe_value = parsed_script.ToLocalChecked()->Run(context);
-		attach_error = true;
+            MaybeLocal<Script> parsed_script = Script::Compile(context, eval);
+            if (parsed_script.IsEmpty()) {
+            parse_error = true;
+            } else {
+                MaybeLocal<Value> maybe_value = parsed_script.ToLocalChecked()->Run(context);
+                attach_error = true;
 
-		if (!maybe_value.IsEmpty()) {
-		    Local<Value> value = maybe_value.ToLocalChecked();
-		    if (value->IsObject()){
-			value.As<Object>()->Set(v8_str, FunctionTemplate::New(isolate, ruby_callback, external)->GetFunction());
-			attach_error = false;
-		    }
-		}
-	    }
-	}
+                if (!maybe_value.IsEmpty()) {
+                    Local<Value> value = maybe_value.ToLocalChecked();
+                    if (value->IsObject()){
+                    value.As<Object>()->Set(v8_str, FunctionTemplate::New(isolate, ruby_callback, external)->GetFunction());
+                    attach_error = false;
+                    }
+                }
+            }
+        }
     }
 
     // always raise out of V8 context
@@ -1073,19 +1170,19 @@ static VALUE rb_context_isolate_mutex(VALUE self) {
 void free_isolate(IsolateInfo* isolate_info) {
 
     if (isolate_info->isolate) {
-	Locker lock(isolate_info->isolate);
+        Locker lock(isolate_info->isolate);
     }
 
     if (isolate_info->isolate) {
         if (isolate_info->interrupted) {
             fprintf(stderr, "WARNING: V8 isolate was interrupted by Ruby, it can not be disposed and memory will not be reclaimed till the Ruby process exits.\n");
         } else {
-
-	    if (isolate_info->pid != getpid()) {
-		fprintf(stderr, "WARNING: V8 isolate was forked, it can not be disposed and memory will not be reclaimed till the Ruby process exits.\n");
-	    } else {
-		isolate_info->isolate->Dispose();
-	    }
+            
+            if (isolate_info->pid != getpid()) {
+                fprintf(stderr, "WARNING: V8 isolate was forked, it can not be disposed and memory will not be reclaimed till the Ruby process exits.\n");
+            } else {
+                isolate_info->isolate->Dispose();
+            }
         }
         isolate_info->isolate = NULL;
     }
@@ -1128,17 +1225,17 @@ static void free_context(ContextInfo* context_info) {
     context_info_copy->context = context_info->context;
 
     if (isolate_info && isolate_info->refs() > 1) {
-	pthread_t free_context_thread;
-	if (pthread_create(&free_context_thread, NULL, free_context_raw, (void*)context_info_copy)) {
-            fprintf(stderr, "WARNING failed to release memory in MiniRacer, thread to release could not be created, process will leak memory\n");
-	}
+    pthread_t free_context_thread;
+    if (pthread_create(&free_context_thread, NULL, free_context_raw, (void*)context_info_copy)) {
+        fprintf(stderr, "WARNING failed to release memory in MiniRacer, thread to release could not be created, process will leak memory\n");
+    }
 
     } else {
-	free_context_raw(context_info_copy);
+        free_context_raw(context_info_copy);
     }
 
     if (context_info->context && isolate_info && isolate_info->isolate) {
-	context_info->context = NULL;
+        context_info->context = NULL;
     }
 
     if (isolate_info) {
@@ -1224,20 +1321,20 @@ rb_heap_stats(VALUE self) {
 
     if (!isolate) {
 
-	rb_hash_aset(rval, ID2SYM(rb_intern("total_physical_size")), ULONG2NUM(0));
-	rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size_executable")), ULONG2NUM(0));
-	rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size")), ULONG2NUM(0));
-	rb_hash_aset(rval, ID2SYM(rb_intern("used_heap_size")), ULONG2NUM(0));
-	rb_hash_aset(rval, ID2SYM(rb_intern("heap_size_limit")), ULONG2NUM(0));
+        rb_hash_aset(rval, ID2SYM(rb_intern("total_physical_size")), ULONG2NUM(0));
+        rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size_executable")), ULONG2NUM(0));
+        rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size")), ULONG2NUM(0));
+        rb_hash_aset(rval, ID2SYM(rb_intern("used_heap_size")), ULONG2NUM(0));
+        rb_hash_aset(rval, ID2SYM(rb_intern("heap_size_limit")), ULONG2NUM(0));
 
     } else {
-	isolate->GetHeapStatistics(&stats);
+        isolate->GetHeapStatistics(&stats);
 
-	rb_hash_aset(rval, ID2SYM(rb_intern("total_physical_size")), ULONG2NUM(stats.total_physical_size()));
-	rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size_executable")), ULONG2NUM(stats.total_heap_size_executable()));
-	rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size")), ULONG2NUM(stats.total_heap_size()));
-	rb_hash_aset(rval, ID2SYM(rb_intern("used_heap_size")), ULONG2NUM(stats.used_heap_size()));
-	rb_hash_aset(rval, ID2SYM(rb_intern("heap_size_limit")), ULONG2NUM(stats.heap_size_limit()));
+        rb_hash_aset(rval, ID2SYM(rb_intern("total_physical_size")), ULONG2NUM(stats.total_physical_size()));
+        rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size_executable")), ULONG2NUM(stats.total_heap_size_executable()));
+        rb_hash_aset(rval, ID2SYM(rb_intern("total_heap_size")), ULONG2NUM(stats.total_heap_size()));
+        rb_hash_aset(rval, ID2SYM(rb_intern("used_heap_size")), ULONG2NUM(stats.used_heap_size()));
+        rb_hash_aset(rval, ID2SYM(rb_intern("heap_size_limit")), ULONG2NUM(stats.heap_size_limit()));
     }
 
     return rval;
@@ -1327,8 +1424,7 @@ static void unblock_function(void *args) {
     call->context_info->isolate_info->interrupted = true;
 }
 
-static VALUE
-rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
+static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
     ContextInfo* context_info;
     FunctionCall call;
     VALUE *call_argv = NULL;
@@ -1361,7 +1457,6 @@ rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
     }
 
     bool missingFunction = false;
-
     {
         Locker lock(isolate);
         Isolate::Scope isolate_scope(isolate);
@@ -1372,38 +1467,38 @@ rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
 
         // examples of such usage can be found in
         // https://github.com/v8/v8/blob/36b32aa28db5e993312f4588d60aad5c8330c8a5/test/cctest/test-api.cc#L15711
-	Local<String> fname = String::NewFromUtf8(isolate, call.function_name);
-	MaybeLocal<v8::Value> val = context->Global()->Get(fname);
+        Local<String> fname = String::NewFromUtf8(isolate, call.function_name);
+        MaybeLocal<v8::Value> val = context->Global()->Get(fname);
 
-	if (val.IsEmpty() || !val.ToLocalChecked()->IsFunction()) {
-	    missingFunction = true;
-	} else {
+        if (val.IsEmpty() || !val.ToLocalChecked()->IsFunction()) {
+            missingFunction = true;
+        } else {
 
-	    Local<v8::Function> fun = Local<v8::Function>::Cast(val.ToLocalChecked());
-	    call.fun = fun;
-	    int fun_argc = call.argc;
+            Local<v8::Function> fun = Local<v8::Function>::Cast(val.ToLocalChecked());
+            call.fun = fun;
+            int fun_argc = call.argc;
 
-	    if (fun_argc > 0) {
-		call.argv = (v8::Local<Value> *) malloc(sizeof(void *) * fun_argc);
-		if (!call.argv) {
-		    return Qnil;
-		}
-		for(int i=0; i < fun_argc; i++) {
-		    call.argv[i] = convert_ruby_to_v8(isolate, call_argv[i]);
-		}
-	    }
-#if RUBY_API_VERSION_MAJOR > 1
-	    rb_thread_call_without_gvl(nogvl_context_call, &call, unblock_function, &call);
-#else
-	    rb_thread_blocking_region(nogvl_context_call, &call, unblock_function, &call);
-#endif
-	    free(call.argv);
+            if (fun_argc > 0) {
+                call.argv = (v8::Local<Value> *) malloc(sizeof(void *) * fun_argc);
+                if (!call.argv) {
+                    return Qnil;
+                }
+                for(int i=0; i < fun_argc; i++) {
+                    call.argv[i] = convert_ruby_to_v8(isolate, call_argv[i]);
+                }
+            }
+    #if RUBY_API_VERSION_MAJOR > 1
+            rb_thread_call_without_gvl(nogvl_context_call, &call, unblock_function, &call);
+    #else
+            rb_thread_blocking_region(nogvl_context_call, &call, unblock_function, &call);
+    #endif
+            free(call.argv);
 
-	}
+        }
     }
 
     if (missingFunction) {
-	rb_raise(rb_eScriptRuntimeError, "Unknown JavaScript method invoked");
+    rb_raise(rb_eScriptRuntimeError, "Unknown JavaScript method invoked");
     }
 
     return convert_result_to_ruby(self, call.result);
@@ -1428,53 +1523,52 @@ extern "C" {
     {
         VALUE rb_mSqreen = rb_define_module("Sqreen");
         VALUE rb_mMiniRacer = rb_define_module_under(rb_mSqreen, "MiniRacer");
-	rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);
-	rb_cSnapshot = rb_define_class_under(rb_mMiniRacer, "Snapshot", rb_cObject);
-	rb_cIsolate = rb_define_class_under(rb_mMiniRacer, "Isolate", rb_cObject);
-	VALUE rb_cPlatform = rb_define_class_under(rb_mMiniRacer, "Platform", rb_cObject);
+        rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);
+        rb_cSnapshot = rb_define_class_under(rb_mMiniRacer, "Snapshot", rb_cObject);
+        rb_cIsolate = rb_define_class_under(rb_mMiniRacer, "Isolate", rb_cObject);
+        VALUE rb_cPlatform = rb_define_class_under(rb_mMiniRacer, "Platform", rb_cObject);
 
-	VALUE rb_eError = rb_define_class_under(rb_mMiniRacer, "Error", rb_eStandardError);
+        VALUE rb_eError = rb_define_class_under(rb_mMiniRacer, "Error", rb_eStandardError);
 
-	VALUE rb_eEvalError = rb_define_class_under(rb_mMiniRacer, "EvalError", rb_eError);
-	rb_eScriptTerminatedError = rb_define_class_under(rb_mMiniRacer, "ScriptTerminatedError", rb_eEvalError);
-	rb_eV8OutOfMemoryError = rb_define_class_under(rb_mMiniRacer, "V8OutOfMemoryError", rb_eEvalError);
-	rb_eParseError = rb_define_class_under(rb_mMiniRacer, "ParseError", rb_eEvalError);
-	rb_eScriptRuntimeError = rb_define_class_under(rb_mMiniRacer, "RuntimeError", rb_eEvalError);
+        VALUE rb_eEvalError = rb_define_class_under(rb_mMiniRacer, "EvalError", rb_eError);
+        rb_eScriptTerminatedError = rb_define_class_under(rb_mMiniRacer, "ScriptTerminatedError", rb_eEvalError);
+        rb_eV8OutOfMemoryError = rb_define_class_under(rb_mMiniRacer, "V8OutOfMemoryError", rb_eEvalError);
+        rb_eParseError = rb_define_class_under(rb_mMiniRacer, "ParseError", rb_eEvalError);
+        rb_eScriptRuntimeError = rb_define_class_under(rb_mMiniRacer, "RuntimeError", rb_eEvalError);
 
-	rb_cJavaScriptFunction = rb_define_class_under(rb_mMiniRacer, "JavaScriptFunction", rb_cObject);
-	rb_eSnapshotError = rb_define_class_under(rb_mMiniRacer, "SnapshotError", rb_eError);
-	rb_ePlatformAlreadyInitializedError = rb_define_class_under(rb_mMiniRacer, "PlatformAlreadyInitialized", rb_eError);
-	rb_cFailedV8Conversion = rb_define_class_under(rb_mMiniRacer, "FailedV8Conversion", rb_cObject);
-	rb_mJSON = rb_define_module("JSON");
+        rb_cJavaScriptFunction = rb_define_class_under(rb_mMiniRacer, "JavaScriptFunction", rb_cObject);
+        rb_eSnapshotError = rb_define_class_under(rb_mMiniRacer, "SnapshotError", rb_eError);
+        rb_ePlatformAlreadyInitializedError = rb_define_class_under(rb_mMiniRacer, "PlatformAlreadyInitialized", rb_eError);
+        rb_cFailedV8Conversion = rb_define_class_under(rb_mMiniRacer, "FailedV8Conversion", rb_cObject);
+        rb_mJSON = rb_define_module("JSON");
 
-	VALUE rb_cExternalFunction = rb_define_class_under(rb_cContext, "ExternalFunction", rb_cObject);
+        VALUE rb_cExternalFunction = rb_define_class_under(rb_cContext, "ExternalFunction", rb_cObject);
 
-	rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
-	rb_define_method(rb_cContext, "dispose_unsafe", (VALUE(*)(...))&rb_context_dispose, 0);
-       rb_define_method(rb_cContext, "low_memory_notification", (VALUE(*)(...))&rb_context_low_memory_notification, 0);
-       rb_define_method(rb_cContext, "heap_stats", (VALUE(*)(...))&rb_heap_stats, 0);
-	rb_define_private_method(rb_cContext, "create_isolate_value",(VALUE(*)(...))&rb_context_create_isolate_value, 0);
-	rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 2);
-	rb_define_private_method(rb_cContext, "call_unsafe", (VALUE(*)(...))&rb_context_call_unsafe, -1);
-	rb_define_private_method(rb_cContext, "isolate_mutex", (VALUE(*)(...))&rb_context_isolate_mutex, 0);
-	rb_define_private_method(rb_cContext, "init_unsafe",(VALUE(*)(...))&rb_context_init_unsafe, 2);
+        rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
+        rb_define_method(rb_cContext, "dispose_unsafe", (VALUE(*)(...))&rb_context_dispose, 0);
+        rb_define_method(rb_cContext, "low_memory_notification", (VALUE(*)(...))&rb_context_low_memory_notification, 0);
+        rb_define_method(rb_cContext, "heap_stats", (VALUE(*)(...))&rb_heap_stats, 0);
+        rb_define_private_method(rb_cContext, "create_isolate_value",(VALUE(*)(...))&rb_context_create_isolate_value, 0);
+        rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 2);
+        rb_define_private_method(rb_cContext, "call_unsafe", (VALUE(*)(...))&rb_context_call_unsafe, -1);
+        rb_define_private_method(rb_cContext, "isolate_mutex", (VALUE(*)(...))&rb_context_isolate_mutex, 0);
+        rb_define_private_method(rb_cContext, "init_unsafe",(VALUE(*)(...))&rb_context_init_unsafe, 2);
 
-	rb_define_alloc_func(rb_cContext, allocate);
-	rb_define_alloc_func(rb_cSnapshot, allocate_snapshot);
-	rb_define_alloc_func(rb_cIsolate, allocate_isolate);
+        rb_define_alloc_func(rb_cContext, allocate);
+        rb_define_alloc_func(rb_cSnapshot, allocate_snapshot);
+        rb_define_alloc_func(rb_cIsolate, allocate_isolate);
 
-	rb_define_private_method(rb_cExternalFunction, "notify_v8", (VALUE(*)(...))&rb_external_function_notify_v8, 0);
-	rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);
+        rb_define_private_method(rb_cExternalFunction, "notify_v8", (VALUE(*)(...))&rb_external_function_notify_v8, 0);
+        rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);
 
-	rb_define_method(rb_cSnapshot, "size", (VALUE(*)(...))&rb_snapshot_size, 0);
-	rb_define_method(rb_cSnapshot, "dump", (VALUE(*)(...))&rb_snapshot_dump, 0);
-	rb_define_method(rb_cSnapshot, "warmup_unsafe!", (VALUE(*)(...))&rb_snapshot_warmup_unsafe, 1);
-	rb_define_private_method(rb_cSnapshot, "load", (VALUE(*)(...))&rb_snapshot_load, 1);
+        rb_define_method(rb_cSnapshot, "size", (VALUE(*)(...))&rb_snapshot_size, 0);
+        rb_define_method(rb_cSnapshot, "dump", (VALUE(*)(...))&rb_snapshot_dump, 0);
+        rb_define_method(rb_cSnapshot, "warmup_unsafe!", (VALUE(*)(...))&rb_snapshot_warmup_unsafe, 1);
+        rb_define_private_method(rb_cSnapshot, "load", (VALUE(*)(...))&rb_snapshot_load, 1);
 
-	rb_define_method(rb_cIsolate, "idle_notification", (VALUE(*)(...))&rb_isolate_idle_notification, 1);
-	rb_define_private_method(rb_cIsolate, "init_with_snapshot",(VALUE(*)(...))&rb_isolate_init_with_snapshot, 1);
+        rb_define_method(rb_cIsolate, "idle_notification", (VALUE(*)(...))&rb_isolate_idle_notification, 1);
+        rb_define_private_method(rb_cIsolate, "init_with_snapshot",(VALUE(*)(...))&rb_isolate_init_with_snapshot, 1);
 
-	rb_define_singleton_method(rb_cPlatform, "set_flag_as_str!", (VALUE(*)(...))&rb_platform_set_flag_as_str, 1);
+        rb_define_singleton_method(rb_cPlatform, "set_flag_as_str!", (VALUE(*)(...))&rb_platform_set_flag_as_str, 1);
     }
-
 }
