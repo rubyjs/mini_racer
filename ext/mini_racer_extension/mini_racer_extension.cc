@@ -9,6 +9,7 @@
 #include <mutex>
 #include <atomic>
 #include <math.h>
+#include "simdutf8check.h"
 
 using namespace v8;
 
@@ -453,7 +454,84 @@ static VALUE convert_v8_to_ruby(Isolate* isolate,
                               Local<Value>::New(isolate, value));
 }
 
-static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
+static VALUE encode_as_utf8(VALUE string)
+{
+    return rb_funcall(string, rb_intern("encode"), 1, rb_str_new2("UTF-8"));
+}
+
+#ifdef __AVX2__
+static bool (*best_utf8_validate_func(void))(const char *, size_t)
+{
+    __builtin_cpu_init();
+    if (__builtin_cpu_supports("avx2")) {
+        return validate_utf8_fast_avx;
+    } else {
+        return validate_utf8_fast;
+    }
+}
+#endif
+
+static inline Local<Value> convert_ruby_str_to_v8(
+        HandleScope& scope, Isolate *isolate, VALUE value)
+{
+    static const rb_encoding *utf8_enc = rb_utf8_encoding();
+    static const rb_encoding *ascii8bit_enc = rb_ascii8bit_encoding();
+    static const rb_encoding *usascii_enc = rb_usascii_encoding();
+    static const rb_encoding *latin1_enc = rb_enc_find("ISO-8859-1");
+    assert(latin1_enc != nullptr);
+#ifndef __AVX2__
+# define validate_utf8 validate_utf8_fast
+#else
+    static const (*validate_utf8)(const char *, size_t) =
+            best_utf8_validate_func();
+#endif
+
+    rb_encoding *enc = rb_enc_get(value);
+    char *str = RSTRING_PTR(value);
+    long len = RSTRING_LEN(value);
+    if (len < 0 || len > INT_MAX) {
+        return Null(isolate);
+    }
+    bool is_valid_utf8 = enc == utf8_enc &&
+            validate_utf8(str, static_cast<size_t>(len));
+
+    MaybeLocal<String> v8str;
+    int int_len = static_cast<int>(len);
+    if (is_valid_utf8) {
+convert_from_utf8:
+        v8str = String::NewFromUtf8(
+                    isolate, str, NewStringType::kNormal, int_len);
+    } else if (enc == utf8_enc || enc == ascii8bit_enc ||
+               enc == usascii_enc || enc == latin1_enc ||
+               rb_funcall(value, rb_intern("valid_encoding?"), 0) == Qfalse) {
+treat_as_latin1:
+        // if ASCII, it could be that the string is invalid
+        // ignore that possibility (effectively treat it as latin1)
+        v8str = String::NewFromOneByte(
+                    isolate, reinterpret_cast<uint8_t *>(str),
+                    NewStringType::kNormal, int_len);
+    } else {
+        int state;
+        VALUE result = rb_protect(encode_as_utf8, value, &state);
+
+        //Ran into an exception!
+        if (state) {
+            rb_set_errinfo(Qnil);
+            goto treat_as_latin1;
+        } else if (rb_enc_get(result) != utf8_enc) {
+            // conversion did not result in UTF-8. Odd!
+            goto treat_as_latin1;
+        } else {
+            str = RSTRING_PTR(result);
+            int_len = RSTRING_LEN(result);
+            goto convert_from_utf8;
+        }
+    }
+    return v8str.ToLocalChecked();
+}
+
+static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value)
+{
     EscapableHandleScope scope(isolate);
 
     Local<Array> array;
@@ -466,67 +544,85 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
     VALUE klass;
 
     switch (TYPE(value)) {
-    case T_FIXNUM:
-        fixnum = NUM2LONG(value);
-        if (fixnum > INT_MAX)
+        case T_FIXNUM:
         {
-            return scope.Escape(Number::New(isolate, (double)fixnum));
-        }
-        return scope.Escape(Integer::New(isolate, (int)fixnum));
-    case T_FLOAT:
-	return scope.Escape(Number::New(isolate, NUM2DBL(value)));
-    case T_STRING:
-	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, (int)RSTRING_LEN(value)).ToLocalChecked());
-    case T_NIL:
-	return scope.Escape(Null(isolate));
-    case T_TRUE:
-	return scope.Escape(True(isolate));
-    case T_FALSE:
-	return scope.Escape(False(isolate));
-    case T_ARRAY:
-	length = RARRAY_LEN(value);
-	array = Array::New(isolate, (int)length);
-	for(i=0; i<length; i++) {
-	    array->Set(i, convert_ruby_to_v8(isolate, rb_ary_entry(value, i)));
-	}
-	return scope.Escape(array);
-    case T_HASH:
-	object = Object::New(isolate);
-	hash_as_array = rb_funcall(value, rb_intern("to_a"), 0);
-	length = RARRAY_LEN(hash_as_array);
-	for(i=0; i<length; i++) {
-	    pair = rb_ary_entry(hash_as_array, i);
-	    object->Set(convert_ruby_to_v8(isolate, rb_ary_entry(pair, 0)),
-			convert_ruby_to_v8(isolate, rb_ary_entry(pair, 1)));
-	}
-	return scope.Escape(object);
-    case T_SYMBOL:
-	value = rb_funcall(value, rb_intern("to_s"), 0);
-	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, (int)RSTRING_LEN(value)).ToLocalChecked());
-    case T_DATA:
-        klass = rb_funcall(value, rb_intern("class"), 0);
-        if (klass == rb_cTime || klass == rb_cDateTime)
-        {
-            if (klass == rb_cDateTime)
+            fixnum = NUM2LONG(value);
+            if (fixnum > INT_MAX)
             {
-                value = rb_funcall(value, rb_intern("to_time"), 0);
+                return scope.Escape(Number::New(isolate, (double)fixnum));
             }
-            value = rb_funcall(value, rb_intern("to_f"), 0);
-            return scope.Escape(Date::New(isolate, NUM2DBL(value) * 1000));
+            return scope.Escape(Integer::New(isolate, (int)fixnum));
         }
-    case T_OBJECT:
-    case T_CLASS:
-    case T_ICLASS:
-    case T_MODULE:
-    case T_REGEXP:
-    case T_MATCH:
-    case T_STRUCT:
-    case T_BIGNUM:
-    case T_FILE:
-    case T_UNDEF:
-    case T_NODE:
-    default:
-      return scope.Escape(String::NewFromUtf8(isolate, "Undefined Conversion"));
+        case T_FLOAT:
+            return scope.Escape(Number::New(isolate, NUM2DBL(value)));
+        case T_STRING:
+            return scope.Escape(convert_ruby_str_to_v8(scope, isolate, value));
+        case T_NIL:
+            return scope.Escape(Null(isolate));
+        case T_TRUE:
+            return scope.Escape(True(isolate));
+        case T_FALSE:
+            return scope.Escape(False(isolate));
+        case T_ARRAY:
+        {
+            length = RARRAY_LEN(value);
+            array = Array::New(isolate, (int)length);
+            for(i=0; i<length; i++) {
+                array->Set(i, convert_ruby_to_v8(isolate, rb_ary_entry(value, i)));
+            }
+            return scope.Escape(array);
+        }
+        case T_HASH:
+        {
+            object = Object::New(isolate);
+            hash_as_array = rb_funcall(value, rb_intern("to_a"), 0);
+            length = RARRAY_LEN(hash_as_array);
+            for(i=0; i<length; i++) {
+                pair = rb_ary_entry(hash_as_array, i);
+                object->Set(convert_ruby_to_v8(isolate, rb_ary_entry(pair, 0)),
+                            convert_ruby_to_v8(isolate, rb_ary_entry(pair, 1)));
+            }
+            return scope.Escape(object);
+        }
+        case T_SYMBOL:
+        {
+            value = rb_funcall(value, rb_intern("to_s"), 0);
+            return scope.Escape(convert_ruby_str_to_v8(scope, isolate, value));
+        }
+        case T_DATA:
+        {
+            klass = rb_funcall(value, rb_intern("class"), 0);
+            if (klass == rb_cTime || klass == rb_cDateTime)
+            {
+                if (klass == rb_cDateTime)
+                {
+                    value = rb_funcall(value, rb_intern("to_time"), 0);
+                }
+                value = rb_funcall(value, rb_intern("to_f"), 0);
+                return scope.Escape(Date::New(isolate, NUM2DBL(value) * 1000));
+            }
+            // break intentionally missing
+        }
+        case T_OBJECT:
+        case T_CLASS:
+        case T_ICLASS:
+        case T_MODULE:
+        case T_REGEXP:
+        case T_MATCH:
+        case T_STRUCT:
+        case T_BIGNUM:
+        case T_FILE:
+        case T_UNDEF:
+        case T_NODE:
+        default:
+        {
+            if (rb_respond_to(value, rb_intern("to_s"))) {
+                // TODO: if this throws we're screwed
+                value = rb_funcall(value, rb_intern("to_s"), 0);
+                return scope.Escape(convert_ruby_str_to_v8(scope, isolate, value));
+            }
+            return scope.Escape(String::NewFromUtf8(isolate, "Undefined Conversion"));
+        }
     }
 
 }

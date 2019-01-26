@@ -274,20 +274,62 @@ raise FooError, "I like foos"
     assert_equal(test_num, context.eval("test()"))
   end
 
-  def test_return_unknown
+  def test_non_utf8_argument
     context = MiniRacer::Context.new
-    test_unknown = Date.new # hits T_DATA in convert_ruby_to_v8
-    context.attach("test", proc{test_unknown})
-    assert_equal("Undefined Conversion", context.eval("test()"))
+    context.eval('function test(arg) { return "saw " + arg; }')
 
-    # clean up and start up a new context
-    context = nil
-    GC.start
+    bad_utf8 = "\x80"
+    if bad_utf8.encoding != Encoding::UTF_8
+      bad_utf8 = bad_utf8.force_encoding('UTF-8')
+    end
 
+    assert_equal bad_utf8.encoding, Encoding::UTF_8
+    assert_equal("saw \u0080", context.call('test', bad_utf8))
+    assert_equal("saw \u0080", context.call('test', "\x80".force_encoding('ASCII-8BIT')))
+    assert_equal("saw \u0080", context.call('test', "\x80".force_encoding('ISO-8859-1')))
+  end
+
+  def test_conversion_to_utf8
     context = MiniRacer::Context.new
-    test_unknown = Date.new # hits T_DATA in convert_ruby_to_v8
-    context.attach("test", proc{test_unknown})
-    assert_equal("Undefined Conversion", context.eval("test()"))
+    context.eval('function test(arg) { return "saw " + arg; }')
+
+    assert_equal("saw real string", context.call("test", "real string"))
+
+    euro = "\x80".force_encoding(Encoding::WINDOWS_1252) # euro!
+    assert_equal("saw \u20AC", context.call('test', euro))
+  end
+
+  def test_failed_conversion_to_utf8
+    context = MiniRacer::Context.new
+    context.eval('function test(arg) { return "saw " + arg; }')
+
+    # euro, but ruby doesn't do the conversion
+    euro = "\x80".force_encoding(Encoding::WINDOWS_1258)
+    begin
+      euro.encode(Encoding::UTF_8)
+      skip 'Expected ruby not to know how to do this conversion'
+    rescue Encoding::ConverterNotFoundError
+      # expected
+    end
+
+    # in which case we treat it as latin1
+    assert_equal("saw \u0080", context.call('test', euro))
+  end
+
+  def test_non_utf_argument_deep
+    context = MiniRacer::Context.new
+    context.eval('function test(arg) { return "saw " + Object.keys(arg[0]) + " => " + Object.values(arg[0]); }')
+
+    assert_equal "saw \u0081 => \u0080", context.call("test", [{"\x81" => ["\x80".force_encoding('ASCII-8BIT')]}])
+  end
+
+  def test_io_object_arg
+    # to_s should be called on this
+    context = MiniRacer::Context.new
+    context.eval('function test(arg) { return "saw " + arg; }')
+
+    output = context.call("test", IO.new(1))
+    assert_match /\Asaw #<IO:/, output
   end
 
   def test_max_memory
