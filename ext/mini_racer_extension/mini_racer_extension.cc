@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <assert.h>
 #include <ruby.h>
 #include <ruby/thread.h>
 #include <v8.h>
