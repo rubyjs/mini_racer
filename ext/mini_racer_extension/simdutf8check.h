@@ -1,3 +1,12 @@
+/*
+ * This file has been modified. The function is_all_zeros was added and
+ * replaces a _mm_testz_si128 call. This was done so that the program can run
+ * on older processors.
+ *
+ * Do not remove this notice, as it is required by the terms of the Apache
+ * license.
+ */
+
 
 #ifndef SIMDUTF8CHECK_H
 #define SIMDUTF8CHECK_H
