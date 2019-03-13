@@ -7,6 +7,7 @@
 #include <ruby/config.h>
 # undef HAVE_BUILTIN___BUILTIN_CHOOSE_EXPR_CONSTANT_P
 # undef HAVE_BUILTIN___BUILTIN_TYPES_COMPATIBLE_P
+# undef HAVE_MEMSET_S
 
 #include <ruby.h>
 #include <ruby/version.h>
