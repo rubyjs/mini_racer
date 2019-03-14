@@ -8,8 +8,18 @@
 # undef HAVE_BUILTIN___BUILTIN_CHOOSE_EXPR_CONSTANT_P
 # undef HAVE_BUILTIN___BUILTIN_TYPES_COMPATIBLE_P
 
-#include <ruby.h>
 #include <ruby/version.h>
+
+// workaround for Ruby 2.3.0 on macOS
+#if RUBY_API_VERSION_CODE == 20300
+#ifdef _DARWIN_C_SOURCE
+#ifndef __STDC_LIB_EXT1__
+#undef HAVE_MEMSET_S
+#endif
+#endif
+#endif
+
+#include <ruby.h>
 #if RUBY_API_VERSION_MAJOR > 1
 #include <ruby/thread.h>
 #endif
