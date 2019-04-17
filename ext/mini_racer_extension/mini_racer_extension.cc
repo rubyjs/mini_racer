@@ -274,7 +274,7 @@ static void prepare_result(MaybeLocal<Value> v8res,
                 }
 
                 len = snprintf(buf, sizeof(buf), "%s at %s:%i:%i", *String::Utf8Value(isolate, message->Get()),
-                               *String::Utf8Value(isolate, message->GetScriptResourceName()->ToString()),
+                               *String::Utf8Value(isolate, message->GetScriptResourceName()->ToString(context).ToLocalChecked()),
                                line,
                                column);
 
@@ -293,7 +293,8 @@ static void prepare_result(MaybeLocal<Value> v8res,
             }
             if (!trycatch.StackTrace(context).IsEmpty()) {
                 evalRes.backtrace = new Persistent<Value>();
-                evalRes.backtrace->Reset(isolate, trycatch.StackTrace(context).ToLocalChecked()->ToString());
+                evalRes.backtrace->Reset(isolate,
+                                         trycatch.StackTrace(context).ToLocalChecked()->ToString(context).ToLocalChecked());
             }
         }
     }
@@ -441,7 +442,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
         return rb_hash;
     }
 
-    Local<String> rstr = value->ToString();
+    Local<String> rstr = value->ToString(context).ToLocalChecked();
     return rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
 }
 
