@@ -374,11 +374,11 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
     }
 
     if (value->IsInt32()) {
-        return INT2FIX(value->Int32Value());
+        return INT2FIX(value->Int32Value(context).ToChecked());
     }
 
     if (value->IsNumber()) {
-        return rb_float_new(value->NumberValue());
+        return rb_float_new(value->NumberValue(context).ToChecked());
     }
 
     if (value->IsTrue()) {
