@@ -443,7 +443,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
     }
 
     Local<String> rstr = value->ToString(context).ToLocalChecked();
-    return rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
+    return rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate), rb_enc_find("utf-8"));
 }
 
 static VALUE convert_v8_to_ruby(Isolate* isolate,
@@ -860,7 +860,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
 
         if (result.json) {
             Local<String> rstr = tmp->ToString(p_ctx->Get(isolate)).ToLocalChecked();
-            VALUE json_string = rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
+            VALUE json_string = rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate), rb_enc_find("utf-8"));
             ret = rb_funcall(rb_mJSON, rb_intern("parse"), 1, json_string);
         } else {
             ret = convert_v8_to_ruby(isolate, *p_ctx, tmp);
