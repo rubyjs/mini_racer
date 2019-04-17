@@ -230,13 +230,13 @@ static void prepare_result(MaybeLocal<Value> v8res,
         Local<Value> local_value = v8res.ToLocalChecked();
         if ((local_value->IsObject() || local_value->IsArray()) &&
                 !local_value->IsDate() && !local_value->IsFunction()) {
-            Local<Object> JSON = context->Global()->Get(
-                        String::NewFromUtf8(isolate, "JSON"))->ToObject();
+            Local<Object> JSON = context->Global()->Get(String::NewFromUtf8(isolate, "JSON"))
+              ->ToObject(context).ToLocalChecked();
 
             Local<Function> stringify = JSON->Get(v8::String::NewFromUtf8(isolate, "stringify"))
                     .As<Function>();
 
-            Local<Object> object = local_value->ToObject();
+            Local<Object> object = local_value->ToObject(context).ToLocalChecked();
             const unsigned argc = 1;
             Local<Value> argv[argc] = { object };
             MaybeLocal<Value> json = stringify->Call(JSON, argc, argv);
@@ -418,7 +418,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
         VALUE rb_hash = rb_hash_new();
         TryCatch trycatch(isolate);
 
-        Local<Object> object = value->ToObject();
+        Local<Object> object = value->ToObject(context).ToLocalChecked();
         auto maybe_props = object->GetOwnPropertyNames(context);
         if (!maybe_props.IsEmpty()) {
             Local<Array> props = maybe_props.ToLocalChecked();
