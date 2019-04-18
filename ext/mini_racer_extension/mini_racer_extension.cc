@@ -547,6 +547,91 @@ static void unblock_eval(void *ptr) {
     eval->context_info->isolate_info->interrupted = true;
 }
 
+/*
+ * The implementations of the run_extra_code(), create_snapshot_data_blob() and
+ * warm_up_snapshot_data_blob() functions have been derived from V8's test suite.
+ */
+bool run_extra_code(Isolate *isolate, Local<v8::Context> context,
+                    const char *utf8_source, const char *name) {
+    Context::Scope context_scope(context);
+    TryCatch try_catch(isolate);
+    Local<String> source_string;
+    if (!String::NewFromUtf8(isolate, utf8_source,
+                             NewStringType::kNormal)
+             .ToLocal(&source_string)) {
+        return false;
+    }
+    Local<v8::String> resource_name =
+        String::NewFromUtf8(isolate, name, NewStringType::kNormal)
+            .ToLocalChecked();
+    ScriptOrigin origin(resource_name);
+    ScriptCompiler::Source source(source_string, origin);
+    Local<Script> script;
+    if (!ScriptCompiler::Compile(context, &source).ToLocal(&script))
+        return false;
+    if (script->Run(context).IsEmpty())
+        return false;
+    // CHECK(!try_catch.HasCaught());
+    return true;
+}
+
+StartupData
+create_snapshot_data_blob(const char *embedded_source = nullptr) {
+    // Create a new isolate and a new context from scratch, optionally run
+    // a script to embed, and serialize to create a snapshot blob.
+    StartupData result = {nullptr, 0};
+    {
+        SnapshotCreator snapshot_creator;
+        Isolate *isolate = snapshot_creator.GetIsolate();
+        {
+            HandleScope scope(isolate);
+            Local<Context> context = Context::New(isolate);
+            if (embedded_source != nullptr &&
+                !run_extra_code(isolate, context, embedded_source,
+                                "<embedded>")) {
+                return result;
+            }
+            snapshot_creator.SetDefaultContext(context);
+        }
+        result = snapshot_creator.CreateBlob(
+            SnapshotCreator::FunctionCodeHandling::kClear);
+    }
+    return result;
+}
+
+StartupData warm_up_snapshot_data_blob(StartupData cold_snapshot_blob,
+                                       const char *warmup_source) {
+    // Use following steps to create a warmed up snapshot blob from a cold one:
+    //  - Create a new isolate from the cold snapshot.
+    //  - Create a new context to run the warmup script. This will trigger
+    //    compilation of executed functions.
+    //  - Create a new context. This context will be unpolluted.
+    //  - Serialize the isolate and the second context into a new snapshot blob.
+    StartupData result = {nullptr, 0};
+
+    if (cold_snapshot_blob.raw_size > 0 && cold_snapshot_blob.data != nullptr &&
+        warmup_source != NULL) {
+        SnapshotCreator snapshot_creator(nullptr, &cold_snapshot_blob);
+        Isolate *isolate = snapshot_creator.GetIsolate();
+        {
+            HandleScope scope(isolate);
+            Local<Context> context = Context::New(isolate);
+            if (!run_extra_code(isolate, context, warmup_source, "<warm-up>")) {
+                return result;
+            }
+        }
+        {
+            HandleScope handle_scope(isolate);
+            isolate->ContextDisposedNotification(false);
+            Local<Context> context = Context::New(isolate);
+            snapshot_creator.SetDefaultContext(context);
+        }
+        result = snapshot_creator.CreateBlob(
+            SnapshotCreator::FunctionCodeHandling::kKeep);
+    }
+    return result;
+}
+
 static VALUE rb_snapshot_size(VALUE self, VALUE str) {
     SnapshotInfo* snapshot_info;
     Data_Get_Struct(self, SnapshotInfo, snapshot_info);
@@ -565,7 +650,7 @@ static VALUE rb_snapshot_load(VALUE self, VALUE str) {
 
     init_v8();
 
-    StartupData startup_data = V8::CreateSnapshotDataBlob(RSTRING_PTR(str));
+    StartupData startup_data = create_snapshot_data_blob(RSTRING_PTR(str));
 
     if (startup_data.data == NULL && startup_data.raw_size == 0) {
         rb_raise(rb_eSnapshotError, "Could not create snapshot, most likely the source is incorrect");
@@ -596,7 +681,7 @@ static VALUE rb_snapshot_warmup_unsafe(VALUE self, VALUE str) {
     init_v8();
 
     StartupData cold_startup_data = {snapshot_info->data, snapshot_info->raw_size};
-    StartupData warm_startup_data = V8::WarmUpSnapshotDataBlob(cold_startup_data, RSTRING_PTR(str));
+    StartupData warm_startup_data = warm_up_snapshot_data_blob(cold_startup_data, RSTRING_PTR(str));
 
     if (warm_startup_data.data == NULL && warm_startup_data.raw_size == 0) {
         rb_raise(rb_eSnapshotError, "Could not warm up snapshot, most likely the source is incorrect");
