@@ -82,15 +82,19 @@ def libv8_gem_name
   is_musl ? 'libv8-alpine' : 'libv8'
 end
 
-# old rubygem versions prefer source gems to binary ones
+# 1) old rubygem versions prefer source gems to binary ones
 # ... and their --platform switch is broken too, as it leaves the 'ruby'
 # platform in Gem.platforms.
+# 2) the ruby binaries distributed with alpine (platform ending in -musl)
+# refuse to load binary gems by default
 def force_platform_gem
   gem_version = `gem --version`
   return 'gem' unless $?.success?
 
-  return 'gem' if gem_version.to_f.zero? || gem_version.to_f >= 2.3
-  return 'gem' if RUBY_PLATFORM != 'x86_64-linux'
+  if RUBY_PLATFORM != 'x86_64-linux-musl'
+    return 'gem' if gem_version.to_f.zero? || gem_version.to_f >= 2.3
+    return 'gem' if RUBY_PLATFORM != 'x86_64-linux'
+  end
 
   gem_binary = `which gem`
   return 'gem' unless $?.success?
@@ -105,7 +109,12 @@ def force_platform_gem
   file = Tempfile.new('sq_mini_racer')
   file << <<EOS
 require 'rubygems'
-Gem.platforms.reject! { |it| it == 'ruby' }
+platforms = Gem.platforms
+platforms.reject! { |it| it == 'ruby' }
+if platforms.empty?
+  platforms << Gem::Platform.new('x86_64-linux')
+end
+Gem.send(:define_method, :platforms) { platforms }
 #{IO.read(gem_binary.strip)}
 EOS
   file.close
