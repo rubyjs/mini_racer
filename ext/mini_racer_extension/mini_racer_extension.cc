@@ -859,7 +859,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
         Local<Value> tmp = Local<Value>::New(isolate, *result.value);
 
         if (result.json) {
-            Local<String> rstr = tmp->ToString();
+            Local<String> rstr = tmp->ToString(p_ctx->Get(isolate)).ToLocalChecked();
             VALUE json_string = rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
             ret = rb_funcall(rb_mJSON, rb_intern("parse"), 1, json_string);
         } else {
