@@ -464,7 +464,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate,
                               Local<Value>::New(isolate, value));
 }
 
-static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
+static Local<Value> convert_ruby_to_v8(Isolate* isolate, Local<Context> context, VALUE value) {
     EscapableHandleScope scope(isolate);
 
     Local<Array> array;
@@ -498,7 +498,7 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
 	length = RARRAY_LEN(value);
 	array = Array::New(isolate, (int)length);
 	for(i=0; i<length; i++) {
-	    array->Set(i, convert_ruby_to_v8(isolate, rb_ary_entry(value, i)));
+      array->Set(i, convert_ruby_to_v8(isolate, context, rb_ary_entry(value, i)));
 	}
 	return scope.Escape(array);
     case T_HASH:
@@ -507,8 +507,8 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
 	length = RARRAY_LEN(hash_as_array);
 	for(i=0; i<length; i++) {
 	    pair = rb_ary_entry(hash_as_array, i);
-	    object->Set(convert_ruby_to_v8(isolate, rb_ary_entry(pair, 0)),
-			convert_ruby_to_v8(isolate, rb_ary_entry(pair, 1)));
+	    object->Set(convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 0)),
+                  convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 1)));
 	}
 	return scope.Escape(object);
     case T_SYMBOL:
@@ -523,7 +523,7 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
                 value = rb_funcall(value, rb_intern("to_time"), 0);
             }
             value = rb_funcall(value, rb_intern("to_f"), 0);
-            return scope.Escape(Date::New(isolate, NUM2DBL(value) * 1000));
+            return scope.Escape(Date::New(context, NUM2DBL(value) * 1000).ToLocalChecked());
         }
     case T_OBJECT:
     case T_CLASS:
@@ -539,7 +539,6 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
     default:
       return scope.Escape(String::NewFromUtf8(isolate, "Undefined Conversion"));
     }
-
 }
 
 static void unblock_eval(void *ptr) {
@@ -978,6 +977,8 @@ gvl_ruby_callback(void* data) {
     VALUE result;
     VALUE self;
     VALUE parent;
+    ContextInfo* context_info;
+
     {
         HandleScope scope(args->GetIsolate());
         Local<External> external = Local<External>::Cast(args->Data());
@@ -990,7 +991,6 @@ gvl_ruby_callback(void* data) {
             return NULL;
         }
 
-        ContextInfo* context_info;
         Data_Get_Struct(parent, ContextInfo, context_info);
 
         if (length > 0) {
@@ -1000,7 +1000,7 @@ gvl_ruby_callback(void* data) {
         for (int i = 0; i < length; i++) {
             Local<Value> value = ((*args)[i]).As<Value>();
             VALUE tmp = convert_v8_to_ruby(args->GetIsolate(),
-                              *context_info->context, value);
+                                           *context_info->context, value);
             rb_ary_push(ruby_args, tmp);
         }
     }
@@ -1031,7 +1031,7 @@ gvl_ruby_callback(void* data) {
     }
     else {
         HandleScope scope(args->GetIsolate());
-        Handle<Value> v8_result = convert_ruby_to_v8(args->GetIsolate(), result);
+        Handle<Value> v8_result = convert_ruby_to_v8(args->GetIsolate(), context_info->context->Get(args->GetIsolate()), result);
         args->GetReturnValue().Set(v8_result);
     }
 
@@ -1442,7 +1442,7 @@ static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
                     return Qnil;
                 }
                 for(int i=0; i < fun_argc; i++) {
-                    call.argv[i] = convert_ruby_to_v8(isolate, call_argv[i]);
+                    call.argv[i] = convert_ruby_to_v8(isolate, context, call_argv[i]);
                 }
             }
             rb_thread_call_without_gvl(nogvl_context_call, &call, unblock_function, &call);
