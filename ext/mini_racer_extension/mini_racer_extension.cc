@@ -230,13 +230,13 @@ static void prepare_result(MaybeLocal<Value> v8res,
         Local<Value> local_value = v8res.ToLocalChecked();
         if ((local_value->IsObject() || local_value->IsArray()) &&
                 !local_value->IsDate() && !local_value->IsFunction()) {
-            Local<Object> JSON = context->Global()->Get(
-                        String::NewFromUtf8(isolate, "JSON"))->ToObject();
+            Local<Object> JSON = context->Global()->Get(String::NewFromUtf8(isolate, "JSON"))
+              ->ToObject(context).ToLocalChecked();
 
             Local<Function> stringify = JSON->Get(v8::String::NewFromUtf8(isolate, "stringify"))
                     .As<Function>();
 
-            Local<Object> object = local_value->ToObject();
+            Local<Object> object = local_value->ToObject(context).ToLocalChecked();
             const unsigned argc = 1;
             Local<Value> argv[argc] = { object };
             MaybeLocal<Value> json = stringify->Call(JSON, argc, argv);
@@ -274,7 +274,7 @@ static void prepare_result(MaybeLocal<Value> v8res,
                 }
 
                 len = snprintf(buf, sizeof(buf), "%s at %s:%i:%i", *String::Utf8Value(isolate, message->Get()),
-                               *String::Utf8Value(isolate, message->GetScriptResourceName()->ToString()),
+                               *String::Utf8Value(isolate, message->GetScriptResourceName()->ToString(context).ToLocalChecked()),
                                line,
                                column);
 
@@ -293,7 +293,8 @@ static void prepare_result(MaybeLocal<Value> v8res,
             }
             if (!trycatch.StackTrace(context).IsEmpty()) {
                 evalRes.backtrace = new Persistent<Value>();
-                evalRes.backtrace->Reset(isolate, trycatch.StackTrace(context).ToLocalChecked()->ToString());
+                evalRes.backtrace->Reset(isolate,
+                                         trycatch.StackTrace(context).ToLocalChecked()->ToString(context).ToLocalChecked());
             }
         }
     }
@@ -373,11 +374,11 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
     }
 
     if (value->IsInt32()) {
-        return INT2FIX(value->Int32Value());
+        return INT2FIX(value->Int32Value(context).ToChecked());
     }
 
     if (value->IsNumber()) {
-        return rb_float_new(value->NumberValue());
+        return rb_float_new(value->NumberValue(context).ToChecked());
     }
 
     if (value->IsTrue()) {
@@ -418,7 +419,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
         VALUE rb_hash = rb_hash_new();
         TryCatch trycatch(isolate);
 
-        Local<Object> object = value->ToObject();
+        Local<Object> object = value->ToObject(context).ToLocalChecked();
         auto maybe_props = object->GetOwnPropertyNames(context);
         if (!maybe_props.IsEmpty()) {
             Local<Array> props = maybe_props.ToLocalChecked();
@@ -441,8 +442,8 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
         return rb_hash;
     }
 
-    Local<String> rstr = value->ToString();
-    return rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
+    Local<String> rstr = value->ToString(context).ToLocalChecked();
+    return rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate), rb_enc_find("utf-8"));
 }
 
 static VALUE convert_v8_to_ruby(Isolate* isolate,
@@ -463,7 +464,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate,
                               Local<Value>::New(isolate, value));
 }
 
-static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
+static Local<Value> convert_ruby_to_v8(Isolate* isolate, Local<Context> context, VALUE value) {
     EscapableHandleScope scope(isolate);
 
     Local<Array> array;
@@ -497,7 +498,7 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
 	length = RARRAY_LEN(value);
 	array = Array::New(isolate, (int)length);
 	for(i=0; i<length; i++) {
-	    array->Set(i, convert_ruby_to_v8(isolate, rb_ary_entry(value, i)));
+      array->Set(i, convert_ruby_to_v8(isolate, context, rb_ary_entry(value, i)));
 	}
 	return scope.Escape(array);
     case T_HASH:
@@ -506,8 +507,8 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
 	length = RARRAY_LEN(hash_as_array);
 	for(i=0; i<length; i++) {
 	    pair = rb_ary_entry(hash_as_array, i);
-	    object->Set(convert_ruby_to_v8(isolate, rb_ary_entry(pair, 0)),
-			convert_ruby_to_v8(isolate, rb_ary_entry(pair, 1)));
+	    object->Set(convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 0)),
+                  convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 1)));
 	}
 	return scope.Escape(object);
     case T_SYMBOL:
@@ -522,7 +523,7 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
                 value = rb_funcall(value, rb_intern("to_time"), 0);
             }
             value = rb_funcall(value, rb_intern("to_f"), 0);
-            return scope.Escape(Date::New(isolate, NUM2DBL(value) * 1000));
+            return scope.Escape(Date::New(context, NUM2DBL(value) * 1000).ToLocalChecked());
         }
     case T_OBJECT:
     case T_CLASS:
@@ -538,12 +539,96 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, VALUE value) {
     default:
       return scope.Escape(String::NewFromUtf8(isolate, "Undefined Conversion"));
     }
-
 }
 
 static void unblock_eval(void *ptr) {
     EvalParams* eval = (EvalParams*)ptr;
     eval->context_info->isolate_info->interrupted = true;
+}
+
+/*
+ * The implementations of the run_extra_code(), create_snapshot_data_blob() and
+ * warm_up_snapshot_data_blob() functions have been derived from V8's test suite.
+ */
+bool run_extra_code(Isolate *isolate, Local<v8::Context> context,
+                    const char *utf8_source, const char *name) {
+    Context::Scope context_scope(context);
+    TryCatch try_catch(isolate);
+    Local<String> source_string;
+    if (!String::NewFromUtf8(isolate, utf8_source,
+                             NewStringType::kNormal)
+             .ToLocal(&source_string)) {
+        return false;
+    }
+    Local<v8::String> resource_name =
+        String::NewFromUtf8(isolate, name, NewStringType::kNormal)
+            .ToLocalChecked();
+    ScriptOrigin origin(resource_name);
+    ScriptCompiler::Source source(source_string, origin);
+    Local<Script> script;
+    if (!ScriptCompiler::Compile(context, &source).ToLocal(&script))
+        return false;
+    if (script->Run(context).IsEmpty())
+        return false;
+    // CHECK(!try_catch.HasCaught());
+    return true;
+}
+
+StartupData
+create_snapshot_data_blob(const char *embedded_source = nullptr) {
+    // Create a new isolate and a new context from scratch, optionally run
+    // a script to embed, and serialize to create a snapshot blob.
+    StartupData result = {nullptr, 0};
+    {
+        SnapshotCreator snapshot_creator;
+        Isolate *isolate = snapshot_creator.GetIsolate();
+        {
+            HandleScope scope(isolate);
+            Local<Context> context = Context::New(isolate);
+            if (embedded_source != nullptr &&
+                !run_extra_code(isolate, context, embedded_source,
+                                "<embedded>")) {
+                return result;
+            }
+            snapshot_creator.SetDefaultContext(context);
+        }
+        result = snapshot_creator.CreateBlob(
+            SnapshotCreator::FunctionCodeHandling::kClear);
+    }
+    return result;
+}
+
+StartupData warm_up_snapshot_data_blob(StartupData cold_snapshot_blob,
+                                       const char *warmup_source) {
+    // Use following steps to create a warmed up snapshot blob from a cold one:
+    //  - Create a new isolate from the cold snapshot.
+    //  - Create a new context to run the warmup script. This will trigger
+    //    compilation of executed functions.
+    //  - Create a new context. This context will be unpolluted.
+    //  - Serialize the isolate and the second context into a new snapshot blob.
+    StartupData result = {nullptr, 0};
+
+    if (cold_snapshot_blob.raw_size > 0 && cold_snapshot_blob.data != nullptr &&
+        warmup_source != NULL) {
+        SnapshotCreator snapshot_creator(nullptr, &cold_snapshot_blob);
+        Isolate *isolate = snapshot_creator.GetIsolate();
+        {
+            HandleScope scope(isolate);
+            Local<Context> context = Context::New(isolate);
+            if (!run_extra_code(isolate, context, warmup_source, "<warm-up>")) {
+                return result;
+            }
+        }
+        {
+            HandleScope handle_scope(isolate);
+            isolate->ContextDisposedNotification(false);
+            Local<Context> context = Context::New(isolate);
+            snapshot_creator.SetDefaultContext(context);
+        }
+        result = snapshot_creator.CreateBlob(
+            SnapshotCreator::FunctionCodeHandling::kKeep);
+    }
+    return result;
 }
 
 static VALUE rb_snapshot_size(VALUE self, VALUE str) {
@@ -564,7 +649,7 @@ static VALUE rb_snapshot_load(VALUE self, VALUE str) {
 
     init_v8();
 
-    StartupData startup_data = V8::CreateSnapshotDataBlob(RSTRING_PTR(str));
+    StartupData startup_data = create_snapshot_data_blob(RSTRING_PTR(str));
 
     if (startup_data.data == NULL && startup_data.raw_size == 0) {
         rb_raise(rb_eSnapshotError, "Could not create snapshot, most likely the source is incorrect");
@@ -595,7 +680,7 @@ static VALUE rb_snapshot_warmup_unsafe(VALUE self, VALUE str) {
     init_v8();
 
     StartupData cold_startup_data = {snapshot_info->data, snapshot_info->raw_size};
-    StartupData warm_startup_data = V8::WarmUpSnapshotDataBlob(cold_startup_data, RSTRING_PTR(str));
+    StartupData warm_startup_data = warm_up_snapshot_data_blob(cold_startup_data, RSTRING_PTR(str));
 
     if (warm_startup_data.data == NULL && warm_startup_data.raw_size == 0) {
         rb_raise(rb_eSnapshotError, "Could not warm up snapshot, most likely the source is incorrect");
@@ -774,8 +859,8 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
         Local<Value> tmp = Local<Value>::New(isolate, *result.value);
 
         if (result.json) {
-            Local<String> rstr = tmp->ToString();
-            VALUE json_string = rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(), rb_enc_find("utf-8"));
+            Local<String> rstr = tmp->ToString(p_ctx->Get(isolate)).ToLocalChecked();
+            VALUE json_string = rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate), rb_enc_find("utf-8"));
             ret = rb_funcall(rb_mJSON, rb_intern("parse"), 1, json_string);
         } else {
             ret = convert_v8_to_ruby(isolate, *p_ctx, tmp);
@@ -892,6 +977,8 @@ gvl_ruby_callback(void* data) {
     VALUE result;
     VALUE self;
     VALUE parent;
+    ContextInfo* context_info;
+
     {
         HandleScope scope(args->GetIsolate());
         Local<External> external = Local<External>::Cast(args->Data());
@@ -904,7 +991,6 @@ gvl_ruby_callback(void* data) {
             return NULL;
         }
 
-        ContextInfo* context_info;
         Data_Get_Struct(parent, ContextInfo, context_info);
 
         if (length > 0) {
@@ -914,7 +1000,7 @@ gvl_ruby_callback(void* data) {
         for (int i = 0; i < length; i++) {
             Local<Value> value = ((*args)[i]).As<Value>();
             VALUE tmp = convert_v8_to_ruby(args->GetIsolate(),
-                              *context_info->context, value);
+                                           *context_info->context, value);
             rb_ary_push(ruby_args, tmp);
         }
     }
@@ -945,7 +1031,7 @@ gvl_ruby_callback(void* data) {
     }
     else {
         HandleScope scope(args->GetIsolate());
-        Handle<Value> v8_result = convert_ruby_to_v8(args->GetIsolate(), result);
+        Handle<Value> v8_result = convert_ruby_to_v8(args->GetIsolate(), context_info->context->Get(args->GetIsolate()), result);
         args->GetReturnValue().Set(v8_result);
     }
 
@@ -1356,7 +1442,7 @@ static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
                     return Qnil;
                 }
                 for(int i=0; i < fun_argc; i++) {
-                    call.argv[i] = convert_ruby_to_v8(isolate, call_argv[i]);
+                    call.argv[i] = convert_ruby_to_v8(isolate, context, call_argv[i]);
                 }
             }
             rb_thread_call_without_gvl(nogvl_context_call, &call, unblock_function, &call);
