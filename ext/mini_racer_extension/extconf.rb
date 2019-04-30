@@ -121,7 +121,7 @@ EOS
   "#{ruby} '#{file.path}'"
 end
 
-LIBV8_VERSION = '6.7.288.46.1'
+LIBV8_VERSION = '7.3.492.27.1'
 libv8_rb = Dir.glob('**/libv8.rb').first
 FileUtils.mkdir_p('gemdir')
 unless libv8_rb

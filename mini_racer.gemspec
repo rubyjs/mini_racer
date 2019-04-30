@@ -15,7 +15,7 @@ Gem::Specification.new do |spec|
   spec.license       = "MIT"
 
 
-  REJECTS            = %r{\A((benchmark|test|spec|features)/|bench\.rb|.+\.sh|Jenkinsfile)}
+  REJECTS            = %r{\A((benchmark|test|spec|features|examples)/|bench\.rb|.+\.sh|Jenkinsfile)}
   spec.files         = `git ls-files -z`.split("\x0").reject { |f| f.match(REJECTS) }
   spec.bindir        = "exe"
   spec.executables   = spec.files.grep(%r{^exe/}) { |f| File.basename(f) }

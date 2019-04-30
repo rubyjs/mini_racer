@@ -55,3 +55,28 @@ namespace :test do
     end
   end
 end
+
+desc 'run clang-tidy linter on mini_racer_extension.cc'
+task :lint do
+  require 'mkmf'
+  require 'libv8'
+
+  Libv8.configure_makefile
+
+  conf = RbConfig::CONFIG.merge('hdrdir' => $hdrdir.quote, 'srcdir' => $srcdir.quote,
+                                'arch_hdrdir' => $arch_hdrdir.quote,
+                                'top_srcdir' => $top_srcdir.quote)
+  if $universal and (arch_flag = conf['ARCH_FLAG']) and !arch_flag.empty?
+    conf['ARCH_FLAG'] = arch_flag.gsub(/(?:\G|\s)-arch\s+\S+/, '')
+  end
+
+  checks = %W(bugprone-*
+              cert-*
+              cppcoreguidelines-*
+              clang-analyzer-*
+              performance-*
+              portability-*
+              readability-*).join(',')
+
+  sh RbConfig::expand("clang-tidy -checks='#{checks}' ext/mini_racer_extension/mini_racer_extension.cc -- #$INCFLAGS #$CPPFLAGS", conf)
+end
