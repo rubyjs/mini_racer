@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <ruby.h>
 #include <ruby/thread.h>
+#include <ruby/io.h>
 #include <v8.h>
+#include <v8-profiler.h>
 #include <libplatform/libplatform.h>
 #include <ruby/encoding.h>
 #include <pthread.h>
@@ -1315,6 +1317,69 @@ rb_heap_stats(VALUE self) {
     return rval;
 }
 
+// https://github.com/bnoordhuis/node-heapdump/blob/master/src/heapdump.cc
+class FileOutputStream : public OutputStream {
+ public:
+  FileOutputStream(FILE* stream) : stream_(stream) {}
+
+  virtual int GetChunkSize() {
+    return 65536;
+  }
+
+  virtual void EndOfStream() {}
+
+  virtual WriteResult WriteAsciiChunk(char* data, int size) {
+    const size_t len = static_cast<size_t>(size);
+    size_t off = 0;
+
+    while (off < len && !feof(stream_) && !ferror(stream_))
+      off += fwrite(data + off, 1, len - off, stream_);
+
+    return off == len ? kContinue : kAbort;
+  }
+
+ private:
+  FILE* stream_;
+};
+
+
+static VALUE
+rb_heap_snapshot(VALUE self, VALUE file) {
+
+    rb_io_t *fptr;
+
+    fptr = RFILE(file)->fptr;
+
+    if (!fptr) return Qfalse;
+
+    FILE* fp;
+    fp = fdopen(fptr->fd, "w");
+    if (fp == NULL) return Qfalse;
+
+
+    ContextInfo* context_info;
+    Data_Get_Struct(self, ContextInfo, context_info);
+    Isolate* isolate;
+    isolate = context_info->isolate_info ? context_info->isolate_info->isolate : NULL;
+
+    if (!isolate) return Qfalse;
+
+    Locker lock(isolate);
+    Isolate::Scope isolate_scope(isolate);
+    HandleScope handle_scope(isolate);
+
+    HeapProfiler* heap_profiler = isolate->GetHeapProfiler();
+
+    const HeapSnapshot* const snap = heap_profiler->TakeHeapSnapshot();
+
+    FileOutputStream stream(fp);
+    snap->Serialize(&stream, HeapSnapshot::kJSON);
+
+    const_cast<HeapSnapshot*>(snap)->Delete();
+
+    return Qtrue;
+}
+
 static VALUE
 rb_context_stop(VALUE self) {
 
@@ -1500,6 +1565,8 @@ extern "C" {
         rb_define_method(rb_cContext, "stop", (VALUE(*)(...))&rb_context_stop, 0);
         rb_define_method(rb_cContext, "dispose_unsafe", (VALUE(*)(...))&rb_context_dispose, 0);
         rb_define_method(rb_cContext, "heap_stats", (VALUE(*)(...))&rb_heap_stats, 0);
+	rb_define_method(rb_cContext, "write_heap_snapshot_unsafe", (VALUE(*)(...))&rb_heap_snapshot, 1);
+
         rb_define_private_method(rb_cContext, "create_isolate_value",(VALUE(*)(...))&rb_context_create_isolate_value, 0);
         rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 2);
         rb_define_private_method(rb_cContext, "call_unsafe", (VALUE(*)(...))&rb_context_call_unsafe, -1);

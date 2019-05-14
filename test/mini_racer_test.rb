@@ -755,4 +755,22 @@ raise FooError, "I like foos"
     context.dispose
     assert_nil context.isolate
   end
+
+  def test_heap_dump
+
+    f = Tempfile.new("heap")
+    path = f.path
+    f.unlink
+
+    context = MiniRacer::Context.new
+    context.eval('let x = 1000;')
+    context.write_heap_snapshot(path)
+
+    dump = File.read(path)
+
+    assert dump.length > 0
+
+    FileUtils.rm(path)
+
+  end
 end
