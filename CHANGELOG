@@ -1,3 +1,9 @@
+- 14-05-2019
+
+- 0.2.6
+
+  - FEATURE: add support for write_heap_snapshot which helps you analyze memory
+
 - 25-04-2019
 
 - 0.2.5
