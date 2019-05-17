@@ -49,10 +49,15 @@ if CONFIG['warnflags']
   CONFIG['warnflags'].gsub!('-Wimplicit-function-declaration', '')
 end
 
-if enable_config('debug')
+if enable_config('debug') || enable_config('asan')
   CONFIG['debugflags'] << ' -ggdb3 -O0'
 end
 
 Libv8.configure_makefile
+
+if enable_config('asan')
+  $CPPFLAGS.insert(0, " -fsanitize=address ")
+  $LDFLAGS.insert(0, " -fsanitize=address ")
+end
 
 create_makefile 'mini_racer_extension'
