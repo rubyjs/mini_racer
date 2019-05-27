@@ -21,7 +21,8 @@ namespace :test do
     ENV["CONFIGURE_ARGS"] = [ENV["CONFIGURE_ARGS"], '--enable-asan'].compact.join(' ')
     Rake::Task['compile'].invoke
 
-    asan_path = `ldconfig -N -p | grep libasan | sed 's/.* => \\(.*\\)$/\\1/'`.chomp
+    asan_path = `ldconfig -N -p |grep libasan | grep -v 32 | sed 's/.* => \\(.*\\)$/\\1/'`.chomp.split("\n")[-1]
+
 
     cmdline = "env LD_PRELOAD=\"#{asan_path}\" ruby test/test_leak.rb"
     puts cmdline
