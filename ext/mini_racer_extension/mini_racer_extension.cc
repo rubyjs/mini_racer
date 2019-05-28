@@ -1086,8 +1086,10 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
         Local<Context> context = context_info->context->Get(isolate);
         Context::Scope context_scope(context);
 
-        Local<String> v8_str = String::NewFromUtf8(isolate, RSTRING_PTR(name),
-                              NewStringType::kNormal, (int)RSTRING_LEN(name)).ToLocalChecked();
+        Local<String> v8_str =
+            String::NewFromUtf8(isolate, RSTRING_PTR(name),
+                                NewStringType::kNormal, (int)RSTRING_LEN(name))
+                .ToLocalChecked();
 
         // copy self so we can access from v8 external
         VALUE* self_copy;
@@ -1097,24 +1099,35 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
         Local<Value> external = External::New(isolate, self_copy);
 
         if (parent_object == Qnil) {
-            context->Global()->Set(v8_str, FunctionTemplate::New(isolate, ruby_callback, external)->GetFunction());
-        } else {
+            context->Global()->Set(
+                v8_str, FunctionTemplate::New(isolate, ruby_callback, external)
+                            ->GetFunction(context)
+                            .ToLocalChecked());
 
-            Local<String> eval = String::NewFromUtf8(isolate, RSTRING_PTR(parent_object_eval),
-                                  NewStringType::kNormal, (int)RSTRING_LEN(parent_object_eval)).ToLocalChecked();
+        } else {
+            Local<String> eval =
+                String::NewFromUtf8(isolate, RSTRING_PTR(parent_object_eval),
+                                    NewStringType::kNormal,
+                                    (int)RSTRING_LEN(parent_object_eval))
+                    .ToLocalChecked();
 
             MaybeLocal<Script> parsed_script = Script::Compile(context, eval);
             if (parsed_script.IsEmpty()) {
-            parse_error = true;
+                parse_error = true;
             } else {
-                MaybeLocal<Value> maybe_value = parsed_script.ToLocalChecked()->Run(context);
+                MaybeLocal<Value> maybe_value =
+                    parsed_script.ToLocalChecked()->Run(context);
                 attach_error = true;
 
                 if (!maybe_value.IsEmpty()) {
                     Local<Value> value = maybe_value.ToLocalChecked();
-                    if (value->IsObject()){
-                    value.As<Object>()->Set(v8_str, FunctionTemplate::New(isolate, ruby_callback, external)->GetFunction());
-                    attach_error = false;
+                    if (value->IsObject()) {
+                        value.As<Object>()->Set(
+                            v8_str, FunctionTemplate::New(
+                                        isolate, ruby_callback, external)
+                                        ->GetFunction(context)
+                                        .ToLocalChecked());
+                        attach_error = false;
                     }
                 }
             }
