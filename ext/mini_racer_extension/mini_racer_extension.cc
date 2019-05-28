@@ -241,7 +241,7 @@ static void prepare_result(MaybeLocal<Value> v8res,
             Local<Object> object = local_value->ToObject(context).ToLocalChecked();
             const unsigned argc = 1;
             Local<Value> argv[argc] = { object };
-            MaybeLocal<Value> json = stringify->Call(JSON, argc, argv);
+            MaybeLocal<Value> json = stringify->Call(context, JSON, argc, argv);
 
             if (json.IsEmpty()) {
                 evalRes.executed = false;
