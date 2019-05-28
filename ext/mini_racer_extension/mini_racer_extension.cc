@@ -152,7 +152,7 @@ static VALUE rb_mJSON;
 static VALUE rb_cFailedV8Conversion;
 static VALUE rb_cDateTime = Qnil;
 
-static Platform* current_platform = NULL;
+static std::unique_ptr<Platform> current_platform = NULL;
 static std::mutex platform_lock;
 
 static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
@@ -189,8 +189,8 @@ static void init_v8() {
 
     if (current_platform == NULL) {
         V8::InitializeICU();
-        current_platform = platform::CreateDefaultPlatform();
-        V8::InitializePlatform(current_platform);
+        current_platform = platform::NewDefaultPlatform();
+        V8::InitializePlatform(current_platform.get());
         V8::Initialize();
     }
 
