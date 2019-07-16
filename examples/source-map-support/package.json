@@ -1,0 +1,19 @@
+{
+  "name": "mini-racer-source-map-support-example",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "devDependencies": {
+    "@babel/core": "^7.3.4",
+    "babel-loader": "^8.0.5",
+    "prettier": "^1.16.4",
+    "webpack": "^4.29.6",
+    "webpack-cli": "^3.2.3"
+  },
+  "scripts": {
+    "build": "webpack"
+  },
+  "dependencies": {
+    "source-map-support": "^0.5.10"
+  }
+}

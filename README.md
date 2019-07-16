@@ -350,6 +350,10 @@ Note how the global interpreter lock release leads to 2 threads doing the same w
 
 As a rule MiniRacer strives to always support and depend on the latest stable version of libv8.
 
+## Source Maps
+
+MiniRacer can fully support source maps but must be configured correctly to do so. [Check out this example](./examples/source-map-support/) for a working implementation.
+
 ## Installation
 
 Add this line to your application's Gemfile:
