@@ -19,6 +19,22 @@ Rake::ExtensionTask.new('prv_ext_loader', gem)
 
 # via http://blog.flavorjon.es/2009/06/easily-valgrind-gdb-your-ruby-c.html
 namespace :test do
+  desc "run test suite with Address Sanitizer"
+  task :asan do
+    ENV["CONFIGURE_ARGS"] = [ENV["CONFIGURE_ARGS"], '--enable-asan'].compact.join(' ')
+    Rake::Task['compile'].invoke
+
+    asan_path = `ldconfig -N -p |grep libasan | grep -v 32 | sed 's/.* => \\(.*\\)$/\\1/'`.chomp.split("\n")[-1]
+
+
+    cmdline = "env LD_PRELOAD=\"#{asan_path}\" ruby test/test_leak.rb"
+    puts cmdline
+    system cmdline
+
+    cmdline = "env LD_PRELOAD=\"#{asan_path}\" rake test"
+    puts cmdline
+    system cmdline
+  end
   # partial-loads-ok and undef-value-errors necessary to ignore
   # spurious (and eminently ignorable) warnings from the ruby
   # interpreter

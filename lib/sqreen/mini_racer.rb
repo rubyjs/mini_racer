@@ -178,6 +178,28 @@ module MiniRacer
       eval(File.read(filename))
     end
 
+    def write_heap_snapshot(file_or_io)
+      f = nil
+      implicit = false
+
+
+      if String === file_or_io
+        f = File.open(file_or_io, "w")
+        implicit = true
+      else
+        f = file_or_io
+      end
+
+      if !(File === f)
+        raise ArgumentError("file_or_io")
+      end
+
+      write_heap_snapshot_unsafe(f)
+
+    ensure
+      f.close if implicit
+    end
+
     def eval(str, options=nil)
       raise(ContextDisposedError, 'attempted to call eval on a disposed context!') if @disposed
 

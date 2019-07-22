@@ -23,7 +23,9 @@
 #if RUBY_API_VERSION_MAJOR > 1
 #include <ruby/thread.h>
 #endif
+#include <ruby/io.h>
 #include <v8.h>
+#include <v8-profiler.h>
 #include <libplatform/libplatform.h>
 #include <ruby/encoding.h>
 #include <pthread.h>
@@ -174,7 +176,7 @@ static VALUE rb_mJSON;
 static VALUE rb_cFailedV8Conversion;
 static VALUE rb_cDateTime = Qnil;
 
-static Platform* current_platform = NULL;
+static std::unique_ptr<Platform> current_platform = NULL;
 static std::mutex platform_lock;
 
 static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
@@ -211,8 +213,8 @@ static void init_v8() {
 
     if (current_platform == NULL) {
         V8::InitializeICU();
-        current_platform = platform::CreateDefaultPlatform();
-        V8::InitializePlatform(current_platform);
+        current_platform = platform::NewDefaultPlatform();
+        V8::InitializePlatform(current_platform.get());
         V8::Initialize();
     }
 
@@ -263,7 +265,7 @@ static void prepare_result(MaybeLocal<Value> v8res,
             Local<Object> object = local_value->ToObject(context).ToLocalChecked();
             const unsigned argc = 1;
             Local<Value> argv[argc] = { object };
-            MaybeLocal<Value> json = stringify->Call(JSON, argc, argv);
+            MaybeLocal<Value> json = stringify->Call(context, JSON, argc, argv);
 
             if (json.IsEmpty()) {
                 evalRes.executed = false;
@@ -582,85 +584,85 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, Local<Context> context,
     VALUE klass;
 
     switch (TYPE(value)) {
-        case T_FIXNUM:
+    case T_FIXNUM:
         {
-            fixnum = NUM2LONG(value);
-            if (fixnum > INT_MAX)
-            {
-                return scope.Escape(Number::New(isolate, (double)fixnum));
-            }
-            return scope.Escape(Integer::New(isolate, (int)fixnum));
+        fixnum = NUM2LONG(value);
+        if (fixnum > INT_MAX)
+        {
+            return scope.Escape(Number::New(isolate, (double)fixnum));
         }
-        case T_FLOAT:
-            return scope.Escape(Number::New(isolate, NUM2DBL(value)));
-        case T_STRING:
+        return scope.Escape(Integer::New(isolate, (int)fixnum));
+        }
+    case T_FLOAT:
+	return scope.Escape(Number::New(isolate, NUM2DBL(value)));
+    case T_STRING:
             return scope.Escape(convert_ruby_str_to_v8(scope, isolate, value));
-        case T_NIL:
-            return scope.Escape(Null(isolate));
-        case T_TRUE:
-            return scope.Escape(True(isolate));
-        case T_FALSE:
-            return scope.Escape(False(isolate));
-        case T_ARRAY:
+    case T_NIL:
+	return scope.Escape(Null(isolate));
+    case T_TRUE:
+	return scope.Escape(True(isolate));
+    case T_FALSE:
+	return scope.Escape(False(isolate));
+    case T_ARRAY:
         {
-            length = RARRAY_LEN(value);
-            array = Array::New(isolate, (int)length);
-            for(i=0; i<length; i++) {
-                array->Set(i, convert_ruby_to_v8(isolate, context, rb_ary_entry(value, i)));
-            }
-            return scope.Escape(array);
+	length = RARRAY_LEN(value);
+	array = Array::New(isolate, (int)length);
+	for(i=0; i<length; i++) {
+      array->Set(i, convert_ruby_to_v8(isolate, context, rb_ary_entry(value, i)));
+	}
+	return scope.Escape(array);
         }
-        case T_HASH:
+    case T_HASH:
         {
-            object = Object::New(isolate);
-            hash_as_array = rb_funcall(value, rb_intern("to_a"), 0);
-            length = RARRAY_LEN(hash_as_array);
-            for(i=0; i<length; i++) {
-                pair = rb_ary_entry(hash_as_array, i);
-                object->Set(convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 0)),
-                            convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 1)));
-            }
-            return scope.Escape(object);
+	object = Object::New(isolate);
+	hash_as_array = rb_funcall(value, rb_intern("to_a"), 0);
+	length = RARRAY_LEN(hash_as_array);
+	for(i=0; i<length; i++) {
+	    pair = rb_ary_entry(hash_as_array, i);
+	    object->Set(convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 0)),
+                  convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 1)));
+	}
+	return scope.Escape(object);
         }
-        case T_SYMBOL:
+    case T_SYMBOL:
         {
-            value = rb_funcall(value, rb_intern("to_s"), 0);
+	value = rb_funcall(value, rb_intern("to_s"), 0);
             return scope.Escape(convert_ruby_str_to_v8(scope, isolate, value));
         }
-        case T_DATA:
+    case T_DATA:
         {
-            klass = rb_funcall(value, rb_intern("class"), 0);
-            if (klass == rb_cTime || klass == rb_cDateTime)
+        klass = rb_funcall(value, rb_intern("class"), 0);
+        if (klass == rb_cTime || klass == rb_cDateTime)
+        {
+            if (klass == rb_cDateTime)
             {
-                if (klass == rb_cDateTime)
-                {
-                    value = rb_funcall(value, rb_intern("to_time"), 0);
-                }
-                value = rb_funcall(value, rb_intern("to_f"), 0);
-                return scope.Escape(Date::New(context, NUM2DBL(value) * 1000).ToLocalChecked());
+                value = rb_funcall(value, rb_intern("to_time"), 0);
             }
+            value = rb_funcall(value, rb_intern("to_f"), 0);
+            return scope.Escape(Date::New(context, NUM2DBL(value) * 1000).ToLocalChecked());
+        }
             // break intentionally missing
         }
-        case T_OBJECT:
-        case T_CLASS:
-        case T_ICLASS:
-        case T_MODULE:
-        case T_REGEXP:
-        case T_MATCH:
-        case T_STRUCT:
-        case T_BIGNUM:
-        case T_FILE:
-        case T_UNDEF:
-        case T_NODE:
-        default:
+    case T_OBJECT:
+    case T_CLASS:
+    case T_ICLASS:
+    case T_MODULE:
+    case T_REGEXP:
+    case T_MATCH:
+    case T_STRUCT:
+    case T_BIGNUM:
+    case T_FILE:
+    case T_UNDEF:
+    case T_NODE:
+    default:
         {
             if (rb_respond_to(value, rb_intern("to_s"))) {
                 // TODO: if this throws we're screwed
                 value = rb_funcall(value, rb_intern("to_s"), 0);
                 return scope.Escape(convert_ruby_str_to_v8(scope, isolate, value));
             }
-            return scope.Escape(String::NewFromUtf8(isolate, "Undefined Conversion"));
-        }
+      return scope.Escape(String::NewFromUtf8(isolate, "Undefined Conversion"));
+    }
     }
 }
 
@@ -1127,7 +1129,7 @@ gvl_ruby_callback(void* data) {
         for (int i = 0; i < length; i++) {
             Local<Value> value = ((*args)[i]).As<Value>();
             VALUE tmp = convert_v8_to_ruby(args->GetIsolate(),
-                              *context_info->context, value);
+                                           *context_info->context, value);
             rb_ary_push(ruby_args, tmp);
         }
     }
@@ -1215,8 +1217,10 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
         Local<Context> context = context_info->context->Get(isolate);
         Context::Scope context_scope(context);
 
-        Local<String> v8_str = String::NewFromUtf8(isolate, RSTRING_PTR(name),
-                              NewStringType::kNormal, (int)RSTRING_LEN(name)).ToLocalChecked();
+        Local<String> v8_str =
+            String::NewFromUtf8(isolate, RSTRING_PTR(name),
+                                NewStringType::kNormal, (int)RSTRING_LEN(name))
+                .ToLocalChecked();
 
         // copy self so we can access from v8 external
         VALUE* self_copy;
@@ -1226,23 +1230,34 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
         Local<Value> external = External::New(isolate, self_copy);
 
         if (parent_object == Qnil) {
-            context->Global()->Set(v8_str, FunctionTemplate::New(isolate, ruby_callback, external)->GetFunction());
-        } else {
+            context->Global()->Set(
+                v8_str, FunctionTemplate::New(isolate, ruby_callback, external)
+                            ->GetFunction(context)
+                            .ToLocalChecked());
 
-            Local<String> eval = String::NewFromUtf8(isolate, RSTRING_PTR(parent_object_eval),
-                                  NewStringType::kNormal, (int)RSTRING_LEN(parent_object_eval)).ToLocalChecked();
+        } else {
+            Local<String> eval =
+                String::NewFromUtf8(isolate, RSTRING_PTR(parent_object_eval),
+                                    NewStringType::kNormal,
+                                    (int)RSTRING_LEN(parent_object_eval))
+                    .ToLocalChecked();
 
             MaybeLocal<Script> parsed_script = Script::Compile(context, eval);
             if (parsed_script.IsEmpty()) {
             parse_error = true;
             } else {
-                MaybeLocal<Value> maybe_value = parsed_script.ToLocalChecked()->Run(context);
+                MaybeLocal<Value> maybe_value =
+                    parsed_script.ToLocalChecked()->Run(context);
                 attach_error = true;
 
                 if (!maybe_value.IsEmpty()) {
                     Local<Value> value = maybe_value.ToLocalChecked();
-                    if (value->IsObject()){
-                    value.As<Object>()->Set(v8_str, FunctionTemplate::New(isolate, ruby_callback, external)->GetFunction());
+                    if (value->IsObject()) {
+                        value.As<Object>()->Set(
+                            v8_str, FunctionTemplate::New(
+                                        isolate, ruby_callback, external)
+                                        ->GetFunction(context)
+                                        .ToLocalChecked());
                     attach_error = false;
                     }
                 }
@@ -1444,6 +1459,69 @@ rb_heap_stats(VALUE self) {
     }
 
     return rval;
+}
+
+// https://github.com/bnoordhuis/node-heapdump/blob/master/src/heapdump.cc
+class FileOutputStream : public OutputStream {
+ public:
+  FileOutputStream(FILE* stream) : stream_(stream) {}
+
+  virtual int GetChunkSize() {
+    return 65536;
+  }
+
+  virtual void EndOfStream() {}
+
+  virtual WriteResult WriteAsciiChunk(char* data, int size) {
+    const size_t len = static_cast<size_t>(size);
+    size_t off = 0;
+
+    while (off < len && !feof(stream_) && !ferror(stream_))
+      off += fwrite(data + off, 1, len - off, stream_);
+
+    return off == len ? kContinue : kAbort;
+  }
+
+ private:
+  FILE* stream_;
+};
+
+
+static VALUE
+rb_heap_snapshot(VALUE self, VALUE file) {
+
+    rb_io_t *fptr;
+
+    fptr = RFILE(file)->fptr;
+
+    if (!fptr) return Qfalse;
+
+    FILE* fp;
+    fp = fdopen(fptr->fd, "w");
+    if (fp == NULL) return Qfalse;
+
+
+    ContextInfo* context_info;
+    Data_Get_Struct(self, ContextInfo, context_info);
+    Isolate* isolate;
+    isolate = context_info->isolate_info ? context_info->isolate_info->isolate : NULL;
+
+    if (!isolate) return Qfalse;
+
+    Locker lock(isolate);
+    Isolate::Scope isolate_scope(isolate);
+    HandleScope handle_scope(isolate);
+
+    HeapProfiler* heap_profiler = isolate->GetHeapProfiler();
+
+    const HeapSnapshot* const snap = heap_profiler->TakeHeapSnapshot();
+
+    FileOutputStream stream(fp);
+    snap->Serialize(&stream, HeapSnapshot::kJSON);
+
+    const_cast<HeapSnapshot*>(snap)->Delete();
+
+    return Qtrue;
 }
 
 static VALUE
@@ -1654,6 +1732,8 @@ extern "C" {
         rb_define_method(rb_cContext, "dispose_unsafe", (VALUE(*)(...))&rb_context_dispose, 0);
         rb_define_method(rb_cContext, "low_memory_notification", (VALUE(*)(...))&rb_context_low_memory_notification, 0);
         rb_define_method(rb_cContext, "heap_stats", (VALUE(*)(...))&rb_heap_stats, 0);
+	rb_define_method(rb_cContext, "write_heap_snapshot_unsafe", (VALUE(*)(...))&rb_heap_snapshot, 1);
+
         rb_define_private_method(rb_cContext, "create_isolate_value",(VALUE(*)(...))&rb_context_create_isolate_value, 0);
         rb_define_private_method(rb_cContext, "eval_unsafe",(VALUE(*)(...))&rb_context_eval_unsafe, 2);
         rb_define_private_method(rb_cContext, "call_unsafe", (VALUE(*)(...))&rb_context_call_unsafe, -1);
