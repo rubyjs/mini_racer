@@ -315,7 +315,9 @@ module MiniRacer
       t.join
 
       rval
-
+    ensure
+      wp.close if wp
+      rp.close if rp
     end
 
     def check_init_options!(options)

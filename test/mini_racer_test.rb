@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'securerandom'
 require 'date'
 require 'test_helper'
@@ -731,7 +733,7 @@ raise FooError, "I like foos"
     isolate = MiniRacer::Isolate.new
     context = MiniRacer::Context.new(isolate: isolate)
     context.dispose
-    context2 = MiniRacer::Context.new(isolate: isolate) # Received signal 11 SEGV_MAPERR
+    _context2 = MiniRacer::Context.new(isolate: isolate) # Received signal 11 SEGV_MAPERR
   end
 
   def test_context_starts_with_no_isolate_value
@@ -757,7 +759,6 @@ raise FooError, "I like foos"
   end
 
   def test_heap_dump
-
     f = Tempfile.new("heap")
     path = f.path
     f.unlink
@@ -771,6 +772,15 @@ raise FooError, "I like foos"
     assert dump.length > 0
 
     FileUtils.rm(path)
+  end
 
+  def test_pipe_leak
+    # in Ruby 2.7 pipes will stay open for longer
+    # make sure that we clean up early so pipe file
+    # descriptors are not kept around
+    context = MiniRacer::Context.new(timeout: 1000)
+    10000.times do |i|
+      context.eval("'hello'")
+    end
   end
 end

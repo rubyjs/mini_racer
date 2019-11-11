@@ -1,3 +1,10 @@
+
+- 0.2.7
+
+- 11-11-2019
+
+  - FIX: release the file descriptor for timeout pipe earlier (this avoids holding too many files open in Ruby 2.7)
+
 - 14-05-2019
 
 - 0.2.6
