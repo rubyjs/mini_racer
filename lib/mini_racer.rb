@@ -313,9 +313,15 @@ module MiniRacer
 
       # ensure we do not leak a thread in state
       t.join
+      t = nil
 
       rval
     ensure
+      # exceptions need to be handled
+      if t && wp
+        wp.write("done")
+        t.join
+      end
       wp.close if wp
       rp.close if rp
     end

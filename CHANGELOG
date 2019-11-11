@@ -1,3 +1,8 @@
+- 0.2.8
+
+- 11-11-2019
+
+  - FIX: ensure thread live cycle is properly accounter for following file descriptor fix
 
 - 0.2.7
 
