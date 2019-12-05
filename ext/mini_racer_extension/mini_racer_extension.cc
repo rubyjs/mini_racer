@@ -232,10 +232,18 @@ static void prepare_result(MaybeLocal<Value> v8res,
         Local<Value> local_value = v8res.ToLocalChecked();
         if ((local_value->IsObject() || local_value->IsArray()) &&
                 !local_value->IsDate() && !local_value->IsFunction()) {
-            Local<Object> JSON = context->Global()->Get(String::NewFromUtf8(isolate, "JSON"))
-              ->ToObject(context).ToLocalChecked();
 
-            Local<Function> stringify = JSON->Get(v8::String::NewFromUtf8(isolate, "stringify"))
+            Local<Object> JSON =
+                context->Global()
+                    ->Get(context, String::NewFromUtf8(isolate, "JSON").ToLocalChecked())
+                    .ToLocalChecked()
+                    ->ToObject(context)
+                    .ToLocalChecked();
+
+            Local<Function> stringify =
+                JSON->Get(context,
+                          v8::String::NewFromUtf8(isolate, "stringify").ToLocalChecked())
+                    .ToLocalChecked()
                     .As<Function>();
 
             Local<Object> object = local_value->ToObject(context).ToLocalChecked();
@@ -290,7 +298,7 @@ static void prepare_result(MaybeLocal<Value> v8res,
             } else if(trycatch.HasTerminated()) {
                 evalRes.terminated = true;
                 evalRes.message = new Persistent<Value>();
-                Local<String> tmp = String::NewFromUtf8(isolate, "JavaScript was terminated (either by timeout or explicitly)");
+                Local<String> tmp = String::NewFromUtf8(isolate, "JavaScript was terminated (either by timeout or explicitly)").ToLocalChecked();
                 evalRes.message->Reset(isolate, tmp);
             }
             if (!trycatch.StackTrace(context).IsEmpty()) {
@@ -395,7 +403,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
       VALUE rb_array = rb_ary_new();
       Local<Array> arr = Local<Array>::Cast(value);
       for(uint32_t i=0; i < arr->Length(); i++) {
-          Local<Value> element = arr->Get(i);
+          Local<Value> element = arr->Get(context, i).ToLocalChecked();
           VALUE rb_elem = convert_v8_to_ruby(isolate, context, element);
           if (rb_funcall(rb_elem, rb_intern("class"), 0) == rb_cFailedV8Conversion) {
             return rb_elem;
@@ -426,13 +434,13 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
         if (!maybe_props.IsEmpty()) {
             Local<Array> props = maybe_props.ToLocalChecked();
             for(uint32_t i=0; i < props->Length(); i++) {
-             Local<Value> key = props->Get(i);
+             Local<Value> key = props->Get(context, i).ToLocalChecked();
              VALUE rb_key = convert_v8_to_ruby(isolate, context, key);
-             Local<Value> prop_value = object->Get(key);
+             Local<Value> prop_value;
              // this may have failed due to Get raising
 
-             if (trycatch.HasCaught()) {
-             // TODO isolate code that translates execption to ruby
+             if (!object->Get(context, key).ToLocal(&prop_value)) {
+             // TODO isolate code that translates exception to ruby
              // exception so we can properly return it
              return rb_funcall(rb_cFailedV8Conversion, rb_intern("new"), 1, rb_str_new2(""));
              }
@@ -500,7 +508,8 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, Local<Context> context,
 	length = RARRAY_LEN(value);
 	array = Array::New(isolate, (int)length);
 	for(i=0; i<length; i++) {
-      array->Set(i, convert_ruby_to_v8(isolate, context, rb_ary_entry(value, i)));
+      array->Set(context, i,
+                 convert_ruby_to_v8(isolate, context, rb_ary_entry(value, i)));
 	}
 	return scope.Escape(array);
     case T_HASH:
@@ -509,8 +518,9 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, Local<Context> context,
 	length = RARRAY_LEN(hash_as_array);
 	for(i=0; i<length; i++) {
 	    pair = rb_ary_entry(hash_as_array, i);
-	    object->Set(convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 0)),
-                  convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 1)));
+	    object->Set(context,
+	                convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 0)),
+	                convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 1)));
 	}
 	return scope.Escape(object);
     case T_SYMBOL:
@@ -539,7 +549,7 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, Local<Context> context,
     case T_UNDEF:
     case T_NODE:
     default:
-      return scope.Escape(String::NewFromUtf8(isolate, "Undefined Conversion"));
+      return scope.Escape(String::NewFromUtf8(isolate, "Undefined Conversion").ToLocalChecked());
     }
 }
 
@@ -1015,7 +1025,12 @@ gvl_ruby_callback(void* data) {
     callback_data.failed = false;
 
     if ((bool)args->GetIsolate()->GetData(DO_TERMINATE) == true) {
-        args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Terminated execution during transition from Ruby to JS"));
+        args->GetIsolate()->ThrowException(
+            String::NewFromUtf8(
+                args->GetIsolate(),
+                "Terminated execution during transition from Ruby to JS")
+                .ToLocalChecked());
+
         args->GetIsolate()->TerminateExecution();
         if (length > 0) {
             rb_ary_clear(ruby_args);
@@ -1029,7 +1044,9 @@ gvl_ruby_callback(void* data) {
 
     if(callback_data.failed) {
         rb_iv_set(parent, "@current_exception", result);
-        args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Ruby exception"));
+        args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(),
+                                                               "Ruby exception")
+                                               .ToLocalChecked());
     }
     else {
         HandleScope scope(args->GetIsolate());
@@ -1099,10 +1116,10 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
         Local<Value> external = External::New(isolate, self_copy);
 
         if (parent_object == Qnil) {
-            context->Global()->Set(
-                v8_str, FunctionTemplate::New(isolate, ruby_callback, external)
-                            ->GetFunction(context)
-                            .ToLocalChecked());
+            context->Global()->Set(context, v8_str,
+                                   FunctionTemplate::New(isolate, ruby_callback, external)
+                                       ->GetFunction(context)
+                                       .ToLocalChecked());
 
         } else {
             Local<String> eval =
@@ -1122,11 +1139,10 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
                 if (!maybe_value.IsEmpty()) {
                     Local<Value> value = maybe_value.ToLocalChecked();
                     if (value->IsObject()) {
-                        value.As<Object>()->Set(
-                            v8_str, FunctionTemplate::New(
-                                        isolate, ruby_callback, external)
-                                        ->GetFunction(context)
-                                        .ToLocalChecked());
+                        value.As<Object>()->Set(context, v8_str,
+                                                FunctionTemplate::New(isolate, ruby_callback, external)
+                                                    ->GetFunction(context)
+                                                    .ToLocalChecked());
                         attach_error = false;
                     }
                 }
@@ -1503,8 +1519,8 @@ static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
 
         // examples of such usage can be found in
         // https://github.com/v8/v8/blob/36b32aa28db5e993312f4588d60aad5c8330c8a5/test/cctest/test-api.cc#L15711
-        Local<String> fname = String::NewFromUtf8(isolate, call.function_name);
-        MaybeLocal<v8::Value> val = context->Global()->Get(fname);
+        Local<String> fname = String::NewFromUtf8(isolate, call.function_name).ToLocalChecked();
+        MaybeLocal<v8::Value> val = context->Global()->Get(context, fname).ToLocalChecked();
 
         if (val.IsEmpty() || !val.ToLocalChecked()->IsFunction()) {
             missingFunction = true;
