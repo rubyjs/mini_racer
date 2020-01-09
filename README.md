@@ -1,6 +1,6 @@
 # MiniRacer
 
-[![Build Status](https://travis-ci.org/discourse/mini_racer.svg?branch=master)](https://travis-ci.org/discourse/mini_racer)
+[![Build Status](https://travis-ci.org/rubyjs/mini_racer.svg?branch=master)](https://travis-ci.org/rubyjs/mini_racer)
 
 Minimal, modern embedded V8 for Ruby.
 
@@ -447,7 +447,7 @@ Add this to your .travis.yml file:
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/discourse/mini_racer. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [Contributor Covenant](http://contributor-covenant.org) code of conduct.
+Bug reports and pull requests are welcome on GitHub at https://github.com/rubyjs/mini_racer. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [Contributor Covenant](http://contributor-covenant.org) code of conduct.
 
 
 ## License
