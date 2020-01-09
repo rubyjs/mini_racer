@@ -444,8 +444,27 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
         return rb_hash;
     }
 
-    Local<String> rstr = value->ToString(context).ToLocalChecked();
-    return rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate), rb_enc_find("utf-8"));
+    if (value->IsSymbol()) {
+	v8::String::Utf8Value symbol_name(isolate,
+	    Local<Symbol>::Cast(value)->Name());
+
+	VALUE str_symbol = rb_enc_str_new(
+	    *symbol_name,
+	    symbol_name.length(),
+	    rb_enc_find("utf-8")
+	);
+
+	return ID2SYM(rb_intern_str(str_symbol));
+    }
+
+    MaybeLocal<String> rstr_maybe = value->ToString(context);
+
+    if (rstr_maybe.IsEmpty()) {
+	return Qnil;
+    } else {
+	Local<String> rstr = rstr_maybe.ToLocalChecked();
+	return rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate), rb_enc_find("utf-8"));
+    }
 }
 
 static VALUE convert_v8_to_ruby(Isolate* isolate,

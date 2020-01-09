@@ -783,4 +783,28 @@ raise FooError, "I like foos"
       context.eval("'hello'")
     end
   end
+
+  def test_symbol_support
+    context = MiniRacer::Context.new()
+    assert_equal :foo, context.eval("Symbol('foo')")
+  end
+
+  def test_proxy_support
+    js = <<~JS
+      function MyProxy(reference) {
+        return new Proxy(function() {}, {
+          get: function(obj, prop) {
+            return new MyProxy(reference.concat(prop));
+          },
+          apply: function(target, thisArg, argumentsList) {
+            myFunctionLogger(reference);
+          }
+        });
+      };
+      (new MyProxy([])).function_call(new MyProxy([])-1)
+    JS
+    context = MiniRacer::Context.new()
+    context.attach('myFunctionLogger', ->(property) { })
+    context.eval(js)
+  end
 end
