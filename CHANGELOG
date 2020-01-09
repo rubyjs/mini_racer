@@ -1,3 +1,9 @@
+- 0.2.9
+
+- 09-01-2020
+
+  - FIX: correct segfault when JS returns a Symbol and properly cast to ruby symbol
+
 - 0.2.8
 
 - 11-11-2019
