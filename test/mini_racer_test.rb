@@ -298,6 +298,33 @@ raise FooError, "I like foos"
     assert_raises(MiniRacer::V8OutOfMemoryError) { context.eval('let s = 1000; var a = new Array(s); a.fill(0); while(true) {s *= 1.1; let n = new Array(Math.floor(s)); n.fill(0); a = a.concat(n); };') }
   end
 
+  def test_max_memory_for_call
+    context = MiniRacer::Context.new(max_memory: 200_000_000)
+    context.eval(<<~JS)
+      let s;
+      function memory_test() {
+        var a = new Array(s);
+        a.fill(0);
+        while(true) {
+          s *= 1.1;
+          let n = new Array(Math.floor(s));
+          n.fill(0);
+          a = a.concat(n);
+          if (s > 1000000) {
+            return;
+          }
+        }
+      }
+      function set_s(val) {
+        s = val;
+      }
+    JS
+    context.call('set_s', 1000)
+    assert_raises(MiniRacer::V8OutOfMemoryError) { context.call('memory_test') }
+    s = context.eval('s')
+    assert_operator(s, :>, 100_000)
+  end
+
   def test_negative_max_memory
     context = MiniRacer::Context.new(max_memory: -200_000_000)
     assert_nil(context.instance_variable_get(:@max_memory))

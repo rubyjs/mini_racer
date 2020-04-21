@@ -127,6 +127,7 @@ typedef struct {
     Local<Function> fun;
     Local<Value> *argv;
     EvalResult result;
+    size_t max_memory;
 } FunctionCall;
 
 enum IsolateFlags {
@@ -1454,6 +1455,12 @@ nogvl_context_call(void *args) {
     // terminate ASAP
     isolate->SetData(DO_TERMINATE, (void*)false);
 
+    if (call->max_memory > 0) {
+        isolate->SetData(MEM_SOFTLIMIT_VALUE, &call->max_memory);
+        isolate->SetData(MEM_SOFTLIMIT_REACHED, (void*)false);
+        isolate->AddGCEpilogueCallback(gc_callback);
+    }
+
     Isolate::Scope isolate_scope(isolate);
     EscapableHandleScope handle_scope(isolate);
     TryCatch trycatch(isolate);
@@ -1509,6 +1516,13 @@ static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
     if (call.argc > 0) {
         // skip first argument which is the function name
         call_argv = argv + 1;
+    }
+
+    call.max_memory = 0;
+    VALUE mem_softlimit = rb_iv_get(self, "@max_memory");
+    if (mem_softlimit != Qnil) {
+        unsigned long sl_int = NUM2ULONG(mem_softlimit);
+        call.max_memory = (size_t)sl_int;
     }
 
     bool missingFunction = false;
