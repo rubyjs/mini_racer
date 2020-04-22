@@ -1,3 +1,9 @@
+- 0.2.10
+
+- 22-04-2020
+
+  - FEATURE: memory softlimit support for nogvl_context_call
+
 - 0.2.9
 
 - 09-01-2020
