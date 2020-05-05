@@ -1244,13 +1244,8 @@ static void free_context(ContextInfo* context_info) {
         free_context_raw(context_info_copy);
     }
 
-    if (context_info->context && isolate_info && isolate_info->isolate) {
-        context_info->context = NULL;
-    }
-
-    if (isolate_info) {
-        context_info->isolate_info = NULL;
-    }
+    context_info->context = NULL;
+    context_info->isolate_info = NULL;
 }
 
 static void deallocate_isolate(void* data) {
