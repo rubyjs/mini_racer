@@ -156,6 +156,10 @@ static VALUE rb_cDateTime = Qnil;
 static std::unique_ptr<Platform> current_platform = NULL;
 static std::mutex platform_lock;
 
+static pthread_attr_t *thread_attr_p;
+static pthread_rwlock_t exit_lock = PTHREAD_RWLOCK_INITIALIZER;
+static bool ruby_exiting; // guarded by exit_lock
+
 static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
     bool platform_already_initialized = false;
 
@@ -1205,7 +1209,7 @@ void free_isolate(IsolateInfo* isolate_info) {
     delete isolate_info->allocator;
 }
 
-static void *free_context_raw(void* arg) {
+static void free_context_raw(void *arg) {
     ContextInfo* context_info = (ContextInfo*)arg;
     IsolateInfo* isolate_info = context_info->isolate_info;
     Persistent<Context>* context = context_info->context;
@@ -1222,6 +1226,20 @@ static void *free_context_raw(void* arg) {
     }
 
     xfree(context_info);
+}
+
+static void *free_context_thr(void* arg) {
+    if (pthread_rwlock_tryrdlock(&exit_lock) != 0) {
+        return NULL;
+    }
+    if (ruby_exiting) {
+        return NULL;
+    }
+
+    free_context_raw(arg);
+
+    pthread_rwlock_unlock(&exit_lock);
+
     return NULL;
 }
 
@@ -1235,22 +1253,17 @@ static void free_context(ContextInfo* context_info) {
     context_info_copy->context = context_info->context;
 
     if (isolate_info && isolate_info->refs() > 1) {
-    pthread_t free_context_thread;
-    if (pthread_create(&free_context_thread, NULL, free_context_raw, (void*)context_info_copy)) {
-        fprintf(stderr, "WARNING failed to release memory in MiniRacer, thread to release could not be created, process will leak memory\n");
-    }
-
+        pthread_t free_context_thread;
+        if (pthread_create(&free_context_thread, thread_attr_p,
+                           free_context_thr, (void*)context_info_copy)) {
+            fprintf(stderr, "WARNING failed to release memory in MiniRacer, thread to release could not be created, process will leak memory\n");
+        }
     } else {
         free_context_raw(context_info_copy);
     }
 
-    if (context_info->context && isolate_info && isolate_info->isolate) {
-        context_info->context = NULL;
-    }
-
-    if (isolate_info) {
-        context_info->isolate_info = NULL;
-    }
+    context_info->context = NULL;
+    context_info->isolate_info = NULL;
 }
 
 static void deallocate_isolate(void* data) {
@@ -1582,6 +1595,16 @@ static VALUE rb_context_create_isolate_value(VALUE self) {
     return Data_Wrap_Struct(rb_cIsolate, NULL, &deallocate_isolate, isolate_info);
 }
 
+static void set_ruby_exiting(VALUE value) {
+    (void)value;
+
+    int res = pthread_rwlock_wrlock(&exit_lock);
+    ruby_exiting  = true;
+    if (res == 0) {
+        pthread_rwlock_unlock(&exit_lock);
+    }
+}
+
 extern "C" {
 
     void Init_mini_racer_extension ( void )
@@ -1635,5 +1658,14 @@ extern "C" {
         rb_define_private_method(rb_cIsolate, "init_with_snapshot",(VALUE(*)(...))&rb_isolate_init_with_snapshot, 1);
 
         rb_define_singleton_method(rb_cPlatform, "set_flag_as_str!", (VALUE(*)(...))&rb_platform_set_flag_as_str, 1);
+
+        rb_set_end_proc(set_ruby_exiting, Qnil);
+
+        static pthread_attr_t attr;
+        if (pthread_attr_init(&attr) == 0) {
+            if (pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0) {
+                thread_attr_p = &attr;
+            }
+        }
     }
 }
