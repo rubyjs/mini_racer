@@ -1,3 +1,10 @@
+- 14-05-2020
+
+- 0.2.11
+
+  - FIX: dumping heap snapshots was not flushing the file leading to corrupt snapshots
+  - FIX: a use-after-free shutdown crash
+
 - 0.2.10
 
 - 22-04-2020
