@@ -1421,6 +1421,8 @@ rb_heap_snapshot(VALUE self, VALUE file) {
     FileOutputStream stream(fp);
     snap->Serialize(&stream, HeapSnapshot::kJSON);
 
+    fflush(fp);
+
     const_cast<HeapSnapshot*>(snap)->Delete();
 
     return Qtrue;
