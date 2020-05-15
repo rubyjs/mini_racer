@@ -145,6 +145,15 @@ module MiniRacer
       end
       # false signals it should be fetched if requested
       @isolate = options[:isolate] || false
+
+      @ensure_gc_after_idle = options[:ensure_gc_after_idle]
+
+      if @ensure_gc_after_idle
+        @last_eval = nil
+        @ensure_gc_thread = nil
+        @ensure_gc_mutex = Mutex.new
+      end
+
       @disposed = false
 
       @callback_mutex = Mutex.new
@@ -203,6 +212,7 @@ module MiniRacer
       end
     ensure
       @eval_thread = nil
+      ensure_gc_thread if @ensure_gc_after_idle
     end
 
     def call(function_name, *arguments)
@@ -216,15 +226,17 @@ module MiniRacer
       end
     ensure
       @eval_thread = nil
+      ensure_gc_thread if @ensure_gc_after_idle
     end
 
     def dispose
       return if @disposed
       isolate_mutex.synchronize do
+        return if @disposed
         dispose_unsafe
+        @disposed = true
+        @isolate = nil # allow it to be garbage collected, if set
       end
-      @disposed = true
-      @isolate = nil # allow it to be garbage collected, if set
     end
 
 
@@ -272,6 +284,36 @@ module MiniRacer
     end
 
   private
+
+    def ensure_gc_thread
+      @last_eval = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      @ensure_gc_mutex.synchronize do
+        @ensure_gc_thread = nil if !@ensure_gc_thread&.alive?
+        @ensure_gc_thread ||= Thread.new do
+          done = false
+          while !done
+            now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+            if @disposed
+              @ensure_gc_thread = nil
+              break
+            end
+
+            if @ensure_gc_after_idle < now - @last_eval
+              @ensure_gc_mutex.synchronize do
+                isolate_mutex.synchronize do
+                  # extra 50ms to make sure that we really have enough time
+                  isolate.low_memory_notification if !@disposed
+                  @ensure_gc_thread = nil
+                  done = true
+                end
+              end
+            end
+            sleep @ensure_gc_after_idle if !done
+          end
+        end
+      end
+    end
 
     def stop_attached
       @callback_mutex.synchronize{

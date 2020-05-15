@@ -549,6 +549,7 @@ raise FooError, "I like foos"
     assert(isolate.idle_notification(1000))
   end
 
+
   def test_concurrent_access_over_the_same_isolate_1
     isolate = MiniRacer::Isolate.new
     context = MiniRacer::Context.new(isolate: isolate)
@@ -703,6 +704,37 @@ raise FooError, "I like foos"
     )
 
     assert(stats.values.all?{|v| v > 0}, "expecting the isolate to have values for all the vals")
+  end
+
+  def test_releasing_memory
+    context = MiniRacer::Context.new
+
+    context.isolate.low_memory_notification
+
+    start_heap = context.heap_stats[:used_heap_size]
+
+    context.eval("'#{"x" * 1_000_000}'")
+
+    context.isolate.low_memory_notification
+
+    end_heap = context.heap_stats[:used_heap_size]
+
+    assert((end_heap - start_heap).abs < 1000, "expecting most of the 1_000_000 long string to be freed")
+  end
+
+  def test_ensure_gc
+    context = MiniRacer::Context.new(ensure_gc_after_idle: 0.001)
+    context.isolate.low_memory_notification
+
+    start_heap = context.heap_stats[:used_heap_size]
+
+    context.eval("'#{"x" * 10_000_000}'")
+
+    sleep 0.005
+
+    end_heap = context.heap_stats[:used_heap_size]
+
+    assert((end_heap - start_heap).abs < 1000, "expecting most of the 1_000_000 long string to be freed")
   end
 
   def test_eval_with_filename

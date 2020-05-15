@@ -1,3 +1,10 @@
+- 15-05-2020
+
+- 0.2.12
+
+  - FEATURE: isolate.low_memory_notification which can force a full GC
+  - FEATURE: MiniRacer::Context.new(ensure_gc_after_idle: 2) - to force full GC 2 seconds after context is idle, this allows you to conserve memory on isolates
+
 - 14-05-2020
 
 - 0.2.11
