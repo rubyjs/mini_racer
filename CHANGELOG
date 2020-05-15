@@ -1,5 +1,10 @@
 - 15-05-2020
 
+- 0.2.13
+   - FIX: edge case around ensure_gc_after_idle possibly firing when context is not idle
+
+- 15-05-2020
+
 - 0.2.12
 
   - FEATURE: isolate.low_memory_notification which can force a full GC

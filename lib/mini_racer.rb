@@ -299,13 +299,14 @@ module MiniRacer
               break
             end
 
-            if @ensure_gc_after_idle < now - @last_eval
+            if !@eval_thread && @ensure_gc_after_idle < now - @last_eval
               @ensure_gc_mutex.synchronize do
                 isolate_mutex.synchronize do
-                  # extra 50ms to make sure that we really have enough time
-                  isolate.low_memory_notification if !@disposed
-                  @ensure_gc_thread = nil
-                  done = true
+                  if !@eval_thread
+                    isolate.low_memory_notification if !@disposed
+                    @ensure_gc_thread = nil
+                    done = true
+                  end
                 end
               end
             end
