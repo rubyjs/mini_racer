@@ -315,6 +315,16 @@ context.eval("a = 2")
 # nothing works on the context from now on, its a shell waiting to be disposed
 ```
 
+A MiniRacer context can also be dumped in a heapsnapshot file using `#write_heap_snapshot(file_or_io)`
+
+```ruby
+context = MiniRacer::Context.new(timeout: 5)
+context.eval("let a='testing';")
+context.write_heap_snapshot("test.heapsnapshot")
+```
+
+This file can then be loaded in the memory tab of the chrome dev console.
+
 ### Function call
 
 This calls the function passed as first argument:
