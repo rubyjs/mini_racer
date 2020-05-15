@@ -326,8 +326,9 @@ raise FooError, "I like foos"
   end
 
   def test_negative_max_memory
-    context = MiniRacer::Context.new(max_memory: -200_000_000)
-    assert_nil(context.instance_variable_get(:@max_memory))
+    assert_raises(ArgumentError) do
+      MiniRacer::Context.new(max_memory: -200_000_000)
+    end
   end
 
   module Echo
@@ -722,8 +723,14 @@ raise FooError, "I like foos"
     assert((end_heap - start_heap).abs < 1000, "expecting most of the 1_000_000 long string to be freed")
   end
 
+  def test_bad_params
+    assert_raises do
+      MiniRacer::Context.new(random: :thing)
+    end
+  end
+
   def test_ensure_gc
-    context = MiniRacer::Context.new(ensure_gc_after_idle: 0.001)
+    context = MiniRacer::Context.new(ensure_gc_after_idle: 1)
     context.isolate.low_memory_notification
 
     start_heap = context.heap_stats[:used_heap_size]

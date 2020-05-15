@@ -1,6 +1,14 @@
 - 15-05-2020
 
+- 0.2.14
+
+  - FIX: ensure_gc_after_idle should take in milliseconds like the rest of the APIs not seconds
+  - FEATURE: strict params on MiniRacer::Context.new
+
+- 15-05-2020
+
 - 0.2.13
+
    - FIX: edge case around ensure_gc_after_idle possibly firing when context is not idle
 
 - 15-05-2020

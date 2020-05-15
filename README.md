@@ -239,7 +239,7 @@ This can come in handy to force V8 GC runs for example in between requests if yo
 
 Note that this method maps directly to [`v8::Isolate::IdleNotification`](http://bespin.cz/~ondras/html/classv8_1_1Isolate.html#aea16cbb2e351de9a3ae7be2b7cb48297), and that in particular its return value is the same (true if there is no further garbage to collect, false otherwise) and the same caveats apply, in particular that `there is no guarantee that the [call will return] within the time limit.`
 
-Additionally you may automate this process on a context by defining it with `MiniRacer::Content.new(ensure_gc_after_idle: 1)`. Using this will ensure V8 will run a full GC using `context.isolate.low_memory_notification` 1 second after the last eval on the context. Low memory notification is both slower and more aggressive than an idle_notification and will ensure long living isolates use minimal amounts of memory.
+Additionally you may automate this process on a context by defining it with `MiniRacer::Content.new(ensure_gc_after_idle: 1000)`. Using this will ensure V8 will run a full GC using `context.isolate.low_memory_notification` 1 second after the last eval on the context. Low memory notification is both slower and more aggressive than an idle_notification and will ensure long living isolates use minimal amounts of memory.
 
 ### V8 Runtime flags
 

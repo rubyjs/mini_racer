@@ -130,23 +130,22 @@ module MiniRacer
       end
     end
 
-    def initialize(options = nil)
+    def initialize(max_memory: nil, timeout: nil, isolate: nil, ensure_gc_after_idle: nil, snapshot: nil)
       options ||= {}
 
-      check_init_options!(options)
+      check_init_options!(isolate: isolate, snapshot: snapshot, max_memory: max_memory, ensure_gc_after_idle: ensure_gc_after_idle, timeout: timeout)
 
       @functions = {}
       @timeout = nil
       @max_memory = nil
       @current_exception = nil
-      @timeout = options[:timeout]
-      if options[:max_memory].is_a?(Numeric) && options[:max_memory] > 0
-        @max_memory = options[:max_memory]
-      end
-      # false signals it should be fetched if requested
-      @isolate = options[:isolate] || false
+      @timeout = timeout
+      @max_memory = max_memory
 
-      @ensure_gc_after_idle = options[:ensure_gc_after_idle]
+      # false signals it should be fetched if requested
+      @isolate = isolate || false
+
+      @ensure_gc_after_idle = ensure_gc_after_idle
 
       if @ensure_gc_after_idle
         @last_eval = nil
@@ -162,7 +161,7 @@ module MiniRacer
       @eval_thread = nil
 
       # defined in the C class
-      init_unsafe(options[:isolate], options[:snapshot])
+      init_unsafe(isolate, snapshot)
     end
 
     def isolate
@@ -290,6 +289,7 @@ module MiniRacer
       @ensure_gc_mutex.synchronize do
         @ensure_gc_thread = nil if !@ensure_gc_thread&.alive?
         @ensure_gc_thread ||= Thread.new do
+          ensure_gc_after_idle_seconds = @ensure_gc_after_idle / 1000.0
           done = false
           while !done
             now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -299,7 +299,7 @@ module MiniRacer
               break
             end
 
-            if !@eval_thread && @ensure_gc_after_idle < now - @last_eval
+            if !@eval_thread && ensure_gc_after_idle_seconds < now - @last_eval
               @ensure_gc_mutex.synchronize do
                 isolate_mutex.synchronize do
                   if !@eval_thread
@@ -310,7 +310,7 @@ module MiniRacer
                 end
               end
             end
-            sleep @ensure_gc_after_idle if !done
+            sleep ensure_gc_after_idle_seconds if !done
           end
         end
       end
@@ -369,12 +369,26 @@ module MiniRacer
       rp.close if rp
     end
 
-    def check_init_options!(options)
-      assert_option_is_nil_or_a('isolate', options[:isolate], Isolate)
-      assert_option_is_nil_or_a('snapshot', options[:snapshot], Snapshot)
+    def check_init_options!(isolate:, snapshot:, max_memory:, ensure_gc_after_idle:, timeout:)
+      assert_option_is_nil_or_a('isolate', isolate, Isolate)
+      assert_option_is_nil_or_a('snapshot', snapshot, Snapshot)
 
-      if options[:isolate] && options[:snapshot]
+      assert_numeric_or_nil('max_memory', max_memory, min_value: 10_000)
+      assert_numeric_or_nil('ensure_gc_after_idle', ensure_gc_after_idle, min_value: 1)
+      assert_numeric_or_nil('timeout', timeout, min_value: 1)
+
+      if isolate && snapshot
         raise ArgumentError, 'can only pass one of isolate and snapshot options'
+      end
+    end
+
+    def assert_numeric_or_nil(option_name, object, min_value:)
+      if object.is_a?(Numeric) && object < min_value
+        raise ArgumentError, "#{option_name} must be larger than #{min_value}"
+      end
+
+      if !object.nil? && !object.is_a?(Numeric)
+        raise ArgumentError, "#{option_name} must be a number, passed a #{object.inspect}"
       end
     end
 
