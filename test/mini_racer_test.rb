@@ -885,7 +885,6 @@ raise FooError, "I like foos"
       test().then(v => x = v);
     JS
 
-    context.isolate.run_microtasks
     v = context.eval("x");
     assert_equal(v, 99)
   end
