@@ -779,6 +779,19 @@ static VALUE rb_isolate_low_memory_notification(VALUE self) {
     return Qnil;
 }
 
+static VALUE rb_isolate_pump_message_loop(VALUE self) {
+    IsolateInfo* isolate_info;
+    Data_Get_Struct(self, IsolateInfo, isolate_info);
+
+    if (current_platform == NULL) return Qfalse;
+
+    if (platform::PumpMessageLoop(current_platform.get(), isolate_info->isolate)){
+	return Qtrue;
+    } else {
+	return Qfalse;
+    }
+}
+
 static VALUE rb_context_init_unsafe(VALUE self, VALUE isolate, VALUE snap) {
     ContextInfo* context_info;
     Data_Get_Struct(self, ContextInfo, context_info);
@@ -1668,7 +1681,7 @@ extern "C" {
 
         rb_define_method(rb_cIsolate, "idle_notification", (VALUE(*)(...))&rb_isolate_idle_notification, 1);
         rb_define_method(rb_cIsolate, "low_memory_notification", (VALUE(*)(...))&rb_isolate_low_memory_notification, 0);
-
+        rb_define_method(rb_cIsolate, "pump_message_loop", (VALUE(*)(...))&rb_isolate_pump_message_loop, 0);
         rb_define_private_method(rb_cIsolate, "init_with_snapshot",(VALUE(*)(...))&rb_isolate_init_with_snapshot, 1);
 
         rb_define_singleton_method(rb_cPlatform, "set_flag_as_str!", (VALUE(*)(...))&rb_platform_set_flag_as_str, 1);

@@ -873,4 +873,49 @@ raise FooError, "I like foos"
     context.attach('myFunctionLogger', ->(property) { })
     context.eval(js)
   end
+
+  def test_promise
+    context = MiniRacer::Context.new()
+    context.eval <<~JS
+      var x = 0;
+      async function test() {
+        return 99;
+      }
+
+      test().then(v => x = v);
+    JS
+
+    context.isolate.run_microtasks
+    v = context.eval("x");
+    assert_equal(v, 99)
+  end
+
+  def test_webassembly
+    context = MiniRacer::Context.new()
+    context.eval("let instance = null;")
+    filename = File.expand_path("../support/add.wasm", __FILE__)
+    context.attach("loadwasm", proc {|f| File.read(filename).each_byte.to_a})
+    context.attach("print", proc {|f| puts f})
+
+    context.eval("function module() { print(arguments)  }")
+
+    context.eval <<~JS
+    WebAssembly
+      .instantiate(new Uint8Array(loadwasm()), {
+        wasi_snapshot_preview1: {
+          proc_exit: function() { print("exit"); },
+          args_get: function() { return 0 },
+          args_sizes_get: function() { return 0 }
+        }
+      })
+      .then(i => { instance = i["instance"];})
+      .catch(e => print(e.toString()));
+    JS
+
+    while !context.eval("instance") do
+      context.isolate.pump_message_loop
+    end
+
+    assert_equal(3, context.eval("instance.exports.add(1,2)"))
+  end
 end
