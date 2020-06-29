@@ -897,8 +897,6 @@ raise FooError, "I like foos"
     context.attach("loadwasm", proc {|f| File.read(filename).each_byte.to_a})
     context.attach("print", proc {|f| puts f})
 
-    context.eval("function module() { print(arguments)  }")
-
     context.eval <<~JS
     WebAssembly
       .instantiate(new Uint8Array(loadwasm()), {
