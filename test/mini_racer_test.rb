@@ -299,7 +299,7 @@ raise FooError, "I like foos"
   end
 
   def test_max_memory_for_call
-    context = MiniRacer::Context.new(max_memory: 200_000_000)
+    context = MiniRacer::Context.new(max_memory: 100_000_000)
     context.eval(<<~JS)
       let s;
       function memory_test() {
@@ -319,7 +319,7 @@ raise FooError, "I like foos"
         s = val;
       }
     JS
-    context.call('set_s', 2000)
+    context.call('set_s', 1000)
     assert_raises(MiniRacer::V8OutOfMemoryError) { context.call('memory_test') }
     s = context.eval('s')
     assert_operator(s, :>, 100_000)
