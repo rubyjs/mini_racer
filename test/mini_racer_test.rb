@@ -319,7 +319,7 @@ raise FooError, "I like foos"
         s = val;
       }
     JS
-    context.call('set_s', 1000)
+    context.call('set_s', 2000)
     assert_raises(MiniRacer::V8OutOfMemoryError) { context.call('memory_test') }
     s = context.eval('s')
     assert_operator(s, :>, 100_000)
@@ -448,7 +448,7 @@ raise FooError, "I like foos"
     end
   end
 
-  def test_invalid_warmup_sources_throw_an_exception
+  def test_invalid_warmup_sources_throw_an_exception_2
     assert_raises(ArgumentError) do
       MiniRacer::Snapshot.new('function f() { return 1 }').warmup!([])
     end
