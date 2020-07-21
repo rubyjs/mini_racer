@@ -299,7 +299,7 @@ raise FooError, "I like foos"
   end
 
   def test_max_memory_for_call
-    context = MiniRacer::Context.new(max_memory: 200_000_000)
+    context = MiniRacer::Context.new(max_memory: 100_000_000)
     context.eval(<<~JS)
       let s;
       function memory_test() {
@@ -449,7 +449,7 @@ raise FooError, "I like foos"
     end
   end
 
-  def test_invalid_warmup_sources_throw_an_exception
+  def test_invalid_warmup_sources_throw_an_exception_2
     assert_raises(ArgumentError) do
       MiniRacer::Snapshot.new('function f() { return 1 }').warmup!([])
     end

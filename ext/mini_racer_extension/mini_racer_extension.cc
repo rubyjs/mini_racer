@@ -25,6 +25,7 @@ public:
     ArrayBuffer::Allocator* allocator;
     StartupData* startup_data;
     bool interrupted;
+    bool added_gc_cb;
     pid_t pid;
     VALUE mutex;
 
@@ -42,15 +43,12 @@ public:
 
 
     IsolateInfo() : isolate(nullptr), allocator(nullptr), startup_data(nullptr),
-        interrupted(false), pid(getpid()), refs_count(0) {
+        interrupted(false), added_gc_cb(false), pid(getpid()), refs_count(0) {
         VALUE cMutex = rb_const_get(rb_cThread, rb_intern("Mutex"));
         mutex = rb_class_new_instance(0, nullptr, cMutex);
     }
 
-    ~IsolateInfo() {
-        void free_isolate(IsolateInfo*);
-        free_isolate(this);
-    }
+    ~IsolateInfo();
 
     void init(SnapshotInfo* snapshot_info = nullptr);
 
@@ -237,11 +235,13 @@ static void prepare_result(MaybeLocal<Value> v8res,
         Local<Value> local_value = v8res.ToLocalChecked();
         if ((local_value->IsObject() || local_value->IsArray()) &&
                 !local_value->IsDate() && !local_value->IsFunction()) {
-            Local<Object> JSON = context->Global()->Get(String::NewFromUtf8(isolate, "JSON"))
-              ->ToObject(context).ToLocalChecked();
+            Local<Object> JSON = context->Global()->Get(
+                        context, String::NewFromUtf8Literal(isolate, "JSON"))
+                    .ToLocalChecked().As<Object>();
 
-            Local<Function> stringify = JSON->Get(v8::String::NewFromUtf8(isolate, "stringify"))
-                    .As<Function>();
+            Local<Function> stringify = JSON->Get(
+                        context, v8::String::NewFromUtf8Literal(isolate, "stringify"))
+                    .ToLocalChecked().As<Function>();
 
             Local<Object> object = local_value->ToObject(context).ToLocalChecked();
             const unsigned argc = 1;
@@ -295,7 +295,7 @@ static void prepare_result(MaybeLocal<Value> v8res,
             } else if(trycatch.HasTerminated()) {
                 evalRes.terminated = true;
                 evalRes.message = new Persistent<Value>();
-                Local<String> tmp = String::NewFromUtf8(isolate, "JavaScript was terminated (either by timeout or explicitly)");
+                Local<String> tmp = String::NewFromUtf8Literal(isolate, "JavaScript was terminated (either by timeout or explicitly)");
                 evalRes.message->Reset(isolate, tmp);
             }
             if (!trycatch.StackTrace(context).IsEmpty()) {
@@ -312,7 +312,8 @@ nogvl_context_eval(void* arg) {
 
     EvalParams* eval_params = (EvalParams*)arg;
     EvalResult* result = eval_params->result;
-    Isolate* isolate = eval_params->context_info->isolate_info->isolate;
+    IsolateInfo* isolate_info = eval_params->context_info->isolate_info;
+    Isolate* isolate = isolate_info->isolate;
 
     Isolate::Scope isolate_scope(isolate);
     HandleScope handle_scope(isolate);
@@ -356,7 +357,10 @@ nogvl_context_eval(void* arg) {
         // parsing successful
         if (eval_params->max_memory > 0) {
             isolate->SetData(MEM_SOFTLIMIT_VALUE, &eval_params->max_memory);
+            if (!isolate_info->added_gc_cb) {
             isolate->AddGCEpilogueCallback(gc_callback);
+                isolate_info->added_gc_cb = true;
+            }
         }
 
         maybe_value = parsed_script.ToLocalChecked()->Run(context);
@@ -367,6 +371,12 @@ nogvl_context_eval(void* arg) {
     isolate->SetData(IN_GVL, (void*)true);
 
     return NULL;
+}
+
+static VALUE new_empty_failed_conv_obj() {
+    // TODO isolate code that translates execption to ruby
+    // exception so we can properly return it
+    return rb_funcall(rb_cFailedV8Conversion, rb_intern("new"), 1, rb_str_new2(""));
 }
 
 // assumes isolate locking is in place
@@ -400,8 +410,11 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
       VALUE rb_array = rb_ary_new();
       Local<Array> arr = Local<Array>::Cast(value);
       for(uint32_t i=0; i < arr->Length(); i++) {
-          Local<Value> element = arr->Get(i);
-          VALUE rb_elem = convert_v8_to_ruby(isolate, context, element);
+          MaybeLocal<Value> element = arr->Get(context, i);
+          if (element.IsEmpty()) {
+              continue;
+          }
+          VALUE rb_elem = convert_v8_to_ruby(isolate, context, element.ToLocalChecked());
           if (rb_funcall(rb_elem, rb_intern("class"), 0) == rb_cFailedV8Conversion) {
             return rb_elem;
           }
@@ -431,18 +444,20 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
         if (!maybe_props.IsEmpty()) {
             Local<Array> props = maybe_props.ToLocalChecked();
             for(uint32_t i=0; i < props->Length(); i++) {
-             Local<Value> key = props->Get(i);
-             VALUE rb_key = convert_v8_to_ruby(isolate, context, key);
-             Local<Value> prop_value = object->Get(key);
-             // this may have failed due to Get raising
+             MaybeLocal<Value> key = props->Get(context, i);
+             if (key.IsEmpty()) {
+                return rb_funcall(rb_cFailedV8Conversion, rb_intern("new"), 1, rb_str_new2(""));
+             }
+             VALUE rb_key = convert_v8_to_ruby(isolate, context, key.ToLocalChecked());
 
-             if (trycatch.HasCaught()) {
-             // TODO isolate code that translates execption to ruby
-             // exception so we can properly return it
-             return rb_funcall(rb_cFailedV8Conversion, rb_intern("new"), 1, rb_str_new2(""));
+             MaybeLocal<Value> prop_value = object->Get(context, key.ToLocalChecked());
+             // this may have failed due to Get raising
+             if (prop_value.IsEmpty() || trycatch.HasCaught()) {
+                 return new_empty_failed_conv_obj();
              }
 
-             VALUE rb_value = convert_v8_to_ruby(isolate, context, prop_value);
+             VALUE rb_value = convert_v8_to_ruby(
+                         isolate, context, prop_value.ToLocalChecked());
              rb_hash_aset(rb_hash, rb_key, rb_value);
             }
         }
@@ -524,7 +539,7 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, Local<Context> context,
 	length = RARRAY_LEN(value);
 	array = Array::New(isolate, (int)length);
 	for(i=0; i<length; i++) {
-      array->Set(i, convert_ruby_to_v8(isolate, context, rb_ary_entry(value, i)));
+            array->Set(context, i, convert_ruby_to_v8(isolate, context, rb_ary_entry(value, i)));
 	}
 	return scope.Escape(array);
     case T_HASH:
@@ -533,7 +548,7 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, Local<Context> context,
 	length = RARRAY_LEN(hash_as_array);
 	for(i=0; i<length; i++) {
 	    pair = rb_ary_entry(hash_as_array, i);
-	    object->Set(convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 0)),
+            object->Set(context, convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 0)),
                   convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 1)));
 	}
 	return scope.Escape(object);
@@ -563,9 +578,9 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, Local<Context> context,
     case T_UNDEF:
     case T_NODE:
     default:
-      return scope.Escape(String::NewFromUtf8(isolate, "Undefined Conversion"));
+      return scope.Escape(String::NewFromUtf8Literal(isolate, "Undefined Conversion"));
     }
-}
+    }
 
 static void unblock_eval(void *ptr) {
     EvalParams* eval = (EvalParams*)ptr;
@@ -576,53 +591,43 @@ static void unblock_eval(void *ptr) {
  * The implementations of the run_extra_code(), create_snapshot_data_blob() and
  * warm_up_snapshot_data_blob() functions have been derived from V8's test suite.
  */
-bool run_extra_code(Isolate *isolate, Local<v8::Context> context,
+static bool run_extra_code(Isolate *isolate, Local<v8::Context> context,
                     const char *utf8_source, const char *name) {
     Context::Scope context_scope(context);
     TryCatch try_catch(isolate);
     Local<String> source_string;
-    if (!String::NewFromUtf8(isolate, utf8_source,
-                             NewStringType::kNormal)
-             .ToLocal(&source_string)) {
+    if (!String::NewFromUtf8(isolate, utf8_source).ToLocal(&source_string)) {
         return false;
     }
-    Local<v8::String> resource_name =
-        String::NewFromUtf8(isolate, name, NewStringType::kNormal)
-            .ToLocalChecked();
+    Local<String> resource_name =
+            String::NewFromUtf8(isolate, name).ToLocalChecked();
     ScriptOrigin origin(resource_name);
     ScriptCompiler::Source source(source_string, origin);
     Local<Script> script;
     if (!ScriptCompiler::Compile(context, &source).ToLocal(&script))
         return false;
-    if (script->Run(context).IsEmpty())
-        return false;
-    // CHECK(!try_catch.HasCaught());
+    if (script->Run(context).IsEmpty()) return false;
     return true;
 }
 
-StartupData
+static StartupData
 create_snapshot_data_blob(const char *embedded_source = nullptr) {
-    // Create a new isolate and a new context from scratch, optionally run
-    // a script to embed, and serialize to create a snapshot blob.
-    StartupData result = {nullptr, 0};
-    {
-        SnapshotCreator snapshot_creator;
-        Isolate *isolate = snapshot_creator.GetIsolate();
+    Isolate *isolate = Isolate::Allocate();
+
+    // Optionally run a script to embed, and serialize to create a snapshot blob.
+    SnapshotCreator snapshot_creator(isolate);
         {
             HandleScope scope(isolate);
-            Local<Context> context = Context::New(isolate);
+        Local<v8::Context> context = v8::Context::New(isolate);
             if (embedded_source != nullptr &&
-                !run_extra_code(isolate, context, embedded_source,
-                                "<embedded>")) {
-                return result;
+                !run_extra_code(isolate, context, embedded_source, "<embedded>")) {
+           return {};
             }
             snapshot_creator.SetDefaultContext(context);
         }
-        result = snapshot_creator.CreateBlob(
+    return snapshot_creator.CreateBlob(
             SnapshotCreator::FunctionCodeHandling::kClear);
     }
-    return result;
-}
 
 StartupData warm_up_snapshot_data_blob(StartupData cold_snapshot_blob,
                                        const char *warmup_source) {
@@ -1062,7 +1067,9 @@ gvl_ruby_callback(void* data) {
     callback_data.failed = false;
 
     if ((bool)args->GetIsolate()->GetData(DO_TERMINATE) == true) {
-        args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Terminated execution during transition from Ruby to JS"));
+        args->GetIsolate()->ThrowException(
+                    String::NewFromUtf8Literal(args->GetIsolate(),
+                                               "Terminated execution during transition from Ruby to JS"));
         args->GetIsolate()->TerminateExecution();
         if (length > 0) {
             rb_ary_clear(ruby_args);
@@ -1076,7 +1083,7 @@ gvl_ruby_callback(void* data) {
 
     if(callback_data.failed) {
         rb_iv_set(parent, "@current_exception", result);
-        args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), "Ruby exception"));
+        args->GetIsolate()->ThrowException(String::NewFromUtf8Literal(args->GetIsolate(), "Ruby exception"));
     }
     else {
         HandleScope scope(args->GetIsolate());
@@ -1147,7 +1154,9 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
 
         if (parent_object == Qnil) {
             context->Global()->Set(
-                v8_str, FunctionTemplate::New(isolate, ruby_callback, external)
+                        context,
+                        v8_str,
+                        FunctionTemplate::New(isolate, ruby_callback, external)
                             ->GetFunction(context)
                             .ToLocalChecked());
 
@@ -1160,7 +1169,7 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
 
             MaybeLocal<Script> parsed_script = Script::Compile(context, eval);
             if (parsed_script.IsEmpty()) {
-                parse_error = true;
+            parse_error = true;
             } else {
                 MaybeLocal<Value> maybe_value =
                     parsed_script.ToLocalChecked()->Run(context);
@@ -1170,11 +1179,12 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
                     Local<Value> value = maybe_value.ToLocalChecked();
                     if (value->IsObject()) {
                         value.As<Object>()->Set(
-                            v8_str, FunctionTemplate::New(
-                                        isolate, ruby_callback, external)
+                                    context,
+                                    v8_str,
+                                    FunctionTemplate::New(isolate, ruby_callback, external)
                                         ->GetFunction(context)
                                         .ToLocalChecked());
-                        attach_error = false;
+                    attach_error = false;
                     }
                 }
             }
@@ -1204,32 +1214,31 @@ static VALUE rb_context_isolate_mutex(VALUE self) {
     return context_info->isolate_info->mutex;
 }
 
-void free_isolate(IsolateInfo* isolate_info) {
-
-    if (isolate_info->isolate) {
-        Locker lock(isolate_info->isolate);
-    }
-
-    if (isolate_info->isolate) {
-        if (isolate_info->interrupted) {
-            fprintf(stderr, "WARNING: V8 isolate was interrupted by Ruby, it can not be disposed and memory will not be reclaimed till the Ruby process exits.\n");
+IsolateInfo::~IsolateInfo() {
+    if (isolate) {
+        if (this->interrupted) {
+            fprintf(stderr, "WARNING: V8 isolate was interrupted by Ruby, "
+                            "it can not be disposed and memory will not be "
+                            "reclaimed till the Ruby process exits.\n");
         } else {
-            
-            if (isolate_info->pid != getpid()) {
-                fprintf(stderr, "WARNING: V8 isolate was forked, it can not be disposed and memory will not be reclaimed till the Ruby process exits.\n");
+            if (this->pid != getpid()) {
+                fprintf(stderr, "WARNING: V8 isolate was forked, "
+                                "it can not be disposed and "
+                                "memory will not be reclaimed "
+                                "till the Ruby process exits.\n");
             } else {
-                isolate_info->isolate->Dispose();
+                isolate->Dispose();
             }
         }
-        isolate_info->isolate = NULL;
+        isolate = nullptr;
     }
 
-    if (isolate_info->startup_data) {
-        delete[] isolate_info->startup_data->data;
-        delete isolate_info->startup_data;
+    if (startup_data) {
+        delete[] startup_data->data;
+        delete startup_data;
     }
 
-    delete isolate_info->allocator;
+    delete allocator;
 }
 
 static void free_context_raw(void *arg) {
@@ -1301,7 +1310,7 @@ static void mark_isolate(void* data) {
     isolate_info->mark();
 }
 
-void deallocate(void* data) {
+static void deallocate(void* data) {
     ContextInfo* context_info = (ContextInfo*)data;
 
     free_context(context_info);
@@ -1316,22 +1325,22 @@ static void mark_context(void* data) {
     }
 }
 
-void deallocate_external_function(void * data) {
+static void deallocate_external_function(void * data) {
     xfree(data);
 }
 
-void deallocate_snapshot(void * data) {
+static void deallocate_snapshot(void * data) {
     SnapshotInfo* snapshot_info = (SnapshotInfo*)data;
     delete[] snapshot_info->data;
     xfree(snapshot_info);
 }
 
-VALUE allocate_external_function(VALUE klass) {
+static VALUE allocate_external_function(VALUE klass) {
     VALUE* self = ALLOC(VALUE);
     return Data_Wrap_Struct(klass, NULL, deallocate_external_function, (void*)self);
 }
 
-VALUE allocate(VALUE klass) {
+static VALUE allocate(VALUE klass) {
     ContextInfo* context_info = ALLOC(ContextInfo);
     context_info->isolate_info = NULL;
     context_info->context = NULL;
@@ -1339,7 +1348,7 @@ VALUE allocate(VALUE klass) {
     return Data_Wrap_Struct(klass, mark_context, deallocate, (void*)context_info);
 }
 
-VALUE allocate_snapshot(VALUE klass) {
+static VALUE allocate_snapshot(VALUE klass) {
     SnapshotInfo* snapshot_info = ALLOC(SnapshotInfo);
     snapshot_info->data = NULL;
     snapshot_info->raw_size = 0;
@@ -1347,7 +1356,7 @@ VALUE allocate_snapshot(VALUE klass) {
     return Data_Wrap_Struct(klass, NULL, deallocate_snapshot, (void*)snapshot_info);
 }
 
-VALUE allocate_isolate(VALUE klass) {
+static VALUE allocate_isolate(VALUE klass) {
     IsolateInfo* isolate_info = new IsolateInfo();
 
     return Data_Wrap_Struct(klass, mark_isolate, deallocate_isolate, (void*)isolate_info);
@@ -1486,7 +1495,8 @@ nogvl_context_call(void *args) {
     if (!call) {
         return NULL;
     }
-    Isolate* isolate = call->context_info->isolate_info->isolate;
+    IsolateInfo *isolate_info = call->context_info->isolate_info;
+    Isolate* isolate = isolate_info->isolate;
 
     // in gvl flag
     isolate->SetData(IN_GVL, (void*)false);
@@ -1496,7 +1506,10 @@ nogvl_context_call(void *args) {
     if (call->max_memory > 0) {
         isolate->SetData(MEM_SOFTLIMIT_VALUE, &call->max_memory);
         isolate->SetData(MEM_SOFTLIMIT_REACHED, (void*)false);
+        if (!isolate_info->added_gc_cb) {
         isolate->AddGCEpilogueCallback(gc_callback);
+            isolate_info->added_gc_cb = true;
+    }
     }
 
     Isolate::Scope isolate_scope(isolate);
@@ -1574,8 +1587,11 @@ static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
 
         // examples of such usage can be found in
         // https://github.com/v8/v8/blob/36b32aa28db5e993312f4588d60aad5c8330c8a5/test/cctest/test-api.cc#L15711
-        Local<String> fname = String::NewFromUtf8(isolate, call.function_name);
-        MaybeLocal<v8::Value> val = context->Global()->Get(fname);
+        MaybeLocal<String> fname = String::NewFromUtf8(isolate, call.function_name);
+        MaybeLocal<v8::Value> val;
+        if (!fname.IsEmpty()) {
+            val = context->Global()->Get(context, fname.ToLocalChecked());
+        }
 
         if (val.IsEmpty() || !val.ToLocalChecked()->IsFunction()) {
             missingFunction = true;
