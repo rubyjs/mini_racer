@@ -1,3 +1,9 @@
+- 23-07-202
+
+- 0.3.1
+
+  - FIX: specify that libv8 must be larger than 8.4.255 but smaller than 8.5, this avoids issues going forward
+
 - 22-07-2020
 
 - 0.3.0
