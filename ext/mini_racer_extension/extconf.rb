@@ -1,4 +1,5 @@
 require 'mkmf'
+gem 'libv8', '~> 8.4.255' # Should match the version requirement in mini_racer.gemspec
 require 'libv8'
 
 IS_DARWIN = RUBY_PLATFORM =~ /darwin/
