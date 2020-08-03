@@ -1,4 +1,8 @@
-- 23-07-202
+- Unreleased
+
+  - FIX: on downgrade mkmf was picking the wrong version of libv8, this fix will correct future issues
+
+- 23-07-2020
 
 - 0.3.1
 

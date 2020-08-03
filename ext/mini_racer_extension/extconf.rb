@@ -1,4 +1,6 @@
 require 'mkmf'
+require_relative '../../lib/mini_racer/version'
+gem 'libv8', MiniRacer::LIBV8_VERSION
 require 'libv8'
 
 IS_DARWIN = RUBY_PLATFORM =~ /darwin/
