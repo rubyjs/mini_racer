@@ -156,7 +156,8 @@ static std::mutex platform_lock;
 
 static pthread_attr_t *thread_attr_p;
 static pthread_rwlock_t exit_lock = PTHREAD_RWLOCK_INITIALIZER;
-static bool ruby_exiting; // guarded by exit_lock
+static bool ruby_exiting = false; // guarded by exit_lock
+static bool single_threaded = false;
 
 static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
     bool platform_already_initialized = false;
@@ -169,6 +170,9 @@ static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
     platform_lock.lock();
 
     if (current_platform == NULL) {
+	if (!strcmp(RSTRING_PTR(flag_as_str), "--single_threaded")) {
+	   single_threaded = true;
+	}
         V8::SetFlagsFromString(RSTRING_PTR(flag_as_str), (int)RSTRING_LEN(flag_as_str));
     } else {
         platform_already_initialized = true;
@@ -1221,11 +1225,16 @@ IsolateInfo::~IsolateInfo() {
                             "it can not be disposed and memory will not be "
                             "reclaimed till the Ruby process exits.\n");
         } else {
-            if (this->pid != getpid()) {
+            if (this->pid != getpid() && !single_threaded) {
                 fprintf(stderr, "WARNING: V8 isolate was forked, "
                                 "it can not be disposed and "
                                 "memory will not be reclaimed "
-                                "till the Ruby process exits.\n");
+                                "till the Ruby process exits.\n"
+				"It is VERY likely your process will hang.\n"
+				"If you wish to use v8 in forked environment "
+				"please ensure the platform is initialized with:\n"
+				"MiniRacer::Platform.set_flags! :single_threaded\n"
+				);
             } else {
                 isolate->Dispose();
             }
@@ -1640,6 +1649,7 @@ static void set_ruby_exiting(VALUE value) {
     (void)value;
 
     int res = pthread_rwlock_wrlock(&exit_lock);
+
     ruby_exiting  = true;
     if (res == 0) {
         pthread_rwlock_unlock(&exit_lock);
