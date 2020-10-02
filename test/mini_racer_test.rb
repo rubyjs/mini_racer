@@ -915,4 +915,17 @@ raise FooError, "I like foos"
 
     assert_equal(3, context.eval("instance.exports.add(1,2)"))
   end
+
+  def test_set_timeout
+    context = MiniRacer::Context.new(set_timeout: true)
+
+    context.eval <<~JS
+      var that = this;
+      setTimeout(() => that.called = true, 1000);
+    JS
+
+    sleep 2
+
+    assert context.eval("this.called")
+  end
 end

@@ -130,7 +130,7 @@ module MiniRacer
       end
     end
 
-    def initialize(max_memory: nil, timeout: nil, isolate: nil, ensure_gc_after_idle: nil, snapshot: nil)
+    def initialize(max_memory: nil, timeout: nil, isolate: nil, ensure_gc_after_idle: nil, snapshot: nil, set_timeout: false)
       options ||= {}
 
       check_init_options!(isolate: isolate, snapshot: snapshot, max_memory: max_memory, ensure_gc_after_idle: ensure_gc_after_idle, timeout: timeout)
@@ -162,6 +162,8 @@ module MiniRacer
 
       # defined in the C class
       init_unsafe(isolate, snapshot)
+
+      install_set_timeout if set_timeout
     end
 
     def isolate
@@ -396,6 +398,11 @@ module MiniRacer
       unless object.nil? || object.is_a?(klass)
         raise ArgumentError, "#{option_name} must be a #{klass} object, passed a #{object.inspect}"
       end
+    end
+
+    def install_set_timeout
+      @timer = MessageBus::TimerThread.new
+      attach('setTimeout', proc { |cb, ms| @timer.queue(ms / 1000) { cb.call } })
     end
   end
 

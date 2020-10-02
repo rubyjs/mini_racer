@@ -188,6 +188,14 @@ static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
     return Qnil;
 }
 
+typedef struct {
+    Persistent<Function, CopyablePersistentTraits<Function>>* v8_func;
+    // Persistent<Function>* v8_func;
+    Persistent<Context>* context;
+    Isolate* isolate;
+} JavascriptFunctionInfo;
+
+
 static void init_v8() {
     // no need to wait for the lock if already initialized
     if (current_platform != NULL) return;
@@ -428,7 +436,24 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
     }
 
     if (value->IsFunction()){
-        return rb_funcall(rb_cJavaScriptFunction, rb_intern("new"), 0);
+                Locker lock(isolate);
+        Isolate::Scope isolate_scope(isolate);
+        HandleScope handle_scope(isolate);
+
+        JavascriptFunctionInfo* javascript_function_info;
+        VALUE rb_func = rb_funcall(rb_cJavaScriptFunction, rb_intern("new"), 0);
+        JavascriptFunctionInfo* fn_info = Data_Get_Struct(rb_func, JavascriptFunctionInfo, javascript_function_info);
+
+        Handle<Function> func = Handle<Function>::Cast(value);
+        fn_info->v8_func = new Persistent<Function, CopyablePersistentTraits<Function>>();
+        // fn_info->v8_func = new Persistent<Function>();
+        fn_info->v8_func->Reset(isolate, func);
+
+        fn_info->context =  new Persistent<Context>(); 
+        fn_info->context->Reset(isolate, context);
+        fn_info->isolate = isolate;
+
+        return rb_func;
     }
 
     if (value->IsDate()){
@@ -799,6 +824,34 @@ static VALUE rb_isolate_pump_message_loop(VALUE self) {
     } else {
 	return Qfalse;
     }
+}
+static void deallocate_javascript_function(void* data) {
+    // JavascriptFunctionInfo* javascript_function_info = (JavascriptFunctionInfo*) data;
+
+    // javascript_function_info->v8_func->Dispose();
+}
+
+static void rb_javascript_function_call(VALUE self) {
+    JavascriptFunctionInfo* javascript_function_info;
+    Data_Get_Struct(self, JavascriptFunctionInfo, javascript_function_info);
+    Locker lock(javascript_function_info->isolate);
+    Isolate::Scope isolate_scope(javascript_function_info->isolate);
+    HandleScope scope(javascript_function_info->isolate);
+    Local<Context> ctx = Local<Context>::New(javascript_function_info->isolate, *javascript_function_info->context);
+    Local<Function> cb = Local<Function>::New(javascript_function_info->isolate, *javascript_function_info->v8_func);
+
+    cb->Call(ctx, ctx->Global(), 0, NULL);
+}
+
+static VALUE allocate_javascript_function(VALUE klass) {
+    JavascriptFunctionInfo* javascript_function_info = ALLOC(JavascriptFunctionInfo);
+    javascript_function_info->v8_func = NULL;
+
+    return Data_Wrap_Struct(klass, NULL, deallocate_javascript_function, javascript_function_info);
+}
+
+static VALUE rb_javascript_function_init_unsafe(VALUE self, VALUE isolate, VALUE snap) {
+    return Qnil;
 }
 
 static VALUE rb_context_init_unsafe(VALUE self, VALUE isolate, VALUE snap) {
@@ -1675,6 +1728,9 @@ extern "C" {
         rb_eScriptRuntimeError = rb_define_class_under(rb_mMiniRacer, "RuntimeError", rb_eEvalError);
 
         rb_cJavaScriptFunction = rb_define_class_under(rb_mMiniRacer, "JavaScriptFunction", rb_cObject);
+        rb_define_alloc_func(rb_cJavaScriptFunction, allocate_javascript_function);
+        rb_define_method(rb_cJavaScriptFunction, "call", (VALUE(*)(...))&rb_javascript_function_call, 0);
+
         rb_eSnapshotError = rb_define_class_under(rb_mMiniRacer, "SnapshotError", rb_eError);
         rb_ePlatformAlreadyInitializedError = rb_define_class_under(rb_mMiniRacer, "PlatformAlreadyInitialized", rb_eError);
         rb_cFailedV8Conversion = rb_define_class_under(rb_mMiniRacer, "FailedV8Conversion", rb_cObject);

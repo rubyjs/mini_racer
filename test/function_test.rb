@@ -1,5 +1,6 @@
 require 'test_helper'
 require 'timeout'
+require 'message_bus'
 
 class MiniRacerFunctionTest < Minitest::Test
   def test_fun
@@ -59,6 +60,21 @@ class MiniRacerFunctionTest < Minitest::Test
     h = { 'vx' => 3, 'vy' => 'bars', 'array' => [3, 'bars'] }
     res = context.call('f', 3, 'bars')
     assert_equal h, res
+  end
+
+  def test_javascript_function_call
+    context = MiniRacer::Context.new
+    timer = MessageBus::TimerThread.new
+
+    handler = proc do |cb, ms| 
+      timer.queue(ms / 1000) { cb.call }
+    end
+
+    context.attach('setTimeout', handler)
+
+    context.eval('var that = this; setTimeout(function() { that.called = true }, 1000);')
+    sleep 3
+    assert context.eval('this.called')
   end
 
   def test_do_not_hang_with_concurrent_calls
