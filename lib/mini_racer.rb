@@ -1,5 +1,12 @@
 require "mini_racer/version"
-require "mini_racer_extension"
+require "mini_racer_loader"
+
+ext_filename = "mini_racer_extension.#{RbConfig::CONFIG['DLEXT']}"
+ext_path = $LOAD_PATH.map { |p| (Pathname.new(p) + ext_filename) }.find { |p| p.file? }
+
+raise LoadError, "Could not find #{name}" unless ext_path
+MiniRacer::Loader.load(ext_path.to_s)
+
 require "thread"
 require "json"
 

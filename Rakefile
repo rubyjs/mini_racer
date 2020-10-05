@@ -11,6 +11,7 @@ end
 task :default => [:compile, :test]
 
 gem = Gem::Specification.load( File.dirname(__FILE__) + '/mini_racer.gemspec' )
+Rake::ExtensionTask.new( 'mini_racer_loader', gem )
 Rake::ExtensionTask.new( 'mini_racer_extension', gem )
 
 
