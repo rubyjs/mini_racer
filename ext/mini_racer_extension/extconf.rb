@@ -14,6 +14,7 @@ $CPPFLAGS += " -fPIC" unless $CPPFLAGS.split.include? "-rdynamic" or IS_DARWIN
 $CPPFLAGS += " -std=c++0x"
 $CPPFLAGS += " -fpermissive"
 $CPPFLAGS += " -DV8_COMPRESS_POINTERS"
+$CPPFLAGS += " -fvisibility=hidden "
 
 $CPPFLAGS += " -Wno-reserved-user-defined-literal" if IS_DARWIN
 
