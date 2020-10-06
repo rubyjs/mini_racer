@@ -77,7 +77,7 @@ static void *_dln_load(const char *file)
 # define RTLD_DEEPBIND 0
 #endif
     /* Load file */
-    if ((handle = dlopen(file, RTLD_NOW|RTLD_LOCAL|RTLD_DEEPBIND)) == NULL) {
+    if ((handle = dlopen(file, RTLD_LAZY|RTLD_LOCAL|RTLD_DEEPBIND)) == NULL) {
         DLN_ERROR();
         goto failed;
     }
@@ -117,7 +117,7 @@ failed:
 
 __attribute__((visibility("default"))) void Init_mini_racer_loader()
 {
-    VALUE mSqreen = rb_define_module("MiniRacer");
-    VALUE mPrvExtLoader = rb_define_module_under(mSqreen, "Loader");
-    rb_define_singleton_method(mPrvExtLoader, "load", _load_shared_lib, 1);
+    VALUE mMiniRacer = rb_define_module("MiniRacer");
+    VALUE mLoader = rb_define_module_under(mMiniRacer, "Loader");
+    rb_define_singleton_method(mLoader, "load", _load_shared_lib, 1);
 }
