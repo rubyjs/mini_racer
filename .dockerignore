@@ -1,0 +1,12 @@
+/.bundle/
+/.yardoc
+Gemfile.lock
+/_yardoc/
+/coverage/
+/doc/
+/pkg/
+/spec/reports/
+/tmp/
+lib/mini_racer_extension.so
+lib/mini_racer_loader.so
+*.bundle
