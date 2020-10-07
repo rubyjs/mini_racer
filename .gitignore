@@ -8,4 +8,5 @@ Gemfile.lock
 /spec/reports/
 /tmp/
 lib/mini_racer_extension.so
+lib/mini_racer_loader.so
 *.bundle
