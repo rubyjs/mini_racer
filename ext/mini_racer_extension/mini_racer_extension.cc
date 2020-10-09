@@ -1658,7 +1658,7 @@ static void set_ruby_exiting(VALUE value) {
 
 extern "C" {
 
-    void Init_mini_racer_extension ( void )
+    __attribute__((visibility("default"))) void Init_mini_racer_extension ( void )
     {
         VALUE rb_mMiniRacer = rb_define_module("MiniRacer");
         rb_cContext = rb_define_class_under(rb_mMiniRacer, "Context", rb_cObject);

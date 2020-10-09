@@ -1,5 +1,15 @@
 require "mini_racer/version"
-require "mini_racer_extension"
+require "mini_racer_loader"
+require "pathname"
+
+ext_filename = "mini_racer_extension.#{RbConfig::CONFIG['DLEXT']}"
+ext_path = Gem.loaded_specs['mini_racer'].require_paths
+  .map { |p| (p = Pathname.new(p)).absolute? ? p : Pathname.new(__dir__).parent + p }
+ext_found = ext_path.map { |p| p + ext_filename }.find { |p| p.file? }
+
+raise LoadError, "Could not find #{ext_filename} in #{ext_path.map(&:to_s)}" unless ext_found
+MiniRacer::Loader.load(ext_found.to_s)
+
 require "thread"
 require "json"
 
