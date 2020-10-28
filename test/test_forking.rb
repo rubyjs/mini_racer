@@ -1,10 +1,7 @@
 $LOAD_PATH.unshift File.expand_path('../../lib', __FILE__)
 require 'mini_racer'
 
-MiniRacer::Platform.set_flags! :single_threaded
-
-@ctx = MiniRacer::Context.new
-@ctx.eval("var a = 1+1")
+# MiniRacer::Platform.set_flags! :single_threaded
 
 def trigger_gc
   puts "a"
@@ -17,9 +14,19 @@ def trigger_gc
   ctx.isolate.low_memory_notification
   puts "f"
   puts "done triggering"
+  #ctx.dispose
 end
 
+puts "A"
 trigger_gc
-Process.wait fork { puts @ctx.eval("a"); @ctx.dispose; puts Process.pid; trigger_gc; puts "done #{Process.pid}" }
+puts "B"
+MiniRacer::Platform.terminate
 
+pid = fork do
+  puts "I AM HERE"
+  puts Process.pid
+  trigger_gc
+  puts "done #{Process.pid}"
+end
 
+Process.wait pid

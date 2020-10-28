@@ -188,6 +188,21 @@ static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
     return Qnil;
 }
 
+static VALUE rb_platform_terminate(VALUE _klass) {
+    if (current_platform == NULL) return;
+
+    platform_lock.lock();
+
+    if (current_platform != NULL) {
+        V8::Dispose();
+	V8::ShutdownPlatform();
+
+	current_platform = NULL;
+    }
+
+    platform_lock.unlock();
+}
+
 static void init_v8() {
     // no need to wait for the lock if already initialized
     if (current_platform != NULL) return;
@@ -196,7 +211,8 @@ static void init_v8() {
 
     if (current_platform == NULL) {
         V8::InitializeICU();
-        current_platform = platform::NewDefaultPlatform();
+        //current_platform = platform::NewDefaultPlatform();
+        current_platform = platform::NewSingleThreadedDefaultPlatform();
         V8::InitializePlatform(current_platform.get());
         V8::Initialize();
     }
@@ -1711,6 +1727,7 @@ extern "C" {
         rb_define_private_method(rb_cIsolate, "init_with_snapshot",(VALUE(*)(...))&rb_isolate_init_with_snapshot, 1);
 
         rb_define_singleton_method(rb_cPlatform, "set_flag_as_str!", (VALUE(*)(...))&rb_platform_set_flag_as_str, 1);
+        rb_define_singleton_method(rb_cPlatform, "terminate", (VALUE(*)(...))&rb_platform_terminate, 0);
 
         rb_set_end_proc(set_ruby_exiting, Qnil);
 
