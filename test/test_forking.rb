@@ -1,7 +1,9 @@
 $LOAD_PATH.unshift File.expand_path('../../lib', __FILE__)
 require 'mini_racer'
 
+
 # MiniRacer::Platform.set_flags! :single_threaded
+#
 
 def trigger_gc
   puts "a"
@@ -14,19 +16,21 @@ def trigger_gc
   ctx.isolate.low_memory_notification
   puts "f"
   puts "done triggering"
-  #ctx.dispose
+  ctx.dispose
+  puts "disposed"
 end
 
-puts "A"
 trigger_gc
-puts "B"
-MiniRacer::Platform.terminate
+
+# terminate is broken inside libv8 for now.
+# MiniRacer::Platform.terminate
 
 pid = fork do
-  puts "I AM HERE"
   puts Process.pid
   trigger_gc
-  puts "done #{Process.pid}"
+  exit
 end
 
+puts "waiting on #{pid}"
+# this can hang erratically, bug in mini_racer
 Process.wait pid

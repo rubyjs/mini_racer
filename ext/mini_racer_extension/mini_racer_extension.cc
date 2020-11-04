@@ -188,13 +188,14 @@ static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
     return Qnil;
 }
 
-static VALUE rb_platform_terminate(VALUE _klass) {
+static VALUE rb_platform_terminate(VALUE self) {
     if (current_platform == NULL) return;
 
     platform_lock.lock();
 
     if (current_platform != NULL) {
-        V8::Dispose();
+
+	V8::Dispose();
 	V8::ShutdownPlatform();
 
 	current_platform = NULL;
@@ -1290,6 +1291,7 @@ static void *free_context_thr(void* arg) {
         return NULL;
     }
     if (ruby_exiting) {
+	pthread_rwlock_unlock(&exit_lock);
         return NULL;
     }
 
