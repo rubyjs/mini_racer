@@ -189,8 +189,6 @@ static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
 }
 
 static VALUE rb_platform_terminate(VALUE self) {
-    if (current_platform == NULL) return;
-
     platform_lock.lock();
 
     if (current_platform != NULL) {
@@ -205,9 +203,6 @@ static VALUE rb_platform_terminate(VALUE self) {
 }
 
 static void init_v8() {
-    // no need to wait for the lock if already initialized
-    if (current_platform != NULL) return;
-
     platform_lock.lock();
 
     if (current_platform == NULL) {
