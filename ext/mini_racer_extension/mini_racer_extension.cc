@@ -1720,5 +1720,9 @@ extern "C" {
                 thread_attr_p = &attr;
             }
         }
+        auto on_fork_for_child = []() {
+            exit_lock = PTHREAD_RWLOCK_INITIALIZER;
+        };
+        pthread_atfork(nullptr, nullptr, on_fork_for_child);
     }
 }
