@@ -1,6 +1,8 @@
 ARG RUBY_VERSION=2.7
 FROM ruby:${RUBY_VERSION}
 
+RUN test ! -f /etc/alpine-release || apk add --no-cache build-base git
+
 # without this `COPY .git`, we get the following error:
 #   fatal: not a git repository (or any of the parent directories): .git
 # but with it we need the full gem just to compile the extension because
