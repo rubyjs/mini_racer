@@ -32,7 +32,7 @@ Gem::Specification.new do |spec|
   spec.add_development_dependency "rake-compiler"
   spec.add_development_dependency "m"
 
-  spec.add_dependency 'libv8', MiniRacer::LIBV8_VERSION
+  spec.add_dependency 'libv8-node', MiniRacer::LIBV8_NODE_VERSION
   spec.require_paths = ["lib", "ext"]
 
   spec.extensions = ["ext/mini_racer_loader/extconf.rb", "ext/mini_racer_extension/extconf.rb"]

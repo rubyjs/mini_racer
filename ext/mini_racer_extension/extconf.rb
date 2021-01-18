@@ -1,7 +1,7 @@
 require 'mkmf'
 require_relative '../../lib/mini_racer/version'
-gem 'libv8', MiniRacer::LIBV8_VERSION
-require 'libv8'
+gem 'libv8-node', MiniRacer::LIBV8_NODE_VERSION
+require 'libv8-node'
 
 IS_DARWIN = RUBY_PLATFORM =~ /darwin/
 
@@ -57,7 +57,7 @@ if enable_config('debug') || enable_config('asan')
   CONFIG['debugflags'] << ' -ggdb3 -O0'
 end
 
-Libv8.configure_makefile
+Libv8::Node.configure_makefile
 
 if enable_config('asan')
   $CPPFLAGS.insert(0, " -fsanitize=address ")
