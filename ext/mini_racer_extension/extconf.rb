@@ -19,6 +19,8 @@ $CPPFLAGS += " -fvisibility=hidden "
 $CPPFLAGS += " -Wno-reserved-user-defined-literal" if IS_DARWIN
 
 $LDFLAGS.insert(0, " -stdlib=libc++ ") if IS_DARWIN
+$LDFLAGS += " -Wl,--no-undefined " unless IS_DARWIN
+$LDFLAGS += " -Wl,-undefined,error " if IS_DARWIN
 
 if ENV['CXX']
   puts "SETTING CXX"
