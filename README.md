@@ -249,7 +249,7 @@ It is possible to set V8 Runtime flags:
 MiniRacer::Platform.set_flags! :noconcurrent_recompilation, max_inlining_levels: 10
 ```
 
-This can come in handy if you want to use MiniRacer with Unicorn, which doesn't seem to alwatys appreciate V8's liberal use of threading:
+This can come in handy if you want to use MiniRacer with Unicorn, which doesn't seem to always appreciate V8's liberal use of threading:
 ```ruby
 MiniRacer::Platform.set_flags! :noconcurrent_recompilation, :noconcurrent_sweeping
 ```
