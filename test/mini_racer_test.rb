@@ -855,6 +855,12 @@ raise FooError, "I like foos"
     assert_equal :foo, context.eval("Symbol('foo')")
   end
 
+  def test_cyclical_object
+    context = MiniRacer::Context.new()
+    context.attach("a", proc{|a| a})
+    assert_equal :foo, context.eval("let arr = []; arr.push(arr); a(arr)")
+  end
+
   def test_proxy_support
     js = <<~JS
       function MyProxy(reference) {
