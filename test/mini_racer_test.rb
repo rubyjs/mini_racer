@@ -855,11 +855,21 @@ raise FooError, "I like foos"
     assert_equal :foo, context.eval("Symbol('foo')")
   end
 
-  def test_cyclical_object
+  def test_cyclical_object_js
     context = MiniRacer::Context.new()
     context.attach("a", proc{|a| a})
-    assert_equal :foo, context.eval("let arr = []; arr.push(arr); a(arr)")
+
+    # Already marshalled object references are replaced with null.
+    #  This prevents a segfault in this likely-an-error case.
+    assert_equal [[nil]], context.eval("let arr = []; arr.push(arr); a(arr)")
   end
+
+  ## This case just hangs everything.
+  # def test_cyclical_object_rb
+  #   context = MiniRacer::Context.new()
+  #   context.attach("a", proc{ arr = []; arr << arr; arr})
+  #   context.eval("a()")
+  # end
 
   def test_proxy_support
     js = <<~JS

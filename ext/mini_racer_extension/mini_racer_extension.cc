@@ -383,12 +383,33 @@ static VALUE new_empty_failed_conv_obj() {
     return rb_funcall(rb_cFailedV8Conversion, rb_intern("new"), 1, rb_str_new2(""));
 }
 
+
+static int marshalStackDepth = 0;
+static int marshalMaxStackDepth = 64;
+
+struct StackLevel {
+    StackLevel() {
+        marshalStackDepth++;
+
+        if (marshalStackDepth > marshalMaxStackDepth) {
+            throw 20;
+        }
+    }
+
+    ~StackLevel() {
+        marshalStackDepth--;
+    }
+
+};
+
 // assumes isolate locking is in place
 static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
                                 Local<Value> value) {
 
     Isolate::Scope isolate_scope(isolate);
     HandleScope scope(isolate);
+
+    StackLevel stackCounter;
 
     if (value->IsNull() || value->IsUndefined()){
         return Qnil;
@@ -921,6 +942,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
             VALUE json_string = rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate), rb_enc_find("utf-8"));
             ret = rb_funcall(rb_mJSON, rb_intern("parse"), 1, json_string);
         } else {
+            marshalStackDepth = 0;
             ret = convert_v8_to_ruby(isolate, *p_ctx, tmp);
         }
 
