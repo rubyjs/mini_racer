@@ -1,4 +1,5 @@
 language: ruby
+os: linux
 rvm:
   - 2.4
   - 2.5
@@ -9,7 +10,7 @@ rvm:
 arch:
   - amd64
   - arm64
-matrix:
+jobs:
   include:
     - rvm: 2.5
       os: osx
@@ -23,11 +24,7 @@ matrix:
     - rvm: 2.7
       os: osx
       osx_image: xcode12.2
-    - rvm: 3.0
-      os: osx
-      osx_image: xcode12.2
 dist: xenial
-sudo: true
 before_install:
   - gem update --system
   - gem install bundler -v 1.16.2
