@@ -8,8 +8,8 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - "10.15"
-          - "11.0"
+          - '10.15'
+          - '11.0'
         platform:
           - x86_64
           # arm64
@@ -29,11 +29,11 @@ jobs:
       fail-fast: false
       matrix:
         ruby:
-          - 2.4
-          - 2.5
-          - 2.6
-          - 2.7
-          - 3.0
+          - '2.4'
+          - '2.5'
+          - '2.6'
+          - '2.7'
+          - '3.0'
         platform:
           - amd64
           - arm64
@@ -43,7 +43,7 @@ jobs:
         libc:
           - gnu
           - musl
-    name: Build (linux)
+    name: Test (linux)
     runs-on: ubuntu-20.04
     steps:
       - name: Enable ${{ matrix.platform }} platform
