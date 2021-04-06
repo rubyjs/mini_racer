@@ -1,14 +1,31 @@
 language: ruby
 rvm:
+  - 2.4
   - 2.5
   - 2.6
   - 2.7
+  - 3.0
   - ruby-head
+arch:
+  - amd64
+  - arm64
 matrix:
   include:
-    - rvm: 2.5.1
+    - rvm: 2.5
       os: osx
       osx_image: xcode9.4
+    - rvm: 2.6
+      os: osx
+      osx_image: xcode11.3
+    - rvm: 2.6
+      os: osx
+      osx_image: xcode12.2
+    - rvm: 2.7
+      os: osx
+      osx_image: xcode12.2
+    - rvm: 3.0
+      os: osx
+      osx_image: xcode12.2
 dist: xenial
 sudo: true
 before_install:
