@@ -1,6 +1,9 @@
-- Unreleased
+- 08-04-2021
+
+- 0.4.0.beta1
 
   - FIX: on downgrade mkmf was picking the wrong version of libv8, this fix will correct future issues
+  - FEATURE: upgraded libv8 to use node libv8 build which supports M1 and various ARM builds v8 moved to (8.6.395.17)
 
 - 23-07-2020
 
