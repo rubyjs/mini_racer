@@ -8,6 +8,15 @@ class MiniRacerTest < Minitest::Test
   # see `test_platform_set_flags_works` below
   MiniRacer::Platform.set_flags! :use_strict
 
+
+  def test_locale
+    val = MiniRacer::Context.new.eval("new Date().toLocaleDateString('es-MX');")
+    assert_equal '28/4/2021', val
+
+    val = MiniRacer::Context.new.eval("new Date().toLocaleDateString('en-US');")
+    assert_equal '4/28/2021', val
+  end
+
   def test_segfault
     skip "running this test is very slow"
     # 5000.times do
