@@ -115,6 +115,7 @@ typedef struct {
     useconds_t timeout;
     EvalResult* result;
     size_t max_memory;
+    size_t marshal_stackdepth;
 } EvalParams;
 
 typedef struct {
@@ -126,6 +127,7 @@ typedef struct {
     Local<Value> *argv;
     EvalResult result;
     size_t max_memory;
+    size_t marshal_stackdepth;
 } FunctionCall;
 
 enum IsolateFlags {
@@ -133,6 +135,75 @@ enum IsolateFlags {
     DO_TERMINATE,
     MEM_SOFTLIMIT_VALUE,
     MEM_SOFTLIMIT_REACHED,
+    MARSHAL_STACKDEPTH_MAX,
+    MARSHAL_STACKDEPTH_VALUE,
+    MARSHAL_STACKDEPTH_REACHED,
+};
+
+struct StackCounter {
+    static void Reset(Isolate* isolate) {
+        if ((size_t)isolate->GetData(MARSHAL_STACKDEPTH_MAX) > 0) {
+            isolate->SetData(MARSHAL_STACKDEPTH_VALUE, (void*)0);
+            isolate->SetData(MARSHAL_STACKDEPTH_REACHED, (void*)false);
+        }
+    }
+
+    static void SetMax(Isolate* isolate, size_t marshalMaxStackDepth) {
+        if (marshalMaxStackDepth > 0) {
+            isolate->SetData(MARSHAL_STACKDEPTH_MAX, (void*)marshalMaxStackDepth);
+            isolate->SetData(MARSHAL_STACKDEPTH_VALUE, (void*)0);
+            isolate->SetData(MARSHAL_STACKDEPTH_REACHED, (void*)false);
+        }
+    }
+
+    StackCounter(Isolate* isolate) {
+        this->isActive = (size_t)isolate->GetData(MARSHAL_STACKDEPTH_MAX) > 0;
+
+        if (this->isActive) {
+            this->isolate = isolate;
+            this->IncDepth(1);
+        }
+    }
+
+    bool IsTooDeep() {
+        if (!this->IsActive()) {
+            return false;
+        }
+
+        size_t depth = (size_t)this->isolate->GetData(MARSHAL_STACKDEPTH_VALUE);
+        size_t maxDepth = (size_t)this->isolate->GetData(MARSHAL_STACKDEPTH_MAX);
+        if (depth > maxDepth) {
+            this->isolate->SetData(MARSHAL_STACKDEPTH_REACHED, (void*)true);
+            return true;
+        }
+
+        return false;
+    }
+
+    bool IsActive() {
+        return this->isActive && !(bool)this->isolate->GetData(DO_TERMINATE);
+    }
+
+    ~StackCounter() {
+        if (this->IsActive()) {
+            this->IncDepth(-1);
+        }
+    }
+
+private: 
+    Isolate* isolate;
+    bool isActive;
+
+    void IncDepth(int inc) {
+        size_t depth = (size_t)this->isolate->GetData(MARSHAL_STACKDEPTH_VALUE);
+
+        // don't decrement past 0
+        if (inc > 0 || depth > 0) {
+            depth += inc;
+        }
+
+        this->isolate->SetData(MARSHAL_STACKDEPTH_VALUE, (void*)depth);
+    }
 };
 
 static VALUE rb_cContext;
@@ -335,6 +406,10 @@ nogvl_context_eval(void* arg) {
     // Memory softlimit hit flag
     isolate->SetData(MEM_SOFTLIMIT_REACHED, (void*)false);
 
+    isolate->SetData(MARSHAL_STACKDEPTH_MAX, (void*)false);
+    isolate->SetData(MARSHAL_STACKDEPTH_VALUE, (void*)false);
+    isolate->SetData(MARSHAL_STACKDEPTH_REACHED, (void*)false);
+
     MaybeLocal<Script> parsed_script;
 
     if (eval_params->filename) {
@@ -367,6 +442,10 @@ nogvl_context_eval(void* arg) {
             }
         }
 
+        if (eval_params->marshal_stackdepth > 0) {
+            StackCounter::SetMax(isolate, eval_params->marshal_stackdepth);
+        }
+
         maybe_value = parsed_script.ToLocalChecked()->Run(context);
     }
 
@@ -383,25 +462,6 @@ static VALUE new_empty_failed_conv_obj() {
     return rb_funcall(rb_cFailedV8Conversion, rb_intern("new"), 1, rb_str_new2(""));
 }
 
-
-static int marshalStackDepth = 0;
-static int marshalMaxStackDepth = 64;
-
-struct StackLevel {
-    StackLevel() {
-        marshalStackDepth++;
-
-        if (marshalStackDepth > marshalMaxStackDepth) {
-            throw 20;
-        }
-    }
-
-    ~StackLevel() {
-        marshalStackDepth--;
-    }
-
-};
-
 // assumes isolate locking is in place
 static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
                                 Local<Value> value) {
@@ -409,7 +469,13 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
     Isolate::Scope isolate_scope(isolate);
     HandleScope scope(isolate);
 
-    StackLevel stackCounter;
+    StackCounter stackCounter(isolate);
+
+    if (stackCounter.IsTooDeep()) {
+        isolate->SetData(DO_TERMINATE, (void*)true);
+        isolate->TerminateExecution();
+        return Qnil;
+    }
 
     if (value->IsNull() || value->IsUndefined()){
         return Qnil;
@@ -906,8 +972,13 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
         VALUE ruby_exception = rb_iv_get(self, "@current_exception");
         if (ruby_exception == Qnil) {
             bool mem_softlimit_reached = (bool)isolate->GetData(MEM_SOFTLIMIT_REACHED);
+            bool marshal_stack_maxdepth_reached = (bool)isolate->GetData(MARSHAL_STACKDEPTH_REACHED);
             // If we were terminated or have the memory softlimit flag set
-            if (result.terminated || mem_softlimit_reached) {
+            if (marshal_stack_maxdepth_reached) {
+                ruby_exception = rb_eScriptRuntimeError;
+                std::string msg = std::string("Marshal object depth too deep. Script terminated.");
+                message = rb_enc_str_new(msg.c_str(), msg.length(), rb_enc_find("utf-8"));
+            } else if (result.terminated || mem_softlimit_reached) {
                 ruby_exception = mem_softlimit_reached ? rb_eV8OutOfMemoryError : rb_eScriptTerminatedError;
             } else {
                 ruby_exception = rb_eScriptRuntimeError;
@@ -942,7 +1013,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
             VALUE json_string = rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate), rb_enc_find("utf-8"));
             ret = rb_funcall(rb_mJSON, rb_intern("parse"), 1, json_string);
         } else {
-            marshalStackDepth = 0;
+            StackCounter::Reset(isolate);
             ret = convert_v8_to_ruby(isolate, *p_ctx, tmp);
         }
 
@@ -1008,6 +1079,11 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
         VALUE mem_softlimit = rb_iv_get(self, "@max_memory");
         if (mem_softlimit != Qnil) {
             eval_params.max_memory = (size_t)NUM2ULONG(mem_softlimit);
+        }
+
+        VALUE stack_depth = rb_iv_get(self, "@marshal_stack_depth");
+        if (stack_depth != Qnil) {
+            eval_params.marshal_stackdepth = (size_t)NUM2ULONG(stack_depth);
         }
 
         eval_result.message = NULL;
@@ -1079,6 +1155,7 @@ gvl_ruby_callback(void* data) {
 
         for (int i = 0; i < length; i++) {
             Local<Value> value = ((*args)[i]).As<Value>();
+            StackCounter::Reset(args->GetIsolate());
             VALUE tmp = convert_v8_to_ruby(args->GetIsolate(),
                                            *context_info->context, value);
             rb_ary_push(ruby_args, tmp);
@@ -1543,6 +1620,10 @@ nogvl_context_call(void *args) {
     }
     }
 
+    if (call->marshal_stackdepth > 0) {
+        StackCounter::SetMax(isolate, call->marshal_stackdepth);
+    }
+
     Isolate::Scope isolate_scope(isolate);
     EscapableHandleScope handle_scope(isolate);
     TryCatch trycatch(isolate);
@@ -1605,6 +1686,13 @@ static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
     if (mem_softlimit != Qnil) {
         unsigned long sl_int = NUM2ULONG(mem_softlimit);
         call.max_memory = (size_t)sl_int;
+    }
+
+    call.marshal_stackdepth = 0;
+    VALUE marshal_stackdepth = rb_iv_get(self, "@marshal_stack_depth");
+    if (marshal_stackdepth != Qnil) {
+        unsigned long sl_int = NUM2ULONG(marshal_stackdepth);
+        call.marshal_stackdepth = (size_t)sl_int;
     }
 
     bool missingFunction = false;

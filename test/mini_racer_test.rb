@@ -856,20 +856,39 @@ raise FooError, "I like foos"
   end
 
   def test_cyclical_object_js
-    context = MiniRacer::Context.new()
+    context = MiniRacer::Context.new(marshal_stack_depth: 5)
     context.attach("a", proc{|a| a})
 
-    # Already marshalled object references are replaced with null.
-    #  This prevents a segfault in this likely-an-error case.
-    assert_equal [[nil]], context.eval("let arr = []; arr.push(arr); a(arr)")
+    assert_raises(MiniRacer::RuntimeError) { context.eval("let arr = []; arr.push(arr); a(arr)") }
   end
 
-  ## This case just hangs everything.
-  # def test_cyclical_object_rb
-  #   context = MiniRacer::Context.new()
-  #   context.attach("a", proc{ arr = []; arr << arr; arr})
-  #   context.eval("a()")
-  # end
+  def test_infinite_object_js
+    context = MiniRacer::Context.new(marshal_stack_depth: 5)
+    context.attach("a", proc{|a| a})
+  
+    js = <<~JS
+      var d=0;
+      function get(z) {
+        z.depth=d++; // this isn't necessary to make it infinite, just to make it more obvious that it is
+        Object.defineProperty(z,'foo',{get(){var r={};return get(r);},enumerable:true})
+        return z;
+      }
+      a(get({}));
+    JS
+
+    assert_raises(MiniRacer::RuntimeError) { context.eval(js) }
+  end
+
+  def test_deep_object_js
+    context = MiniRacer::Context.new(marshal_stack_depth: 5)
+    context.attach("a", proc{|a| a})
+
+    # stack depth should be enough to marshal the object
+    assert_equal [[[]]], context.eval("let arr = [[[]]]; a(arr)")
+
+    # too deep
+    assert_raises(MiniRacer::RuntimeError) { context.eval("let arr = [[[[[[[[]]]]]]]]; a(arr)") }
+  end
 
   def test_proxy_support
     js = <<~JS
