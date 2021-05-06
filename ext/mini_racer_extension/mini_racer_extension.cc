@@ -194,7 +194,9 @@ private:
     Isolate* isolate;
     bool isActive;
 
-    void IncDepth(int inc) {
+    void IncDepth(int direction) {
+        int inc = direction > 0 ? 1 : -1;
+
         size_t depth = (size_t)this->isolate->GetData(MARSHAL_STACKDEPTH_VALUE);
 
         // don't decrement past 0
