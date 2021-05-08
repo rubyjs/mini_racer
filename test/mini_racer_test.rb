@@ -865,14 +865,14 @@ raise FooError, "I like foos"
   end
 
   def test_cyclical_object_js
-    context = MiniRacer::Context.new(marshal_stack_depth: 5)
+    context = MiniRacer::Context.new()
     context.attach("a", proc{|a| a})
 
     assert_raises(MiniRacer::RuntimeError) { context.eval("let arr = []; arr.push(arr); a(arr)") }
   end
 
   def test_infinite_object_js
-    context = MiniRacer::Context.new(marshal_stack_depth: 5)
+    context = MiniRacer::Context.new()
     context.attach("a", proc{|a| a})
   
     js = <<~JS
@@ -889,11 +889,16 @@ raise FooError, "I like foos"
   end
 
   def test_deep_object_js
-    context = MiniRacer::Context.new(marshal_stack_depth: 5)
+    context = MiniRacer::Context.new()
     context.attach("a", proc{|a| a})
 
     # stack depth should be enough to marshal the object
     assert_equal [[[]]], context.eval("let arr = [[[]]]; a(arr)")
+  end
+
+  def test_too_deep_object_js
+    context = MiniRacer::Context.new()
+    context.attach("a", proc{|a| a})
 
     # too deep
     assert_raises(MiniRacer::RuntimeError) { context.eval("let arr = [[[[[[[[]]]]]]]]; a(arr)") }
