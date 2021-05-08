@@ -10,10 +10,10 @@ class MiniRacerTest < Minitest::Test
 
 
   def test_locale
-    val = MiniRacer::Context.new.eval("new Date().toLocaleDateString('es-MX');")
+    val = MiniRacer::Context.new.eval("new Date('April 28 2021').toLocaleDateString('es-MX');")
     assert_equal '28/4/2021', val
 
-    val = MiniRacer::Context.new.eval("new Date().toLocaleDateString('en-US');")
+    val = MiniRacer::Context.new.eval("new Date('April 28 2021').toLocaleDateString('en-US');")
     assert_equal '4/28/2021', val
   end
 
