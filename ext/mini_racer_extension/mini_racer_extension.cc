@@ -130,81 +130,6 @@ typedef struct {
     size_t marshal_stackdepth;
 } FunctionCall;
 
-enum IsolateFlags {
-    IN_GVL,
-    DO_TERMINATE,
-    MEM_SOFTLIMIT_VALUE,
-    MEM_SOFTLIMIT_REACHED,
-    MARSHAL_STACKDEPTH_MAX,
-    MARSHAL_STACKDEPTH_VALUE,
-    MARSHAL_STACKDEPTH_REACHED,
-};
-
-struct StackCounter {
-    static void Reset(Isolate* isolate) {
-        if ((size_t)isolate->GetData(MARSHAL_STACKDEPTH_MAX) > 0) {
-            isolate->SetData(MARSHAL_STACKDEPTH_VALUE, (void*)0);
-            isolate->SetData(MARSHAL_STACKDEPTH_REACHED, (void*)false);
-        }
-    }
-
-    static void SetMax(Isolate* isolate, size_t marshalMaxStackDepth) {
-        if (marshalMaxStackDepth > 0) {
-            isolate->SetData(MARSHAL_STACKDEPTH_MAX, (void*)marshalMaxStackDepth);
-            isolate->SetData(MARSHAL_STACKDEPTH_VALUE, (void*)0);
-            isolate->SetData(MARSHAL_STACKDEPTH_REACHED, (void*)false);
-        }
-    }
-
-    StackCounter(Isolate* isolate) {
-        this->isActive = (size_t)isolate->GetData(MARSHAL_STACKDEPTH_MAX) > 0;
-
-        if (this->isActive) {
-            this->isolate = isolate;
-            this->IncDepth(1);
-        }
-    }
-
-    bool IsTooDeep() {
-        if (!this->IsActive()) {
-            return false;
-        }
-
-        size_t depth = (size_t)this->isolate->GetData(MARSHAL_STACKDEPTH_VALUE);
-        size_t maxDepth = (size_t)this->isolate->GetData(MARSHAL_STACKDEPTH_MAX);
-        if (depth > maxDepth) {
-            this->isolate->SetData(MARSHAL_STACKDEPTH_REACHED, (void*)true);
-            return true;
-        }
-
-        return false;
-    }
-
-    bool IsActive() {
-        return this->isActive && !(bool)this->isolate->GetData(DO_TERMINATE);
-    }
-
-    ~StackCounter() {
-        if (this->IsActive()) {
-            this->IncDepth(-1);
-        }
-    }
-
-private: 
-    Isolate* isolate;
-    bool isActive;
-
-    void IncDepth(int direction) {
-        int inc = direction > 0 ? 1 : -1;
-
-        size_t depth = (size_t)this->isolate->GetData(MARSHAL_STACKDEPTH_VALUE);
-
-        // don't decrement past 0
-        if (inc > 0 || depth > 0) {
-            depth += inc;
-        }
-
-        this->isolate->SetData(MARSHAL_STACKDEPTH_VALUE, (void*)depth);
 #define SLOT_BOUNDARY 1000 // every thousand denotes slot boundary
 
 class IsolateData {
@@ -215,9 +140,14 @@ public:
         IN_GVL, // whether we are inside of ruby gvl or not
         DO_TERMINATE, // terminate as soon as possible
         MEM_SOFTLIMIT_REACHED, // we've hit the memory soft limit
+        MARSHAL_STACKDEPTH_REACHED, // we've hit our max stack depth
 
         // softlimit size is full-sized uintptr_t
         MEM_SOFTLIMIT_VALUE = 1 * SLOT_BOUNDARY,
+
+        // stack value and stack max are 16b
+        MARSHAL_STACKDEPTH_VALUE = 2 * SLOT_BOUNDARY,
+        MARSHAL_STACKDEPTH_MAX,
     };
 
     static uintptr_t Get(Isolate *isolate, Flag flag) {
@@ -232,6 +162,8 @@ public:
             return retval;
         case 1:
             return slotData;
+        case 2:
+            return flag == IsolateData::MARSHAL_STACKDEPTH_VALUE ? slotData & 0xFFFF : (slotData & 0xFFFF0000) >> 16;
         }
 
         throw std::runtime_error("MINI_RACER_DEV_ERROR Flags didn't match switch statement in Get.");
@@ -251,9 +183,82 @@ public:
         case 1:
             isolate->SetData(slot, reinterpret_cast<void*>(value));
             return;
+        case 2:
+            slotData = reinterpret_cast<uintptr_t>(isolate->GetData(slot));
+            setval = flag == IsolateData::MARSHAL_STACKDEPTH_VALUE ? (slotData & ~0xFFFF) | (value & 0xFFFF) : (slotData & ~(0xFFFF0000)) | ((value & 0xFFFF) << 16);
+            isolate->SetData(slot, reinterpret_cast<void*>(setval));
+            return;
         }
 
         throw std::runtime_error("MINI_RACER_DEV_ERROR Flags didn't match switch statement in Set.");
+    }
+};
+
+struct StackCounter {
+    static void Reset(Isolate* isolate) {
+        if (IsolateData::Get(isolate, IsolateData::MARSHAL_STACKDEPTH_MAX) > 0) {
+            IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_VALUE, 0);
+            IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_REACHED, false);
+        }
+    }
+
+    static void SetMax(Isolate* isolate, size_t marshalMaxStackDepth) {
+        if (marshalMaxStackDepth > 0) {
+            IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_MAX, marshalMaxStackDepth);
+            IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_VALUE, 0);
+            IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_REACHED, false);
+        }
+    }
+
+    StackCounter(Isolate* isolate) {
+        this->isActive = IsolateData::Get(isolate, IsolateData::MARSHAL_STACKDEPTH_MAX) > 0;
+
+        if (this->isActive) {
+            this->isolate = isolate;
+            this->IncDepth(1);
+        }
+    }
+
+    bool IsTooDeep() {
+        if (!this->IsActive()) {
+            return false;
+        }
+
+        size_t depth = IsolateData::Get(this->isolate, IsolateData::MARSHAL_STACKDEPTH_VALUE);
+        size_t maxDepth = IsolateData::Get(this->isolate, IsolateData::MARSHAL_STACKDEPTH_MAX);
+        if (depth > maxDepth) {
+            IsolateData::Set(this->isolate, IsolateData::MARSHAL_STACKDEPTH_REACHED, true);
+            return true;
+        }
+
+        return false;
+    }
+
+    bool IsActive() {
+        return this->isActive && !IsolateData::Get(this->isolate, IsolateData::DO_TERMINATE);
+    }
+
+    ~StackCounter() {
+        if (this->IsActive()) {
+            this->IncDepth(-1);
+        }
+    }
+
+private: 
+    Isolate* isolate;
+    bool isActive;
+
+    void IncDepth(int direction) {
+        int inc = direction > 0 ? 1 : -1;
+
+        size_t depth = IsolateData::Get(this->isolate, IsolateData::MARSHAL_STACKDEPTH_VALUE);
+
+        // don't decrement past 0
+        if (inc > 0 || depth > 0) {
+            depth += inc;
+        }
+
+        IsolateData::Set(this->isolate, IsolateData::MARSHAL_STACKDEPTH_VALUE, depth);
     }
 };
 
@@ -455,9 +460,9 @@ nogvl_context_eval(void* arg) {
     IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_VALUE, 0);
     IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_REACHED, false);
 
-    isolate->SetData(MARSHAL_STACKDEPTH_MAX, (void*)false);
-    isolate->SetData(MARSHAL_STACKDEPTH_VALUE, (void*)false);
-    isolate->SetData(MARSHAL_STACKDEPTH_REACHED, (void*)false);
+    IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_MAX, 0);
+    IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_VALUE, 0);
+    IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_REACHED, false);
 
     MaybeLocal<Script> parsed_script;
 
@@ -521,7 +526,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
     StackCounter stackCounter(isolate);
 
     if (stackCounter.IsTooDeep()) {
-        isolate->SetData(DO_TERMINATE, (void*)true);
+        IsolateData::Set(isolate, IsolateData::DO_TERMINATE, true);
         isolate->TerminateExecution();
         return Qnil;
     }
@@ -1021,7 +1026,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
         VALUE ruby_exception = rb_iv_get(self, "@current_exception");
         if (ruby_exception == Qnil) {
             bool mem_softlimit_reached = IsolateData::Get(isolate, IsolateData::MEM_SOFTLIMIT_REACHED);
-            bool marshal_stack_maxdepth_reached = (bool)isolate->GetData(MARSHAL_STACKDEPTH_REACHED);
+            bool marshal_stack_maxdepth_reached = IsolateData::Get(isolate, IsolateData::MARSHAL_STACKDEPTH_REACHED);
             // If we were terminated or have the memory softlimit flag set
             if (marshal_stack_maxdepth_reached) {
                 ruby_exception = rb_eScriptRuntimeError;
