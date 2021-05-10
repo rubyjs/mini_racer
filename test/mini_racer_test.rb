@@ -868,7 +868,21 @@ raise FooError, "I like foos"
     context = MiniRacer::Context.new(marshal_stack_depth: 5)
     context.attach("a", proc{|a| a})
 
+    assert_raises(MiniRacer::RuntimeError) { context.eval("var o={}; o.o=o; a(o)") }
+  end
+
+  def test_cyclical_array_js
+    context = MiniRacer::Context.new(marshal_stack_depth: 5)
+    context.attach("a", proc{|a| a})
+
     assert_raises(MiniRacer::RuntimeError) { context.eval("let arr = []; arr.push(arr); a(arr)") }
+  end
+
+  def test_cyclical_elem_in_array_js
+    context = MiniRacer::Context.new(marshal_stack_depth: 5)
+    context.attach("a", proc{|a| a})
+
+    assert_raises(MiniRacer::RuntimeError) { context.eval("let arr = []; arr[0]=1; arr[1]=arr; a(arr)") }
   end
 
   def test_infinite_object_js

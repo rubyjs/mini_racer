@@ -525,6 +525,10 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
 
     StackCounter stackCounter(isolate);
 
+    if (IsolateData::Get(isolate, IsolateData::MARSHAL_STACKDEPTH_REACHED)) {
+        return Qnil;
+    }
+
     if (stackCounter.IsTooDeep()) {
         IsolateData::Set(isolate, IsolateData::DO_TERMINATE, true);
         isolate->TerminateExecution();
