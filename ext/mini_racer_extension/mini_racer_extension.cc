@@ -128,7 +128,8 @@ typedef struct {
     size_t max_memory;
 } FunctionCall;
 
-#define SLOT_BOUNDARY 1000 // every thousand denotes slot boundary
+// optimizable divisor which is larger than future word sizes 
+#define SLOT_BOUNDARY 512 
 
 class IsolateData {
 public:
