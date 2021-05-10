@@ -115,7 +115,6 @@ typedef struct {
     useconds_t timeout;
     EvalResult* result;
     size_t max_memory;
-    size_t marshal_stackdepth;
 } EvalParams;
 
 typedef struct {
@@ -127,7 +126,6 @@ typedef struct {
     Local<Value> *argv;
     EvalResult result;
     size_t max_memory;
-    size_t marshal_stackdepth;
 } FunctionCall;
 
 #define SLOT_BOUNDARY 1000 // every thousand denotes slot boundary
@@ -496,9 +494,7 @@ nogvl_context_eval(void* arg) {
             }
         }
 
-        if (eval_params->marshal_stackdepth > 0) {
-            StackCounter::SetMax(isolate, eval_params->marshal_stackdepth);
-        }
+        StackCounter::SetMax(isolate, 1000);
 
         maybe_value = parsed_script.ToLocalChecked()->Run(context);
     }
@@ -1139,11 +1135,6 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
             eval_params.max_memory = (size_t)NUM2ULONG(mem_softlimit);
         }
 
-        VALUE stack_depth = rb_iv_get(self, "@marshal_stack_depth");
-        if (stack_depth != Qnil) {
-            eval_params.marshal_stackdepth = (size_t)NUM2ULONG(stack_depth);
-        }
-
         eval_result.message = NULL;
         eval_result.backtrace = NULL;
 
@@ -1675,9 +1666,7 @@ nogvl_context_call(void *args) {
     }
     }
 
-    if (call->marshal_stackdepth > 0) {
-        StackCounter::SetMax(isolate, call->marshal_stackdepth);
-    }
+    StackCounter::SetMax(isolate, 1000);
 
     Isolate::Scope isolate_scope(isolate);
     EscapableHandleScope handle_scope(isolate);
@@ -1741,13 +1730,6 @@ static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
     if (mem_softlimit != Qnil) {
         unsigned long sl_int = NUM2ULONG(mem_softlimit);
         call.max_memory = (size_t)sl_int;
-    }
-
-    call.marshal_stackdepth = 0;
-    VALUE marshal_stackdepth = rb_iv_get(self, "@marshal_stack_depth");
-    if (marshal_stackdepth != Qnil) {
-        unsigned long sl_int = NUM2ULONG(marshal_stackdepth);
-        call.marshal_stackdepth = (size_t)sl_int;
     }
 
     bool missingFunction = false;
