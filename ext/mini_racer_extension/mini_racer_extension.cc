@@ -145,7 +145,7 @@ public:
             case IN_GVL: return u.IN_GVL;
             case DO_TERMINATE: return u.DO_TERMINATE;
             case MEM_SOFTLIMIT_REACHED: return u.MEM_SOFTLIMIT_REACHED;
-            case MEM_SOFTLIMIT_VALUE: return u.MEM_SOFTLIMIT_VALUE;
+            case MEM_SOFTLIMIT_VALUE: return u.MEM_SOFTLIMIT_VALUE << 10;
         }
     }
 
@@ -155,7 +155,8 @@ public:
             case IN_GVL: u.IN_GVL = value; break;
             case DO_TERMINATE: u.DO_TERMINATE = value; break;
             case MEM_SOFTLIMIT_REACHED: u.MEM_SOFTLIMIT_REACHED = value; break;
-            case MEM_SOFTLIMIT_VALUE: u.MEM_SOFTLIMIT_VALUE = value; break;
+            // drop least significant 10 bits 'store memory amount in kb'
+            case MEM_SOFTLIMIT_VALUE: u.MEM_SOFTLIMIT_VALUE = value >> 10; break;
         }
         isolate->SetData(0, reinterpret_cast<void*>(u.dataPtr));
     }
@@ -170,10 +171,10 @@ private:
         static_assert(sizeof(uintptr_t) >= sizeof(uint64_t), "mini_racer not supported on this platform. ptr size must be at least 64 bit.");
         union {
             uint64_t dataPtr: 64;
-            // order in this struct matters. For performance keep subobjects aligned
-            //  on their boundaries (8 16 32), try not to straddle
+            // order in this struct matters. For cpu performance keep larger subobjects
+            //  aligned on their boundaries (8 16 32), try not to straddle
             struct {
-                size_t MEM_SOFTLIMIT_VALUE:32;
+                size_t MEM_SOFTLIMIT_VALUE:22;
                 bool IN_GVL:1;
                 bool DO_TERMINATE:1;
                 bool MEM_SOFTLIMIT_REACHED:1;

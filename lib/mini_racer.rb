@@ -383,7 +383,7 @@ module MiniRacer
       assert_option_is_nil_or_a('isolate', isolate, Isolate)
       assert_option_is_nil_or_a('snapshot', snapshot, Snapshot)
 
-      assert_numeric_or_nil('max_memory', max_memory, min_value: 10_000)
+      assert_numeric_or_nil('max_memory', max_memory, min_value: 10_000, max_value: 2**32)
       assert_numeric_or_nil('ensure_gc_after_idle', ensure_gc_after_idle, min_value: 1)
       assert_numeric_or_nil('timeout', timeout, min_value: 1)
 
@@ -392,9 +392,13 @@ module MiniRacer
       end
     end
 
-    def assert_numeric_or_nil(option_name, object, min_value:)
+    def assert_numeric_or_nil(option_name, object, min_value:, max_value: nil)
+      if max_value && object.is_a?(Numeric) && object > max_value
+        raise ArgumentError, "#{option_name} must be less than or equal to #{max_value}"
+      end
+
       if object.is_a?(Numeric) && object < min_value
-        raise ArgumentError, "#{option_name} must be larger than #{min_value}"
+        raise ArgumentError, "#{option_name} must be larger than or equal to #{min_value}"
       end
 
       if !object.nil? && !object.is_a?(Numeric)
