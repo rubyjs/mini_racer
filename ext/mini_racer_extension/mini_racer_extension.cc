@@ -142,6 +142,11 @@ public:
         MARSHAL_STACKDEPTH_MAX, // maximum stack depth during marshal
     };
 
+    static void Init(Isolate *isolate) {
+        // zero out all fields in the bitfield
+        isolate->SetData(0, 0);
+    }
+
     static uintptr_t Get(Isolate *isolate, Flag flag) {
         Bitfield u = { reinterpret_cast<uint64_t>(isolate->GetData(0)) };
         switch (flag) {
@@ -458,14 +463,7 @@ nogvl_context_eval(void* arg) {
     Context::Scope context_scope(context);
     v8::ScriptOrigin *origin = NULL;
 
-    IsolateData::Set(isolate, IsolateData::IN_GVL, false);
-    IsolateData::Set(isolate, IsolateData::DO_TERMINATE, false);
-    IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_MAX, 0);
-    IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_REACHED, false);
-
-    IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_MAX, 0);
-    IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_VALUE, 0);
-    IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_REACHED, false);
+    IsolateData::Init(isolate);
 
     MaybeLocal<Script> parsed_script;
 
