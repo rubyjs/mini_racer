@@ -115,6 +115,7 @@ typedef struct {
     useconds_t timeout;
     EvalResult* result;
     size_t max_memory;
+    size_t marshal_stackdepth;
 } EvalParams;
 
 typedef struct {
@@ -126,6 +127,7 @@ typedef struct {
     Local<Value> *argv;
     EvalResult result;
     size_t max_memory;
+    size_t marshal_stackdepth;
 } FunctionCall;
 
 class IsolateData {
@@ -497,7 +499,9 @@ nogvl_context_eval(void* arg) {
             }
         }
 
-        StackCounter::SetMax(isolate, 1000);
+        if (eval_params->marshal_stackdepth > 0) {
+            StackCounter::SetMax(isolate, eval_params->marshal_stackdepth);
+        }
 
         maybe_value = parsed_script.ToLocalChecked()->Run(context);
     }
@@ -1128,6 +1132,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
         eval_params.result = &eval_result;
         eval_params.timeout = 0;
         eval_params.max_memory = 0;
+        eval_params.marshal_stackdepth = 0;
         VALUE timeout = rb_iv_get(self, "@timeout");
         if (timeout != Qnil) {
             eval_params.timeout = (useconds_t)NUM2LONG(timeout);
@@ -1136,6 +1141,11 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
         VALUE mem_softlimit = rb_iv_get(self, "@max_memory");
         if (mem_softlimit != Qnil) {
             eval_params.max_memory = (size_t)NUM2ULONG(mem_softlimit);
+        }
+
+        VALUE stack_depth = rb_iv_get(self, "@marshal_stack_depth");
+        if (stack_depth != Qnil) {
+            eval_params.marshal_stackdepth = (size_t)NUM2ULONG(stack_depth);
         }
 
         eval_result.message = NULL;
@@ -1664,12 +1674,14 @@ nogvl_context_call(void *args) {
         IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_MAX, call->max_memory);
         IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_REACHED, false);
         if (!isolate_info->added_gc_cb) {
-        isolate->AddGCEpilogueCallback(gc_callback);
+            isolate->AddGCEpilogueCallback(gc_callback);
             isolate_info->added_gc_cb = true;
+        }
     }
+ 
+    if (call->marshal_stackdepth > 0) {
+        StackCounter::SetMax(isolate, call->marshal_stackdepth);
     }
-
-    StackCounter::SetMax(isolate, 1000);
 
     Isolate::Scope isolate_scope(isolate);
     EscapableHandleScope handle_scope(isolate);
@@ -1733,6 +1745,13 @@ static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
     if (mem_softlimit != Qnil) {
         unsigned long sl_int = NUM2ULONG(mem_softlimit);
         call.max_memory = (size_t)sl_int;
+    }
+ 
+    call.marshal_stackdepth = 0;
+    VALUE marshal_stackdepth = rb_iv_get(self, "@marshal_stack_depth");
+    if (marshal_stackdepth != Qnil) {
+        unsigned long sl_int = NUM2ULONG(marshal_stackdepth);
+        call.marshal_stackdepth = (size_t)sl_int;
     }
 
     bool missingFunction = false;

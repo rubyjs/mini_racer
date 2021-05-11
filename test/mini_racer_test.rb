@@ -340,7 +340,7 @@ raise FooError, "I like foos"
     end
 
     assert_raises(ArgumentError) do
-      MiniRacer::Context.new(max_memory: 2**32+1)
+      MiniRacer::Context.new(max_memory: 2**32)
     end
   end
 
@@ -869,28 +869,28 @@ raise FooError, "I like foos"
   end
 
   def test_cyclical_object_js
-    context = MiniRacer::Context.new()
+    context = MiniRacer::Context.new(marshal_stack_depth: 5)
     context.attach("a", proc{|a| a})
 
     assert_raises(MiniRacer::RuntimeError) { context.eval("var o={}; o.o=o; a(o)") }
   end
 
   def test_cyclical_array_js
-    context = MiniRacer::Context.new()
+    context = MiniRacer::Context.new(marshal_stack_depth: 5)
     context.attach("a", proc{|a| a})
 
     assert_raises(MiniRacer::RuntimeError) { context.eval("let arr = []; arr.push(arr); a(arr)") }
   end
 
   def test_cyclical_elem_in_array_js
-    context = MiniRacer::Context.new()
+    context = MiniRacer::Context.new(marshal_stack_depth: 5)
     context.attach("a", proc{|a| a})
 
     assert_raises(MiniRacer::RuntimeError) { context.eval("let arr = []; arr[0]=1; arr[1]=arr; a(arr)") }
   end
 
   def test_infinite_object_js
-    context = MiniRacer::Context.new()
+    context = MiniRacer::Context.new(marshal_stack_depth: 5)
     context.attach("a", proc{|a| a})
   
     js = <<~JS
@@ -904,6 +904,27 @@ raise FooError, "I like foos"
     JS
 
     assert_raises(MiniRacer::RuntimeError) { context.eval(js) }
+  end
+
+  def test_deep_object_js
+    context = MiniRacer::Context.new(marshal_stack_depth: 5)
+    context.attach("a", proc{|a| a})
+
+    # stack depth should be enough to marshal the object
+    assert_equal [[[]]], context.eval("let arr = [[[]]]; a(arr)")
+
+    # too deep
+    assert_raises(MiniRacer::RuntimeError) { context.eval("let arr = [[[[[[[[]]]]]]]]; a(arr)") }
+  end
+
+  def test_stackdepth_bounds
+    assert_raises(ArgumentError) do
+      MiniRacer::Context.new(marshal_stack_depth: -2)
+    end
+
+    assert_raises(ArgumentError) do
+      MiniRacer::Context.new(marshal_stack_depth: 2**10)
+    end
   end
 
   def test_proxy_support
