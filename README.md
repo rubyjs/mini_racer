@@ -85,6 +85,19 @@ context.eval 'var a = new Array(10000); while(true) {a = a.concat(new Array(1000
 # => V8OutOfMemoryError is raised
 ```
 
+### Object marshal max stackdepth support
+
+Contexts can specify a stack depth limit for object marshalling
+
+```ruby
+# terminates script if stack depth exceeds max during marshal
+context = MiniRacer::Context.new(marshal_stack_depth: 512)
+context.attach("a", proc{|a| a})
+
+context.eval("let arr = []; arr.push(arr); a(arr)")
+# => RuntimeError is raised
+```
+
 ### Rich debugging with "filename" support
 
 ```ruby
