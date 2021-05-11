@@ -128,11 +128,59 @@ typedef struct {
     size_t max_memory;
 } FunctionCall;
 
-enum IsolateFlags {
-    IN_GVL,
-    DO_TERMINATE,
-    MEM_SOFTLIMIT_VALUE,
-    MEM_SOFTLIMIT_REACHED,
+class IsolateData {
+public:
+    enum Flag {
+        // first flags are bitfield
+        //  max count: sizeof(uintptr_t) * 8
+        IN_GVL, // whether we are inside of ruby gvl or not
+        DO_TERMINATE, // terminate as soon as possible
+        MEM_SOFTLIMIT_REACHED, // we've hit the memory soft limit
+        MEM_SOFTLIMIT_VALUE,
+    };
+
+    static uintptr_t Get(Isolate *isolate, Flag flag) {
+        Bitfield u = { reinterpret_cast<uint64_t>(isolate->GetData(0)) };
+        switch (flag) {
+            case IN_GVL: return u.IN_GVL;
+            case DO_TERMINATE: return u.DO_TERMINATE;
+            case MEM_SOFTLIMIT_REACHED: return u.MEM_SOFTLIMIT_REACHED;
+            case MEM_SOFTLIMIT_VALUE: return u.MEM_SOFTLIMIT_VALUE << 10;
+        }
+    }
+
+    static void Set(Isolate *isolate, Flag flag, uintptr_t value) {
+        Bitfield u = { reinterpret_cast<uint64_t>(isolate->GetData(0)) };
+        switch (flag) {
+            case IN_GVL: u.IN_GVL = value; break;
+            case DO_TERMINATE: u.DO_TERMINATE = value; break;
+            case MEM_SOFTLIMIT_REACHED: u.MEM_SOFTLIMIT_REACHED = value; break;
+            // drop least significant 10 bits 'store memory amount in kb'
+            case MEM_SOFTLIMIT_VALUE: u.MEM_SOFTLIMIT_VALUE = value >> 10; break;
+        }
+        isolate->SetData(0, reinterpret_cast<void*>(u.dataPtr));
+    }
+
+private:
+    struct Bitfield {
+        // WARNING: this would explode on platforms below 64 bit ptrs
+        //  compiler will fail here, making it clear for them.
+        //  Additionally, using the other part of the union to reinterpret the
+        //  memory is undefined behavior according to spec, but is / has been stable
+        //  across major compilers for decades.
+        static_assert(sizeof(uintptr_t) >= sizeof(uint64_t), "mini_racer not supported on this platform. ptr size must be at least 64 bit.");
+        union {
+            uint64_t dataPtr: 64;
+            // order in this struct matters. For cpu performance keep larger subobjects
+            //  aligned on their boundaries (8 16 32), try not to straddle
+            struct {
+                size_t MEM_SOFTLIMIT_VALUE:22;
+                bool IN_GVL:1;
+                bool DO_TERMINATE:1;
+                bool MEM_SOFTLIMIT_REACHED:1;
+            };
+        };
+    };
 };
 
 static VALUE rb_cContext;
@@ -205,16 +253,18 @@ static void init_v8() {
 }
 
 static void gc_callback(Isolate *isolate, GCType type, GCCallbackFlags flags) {
-    if((bool)isolate->GetData(MEM_SOFTLIMIT_REACHED)) return;
+    if (IsolateData::Get(isolate, IsolateData::MEM_SOFTLIMIT_REACHED)) {
+        return;
+    }
 
-    size_t softlimit = *(size_t*) isolate->GetData(MEM_SOFTLIMIT_VALUE);
+    size_t softlimit = IsolateData::Get(isolate, IsolateData::MEM_SOFTLIMIT_VALUE);
 
     HeapStatistics stats;
     isolate->GetHeapStatistics(&stats);
     size_t used = stats.used_heap_size();
 
     if(used > softlimit) {
-        isolate->SetData(MEM_SOFTLIMIT_REACHED, (void*)true);
+        IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_REACHED, true);
         isolate->TerminateExecution();
     }
 }
@@ -326,14 +376,10 @@ nogvl_context_eval(void* arg) {
     Context::Scope context_scope(context);
     v8::ScriptOrigin *origin = NULL;
 
-    // in gvl flag
-    isolate->SetData(IN_GVL, (void*)false);
-    // terminate ASAP
-    isolate->SetData(DO_TERMINATE, (void*)false);
-    // Memory softlimit
-    isolate->SetData(MEM_SOFTLIMIT_VALUE, (void*)false);
-    // Memory softlimit hit flag
-    isolate->SetData(MEM_SOFTLIMIT_REACHED, (void*)false);
+    IsolateData::Set(isolate, IsolateData::IN_GVL, false);
+    IsolateData::Set(isolate, IsolateData::DO_TERMINATE, false);
+    IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_VALUE, 0);
+    IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_REACHED, false);
 
     MaybeLocal<Script> parsed_script;
 
@@ -360,7 +406,7 @@ nogvl_context_eval(void* arg) {
     } else {
         // parsing successful
         if (eval_params->max_memory > 0) {
-            isolate->SetData(MEM_SOFTLIMIT_VALUE, &eval_params->max_memory);
+            IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_VALUE, eval_params->max_memory);
             if (!isolate_info->added_gc_cb) {
             isolate->AddGCEpilogueCallback(gc_callback);
                 isolate_info->added_gc_cb = true;
@@ -372,7 +418,7 @@ nogvl_context_eval(void* arg) {
 
     prepare_result(maybe_value, trycatch, isolate, context, *result);
 
-    isolate->SetData(IN_GVL, (void*)true);
+    IsolateData::Set(isolate, IsolateData::IN_GVL, true);
 
     return NULL;
 }
@@ -884,7 +930,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
     if (!result.executed) {
         VALUE ruby_exception = rb_iv_get(self, "@current_exception");
         if (ruby_exception == Qnil) {
-            bool mem_softlimit_reached = (bool)isolate->GetData(MEM_SOFTLIMIT_REACHED);
+            bool mem_softlimit_reached = IsolateData::Get(isolate, IsolateData::MEM_SOFTLIMIT_REACHED);
             // If we were terminated or have the memory softlimit flag set
             if (result.terminated || mem_softlimit_reached) {
                 ruby_exception = mem_softlimit_reached ? rb_eV8OutOfMemoryError : rb_eScriptTerminatedError;
@@ -1070,7 +1116,7 @@ gvl_ruby_callback(void* data) {
     callback_data.ruby_args = ruby_args;
     callback_data.failed = false;
 
-    if ((bool)args->GetIsolate()->GetData(DO_TERMINATE) == true) {
+    if (IsolateData::Get(args->GetIsolate(), IsolateData::DO_TERMINATE)) {
         args->GetIsolate()->ThrowException(
                     String::NewFromUtf8Literal(args->GetIsolate(),
                                                "Terminated execution during transition from Ruby to JS"));
@@ -1100,23 +1146,22 @@ gvl_ruby_callback(void* data) {
         rb_gc_force_recycle(ruby_args);
     }
 
-    if ((bool)args->GetIsolate()->GetData(DO_TERMINATE) == true) {
-      Isolate* isolate = args->GetIsolate();
-      isolate->TerminateExecution();
+    if (IsolateData::Get(args->GetIsolate(), IsolateData::DO_TERMINATE)) {
+      args->GetIsolate()->TerminateExecution();
     }
 
     return NULL;
 }
 
 static void ruby_callback(const FunctionCallbackInfo<Value>& args) {
-    bool has_gvl = (bool)args.GetIsolate()->GetData(IN_GVL);
+    bool has_gvl = IsolateData::Get(args.GetIsolate(), IsolateData::IN_GVL);
 
     if(has_gvl) {
         gvl_ruby_callback((void*)&args);
     } else {
-        args.GetIsolate()->SetData(IN_GVL, (void*)true);
+        IsolateData::Set(args.GetIsolate(), IsolateData::IN_GVL, true);
         rb_thread_call_with_gvl(gvl_ruby_callback, (void*)(&args));
-        args.GetIsolate()->SetData(IN_GVL, (void*)false);
+        IsolateData::Set(args.GetIsolate(), IsolateData::IN_GVL, false);
     }
 }
 
@@ -1478,7 +1523,7 @@ rb_context_stop(VALUE self) {
     Isolate* isolate = context_info->isolate_info->isolate;
 
     // flag for termination
-    isolate->SetData(DO_TERMINATE, (void*)true);
+    IsolateData::Set(isolate, IsolateData::DO_TERMINATE, true);
 
     isolate->TerminateExecution();
     rb_funcall(self, rb_intern("stop_attached"), 0);
@@ -1507,14 +1552,12 @@ nogvl_context_call(void *args) {
     IsolateInfo *isolate_info = call->context_info->isolate_info;
     Isolate* isolate = isolate_info->isolate;
 
-    // in gvl flag
-    isolate->SetData(IN_GVL, (void*)false);
-    // terminate ASAP
-    isolate->SetData(DO_TERMINATE, (void*)false);
+    IsolateData::Set(isolate, IsolateData::IN_GVL, false);
+    IsolateData::Set(isolate, IsolateData::DO_TERMINATE, false);
 
     if (call->max_memory > 0) {
-        isolate->SetData(MEM_SOFTLIMIT_VALUE, &call->max_memory);
-        isolate->SetData(MEM_SOFTLIMIT_REACHED, (void*)false);
+        IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_VALUE, call->max_memory);
+        IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_REACHED, false);
         if (!isolate_info->added_gc_cb) {
         isolate->AddGCEpilogueCallback(gc_callback);
             isolate_info->added_gc_cb = true;
@@ -1536,7 +1579,7 @@ nogvl_context_call(void *args) {
     MaybeLocal<v8::Value> res = fun->Call(context, context->Global(), call->argc, call->argv);
     prepare_result(res, trycatch, isolate, context, eval_res);
 
-    isolate->SetData(IN_GVL, (void*)true);
+    IsolateData::Set(isolate, IsolateData::IN_GVL, true);
 
     return NULL;
 }
