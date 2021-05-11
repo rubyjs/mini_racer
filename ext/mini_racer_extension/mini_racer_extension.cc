@@ -149,6 +149,9 @@ public:
             case DO_TERMINATE: return u.DO_TERMINATE;
             case MEM_SOFTLIMIT_REACHED: return u.MEM_SOFTLIMIT_REACHED;
             case MEM_SOFTLIMIT_VALUE: return u.MEM_SOFTLIMIT_VALUE << 10;
+            case MARSHAL_STACKDEPTH_REACHED: return u.MARSHAL_STACKDEPTH_REACHED;
+            case MARSHAL_STACKDEPTH_VALUE: return u.MARSHAL_STACKDEPTH_VALUE;
+            case MARSHAL_STACKDEPTH_MAX: return u.MARSHAL_STACKDEPTH_MAX;
         }
     }
 
@@ -160,6 +163,9 @@ public:
             case MEM_SOFTLIMIT_REACHED: u.MEM_SOFTLIMIT_REACHED = value; break;
             // drop least significant 10 bits 'store memory amount in kb'
             case MEM_SOFTLIMIT_VALUE: u.MEM_SOFTLIMIT_VALUE = value >> 10; break;
+            case MARSHAL_STACKDEPTH_REACHED: u.MARSHAL_STACKDEPTH_REACHED = value; break;
+            case MARSHAL_STACKDEPTH_VALUE: u.MARSHAL_STACKDEPTH_VALUE = value; break;
+            case MARSHAL_STACKDEPTH_MAX: u.MARSHAL_STACKDEPTH_MAX = value; break;
         }
         isolate->SetData(0, reinterpret_cast<void*>(u.dataPtr));
     }
@@ -181,6 +187,11 @@ private:
                 bool IN_GVL:1;
                 bool DO_TERMINATE:1;
                 bool MEM_SOFTLIMIT_REACHED:1;
+                bool MARSHAL_STACKDEPTH_REACHED:1;
+                uint8_t :0; // align to next 8bit bound
+                size_t MARSHAL_STACKDEPTH_VALUE:10;
+                uint8_t :0; // align to next 8bit bound
+                size_t MARSHAL_STACKDEPTH_MAX:10;
             };
         };
     };
