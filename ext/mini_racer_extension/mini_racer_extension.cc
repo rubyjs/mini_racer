@@ -136,7 +136,7 @@ public:
         IN_GVL, // whether we are inside of ruby gvl or not
         DO_TERMINATE, // terminate as soon as possible
         MEM_SOFTLIMIT_REACHED, // we've hit the memory soft limit
-        MEM_SOFTLIMIT_VALUE, // maximum memory value
+        MEM_SOFTLIMIT_MAX, // maximum memory value
         MARSHAL_STACKDEPTH_REACHED, // we've hit our max stack depth
         MARSHAL_STACKDEPTH_VALUE, // current stackdepth
         MARSHAL_STACKDEPTH_MAX, // maximum stack depth during marshal
@@ -148,7 +148,7 @@ public:
             case IN_GVL: return u.IN_GVL;
             case DO_TERMINATE: return u.DO_TERMINATE;
             case MEM_SOFTLIMIT_REACHED: return u.MEM_SOFTLIMIT_REACHED;
-            case MEM_SOFTLIMIT_VALUE: return u.MEM_SOFTLIMIT_VALUE << 10;
+            case MEM_SOFTLIMIT_MAX: return u.MEM_SOFTLIMIT_MAX << 10;
             case MARSHAL_STACKDEPTH_REACHED: return u.MARSHAL_STACKDEPTH_REACHED;
             case MARSHAL_STACKDEPTH_VALUE: return u.MARSHAL_STACKDEPTH_VALUE;
             case MARSHAL_STACKDEPTH_MAX: return u.MARSHAL_STACKDEPTH_MAX;
@@ -162,7 +162,7 @@ public:
             case DO_TERMINATE: u.DO_TERMINATE = value; break;
             case MEM_SOFTLIMIT_REACHED: u.MEM_SOFTLIMIT_REACHED = value; break;
             // drop least significant 10 bits 'store memory amount in kb'
-            case MEM_SOFTLIMIT_VALUE: u.MEM_SOFTLIMIT_VALUE = value >> 10; break;
+            case MEM_SOFTLIMIT_MAX: u.MEM_SOFTLIMIT_MAX = value >> 10; break;
             case MARSHAL_STACKDEPTH_REACHED: u.MARSHAL_STACKDEPTH_REACHED = value; break;
             case MARSHAL_STACKDEPTH_VALUE: u.MARSHAL_STACKDEPTH_VALUE = value; break;
             case MARSHAL_STACKDEPTH_MAX: u.MARSHAL_STACKDEPTH_MAX = value; break;
@@ -183,7 +183,7 @@ private:
             // order in this struct matters. For cpu performance keep larger subobjects
             //  aligned on their boundaries (8 16 32), try not to straddle
             struct {
-                size_t MEM_SOFTLIMIT_VALUE:22;
+                size_t MEM_SOFTLIMIT_MAX:22;
                 bool IN_GVL:1;
                 bool DO_TERMINATE:1;
                 bool MEM_SOFTLIMIT_REACHED:1;
@@ -339,7 +339,7 @@ static void gc_callback(Isolate *isolate, GCType type, GCCallbackFlags flags) {
         return;
     }
 
-    size_t softlimit = IsolateData::Get(isolate, IsolateData::MEM_SOFTLIMIT_VALUE);
+    size_t softlimit = IsolateData::Get(isolate, IsolateData::MEM_SOFTLIMIT_MAX);
 
     HeapStatistics stats;
     isolate->GetHeapStatistics(&stats);
@@ -460,7 +460,7 @@ nogvl_context_eval(void* arg) {
 
     IsolateData::Set(isolate, IsolateData::IN_GVL, false);
     IsolateData::Set(isolate, IsolateData::DO_TERMINATE, false);
-    IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_VALUE, 0);
+    IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_MAX, 0);
     IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_REACHED, false);
 
     IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_MAX, 0);
@@ -492,7 +492,7 @@ nogvl_context_eval(void* arg) {
     } else {
         // parsing successful
         if (eval_params->max_memory > 0) {
-            IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_VALUE, eval_params->max_memory);
+            IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_MAX, eval_params->max_memory);
             if (!isolate_info->added_gc_cb) {
             isolate->AddGCEpilogueCallback(gc_callback);
                 isolate_info->added_gc_cb = true;
@@ -1663,7 +1663,7 @@ nogvl_context_call(void *args) {
     IsolateData::Set(isolate, IsolateData::DO_TERMINATE, false);
 
     if (call->max_memory > 0) {
-        IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_VALUE, call->max_memory);
+        IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_MAX, call->max_memory);
         IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_REACHED, false);
         if (!isolate_info->added_gc_cb) {
         isolate->AddGCEpilogueCallback(gc_callback);
