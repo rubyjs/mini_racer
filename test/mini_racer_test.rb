@@ -334,9 +334,13 @@ raise FooError, "I like foos"
     assert_operator(s, :>, 100_000)
   end
 
-  def test_negative_max_memory
+  def test_max_memory_bounds
     assert_raises(ArgumentError) do
       MiniRacer::Context.new(max_memory: -200_000_000)
+    end
+
+    assert_raises(ArgumentError) do
+      MiniRacer::Context.new(max_memory: 2**32+1)
     end
   end
 

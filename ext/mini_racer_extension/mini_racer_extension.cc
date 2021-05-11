@@ -128,8 +128,6 @@ typedef struct {
     size_t max_memory;
 } FunctionCall;
 
-#define SLOT_BOUNDARY 1000 // every thousand denotes slot boundary
-
 class IsolateData {
 public:
     enum Flag {
@@ -138,58 +136,54 @@ public:
         IN_GVL, // whether we are inside of ruby gvl or not
         DO_TERMINATE, // terminate as soon as possible
         MEM_SOFTLIMIT_REACHED, // we've hit the memory soft limit
+        MEM_SOFTLIMIT_VALUE, // maximum memory value
         MARSHAL_STACKDEPTH_REACHED, // we've hit our max stack depth
-
-        // softlimit size is full-sized uintptr_t
-        MEM_SOFTLIMIT_VALUE = 1 * SLOT_BOUNDARY,
-
-        // stack value and stack max are 16b
-        MARSHAL_STACKDEPTH_VALUE = 2 * SLOT_BOUNDARY,
-        MARSHAL_STACKDEPTH_MAX,
+        MARSHAL_STACKDEPTH_VALUE, // current stackdepth
+        MARSHAL_STACKDEPTH_MAX, // maximum stack depth during marshal
     };
 
     static uintptr_t Get(Isolate *isolate, Flag flag) {
-        uintptr_t slotData, flagMask, retval;
-        uint slot = flag / SLOT_BOUNDARY;
-        slotData = reinterpret_cast<uintptr_t>(isolate->GetData(slot));
-
-        switch (slot) {
-        case 0:
-            flagMask = 1 << flag;
-            retval = (slotData & flagMask) == flagMask;
-            return retval;
-        case 1:
-            return slotData;
-        case 2:
-            return flag == IsolateData::MARSHAL_STACKDEPTH_VALUE ? slotData & 0xFFFF : (slotData & 0xFFFF0000) >> 16;
+        Bitfield u = { reinterpret_cast<uint64_t>(isolate->GetData(0)) };
+        switch (flag) {
+            case IN_GVL: return u.IN_GVL;
+            case DO_TERMINATE: return u.DO_TERMINATE;
+            case MEM_SOFTLIMIT_REACHED: return u.MEM_SOFTLIMIT_REACHED;
+            case MEM_SOFTLIMIT_VALUE: return u.MEM_SOFTLIMIT_VALUE << 10;
         }
-
-        throw std::runtime_error("MINI_RACER_DEV_ERROR Flags didn't match switch statement in Get.");
     }
 
     static void Set(Isolate *isolate, Flag flag, uintptr_t value) {
-        uintptr_t slotData, flagMask, setval;
-        uint slot = flag / SLOT_BOUNDARY;
-
-        switch (slot) {
-        case 0:
-            slotData = reinterpret_cast<uintptr_t>(isolate->GetData(slot));
-            flagMask = 1 << flag;
-            setval = !!value ? slotData | flagMask : slotData & ~flagMask;
-            isolate->SetData(slot, reinterpret_cast<void*>(setval));
-            return;
-        case 1:
-            isolate->SetData(slot, reinterpret_cast<void*>(value));
-            return;
-        case 2:
-            slotData = reinterpret_cast<uintptr_t>(isolate->GetData(slot));
-            setval = flag == IsolateData::MARSHAL_STACKDEPTH_VALUE ? (slotData & ~0xFFFF) | (value & 0xFFFF) : (slotData & ~(0xFFFF0000)) | ((value & 0xFFFF) << 16);
-            isolate->SetData(slot, reinterpret_cast<void*>(setval));
-            return;
+        Bitfield u = { reinterpret_cast<uint64_t>(isolate->GetData(0)) };
+        switch (flag) {
+            case IN_GVL: u.IN_GVL = value; break;
+            case DO_TERMINATE: u.DO_TERMINATE = value; break;
+            case MEM_SOFTLIMIT_REACHED: u.MEM_SOFTLIMIT_REACHED = value; break;
+            // drop least significant 10 bits 'store memory amount in kb'
+            case MEM_SOFTLIMIT_VALUE: u.MEM_SOFTLIMIT_VALUE = value >> 10; break;
         }
-
-        throw std::runtime_error("MINI_RACER_DEV_ERROR Flags didn't match switch statement in Set.");
+        isolate->SetData(0, reinterpret_cast<void*>(u.dataPtr));
     }
+
+private:
+    struct Bitfield {
+        // WARNING: this would explode on platforms below 64 bit ptrs
+        //  compiler will fail here, making it clear for them.
+        //  Additionally, using the other part of the union to reinterpret the
+        //  memory is undefined behavior according to spec, but is / has been stable
+        //  across major compilers for decades.
+        static_assert(sizeof(uintptr_t) >= sizeof(uint64_t), "mini_racer not supported on this platform. ptr size must be at least 64 bit.");
+        union {
+            uint64_t dataPtr: 64;
+            // order in this struct matters. For cpu performance keep larger subobjects
+            //  aligned on their boundaries (8 16 32), try not to straddle
+            struct {
+                size_t MEM_SOFTLIMIT_VALUE:22;
+                bool IN_GVL:1;
+                bool DO_TERMINATE:1;
+                bool MEM_SOFTLIMIT_REACHED:1;
+            };
+        };
+    };
 };
 
 struct StackCounter {
