@@ -917,6 +917,14 @@ raise FooError, "I like foos"
     assert_raises(MiniRacer::RuntimeError) { context.eval("let arr = [[[[[[[[]]]]]]]]; a(arr)") }
   end
 
+  def test_turn_off_stackdepth_js
+    context = MiniRacer::Context.new(marshal_stack_depth: 0)
+    context.attach("a", proc{|a| a})
+
+    # basic marshal should succeed
+    assert_equal [[[]]], context.eval("let arr = [[[]]]; a(arr)")
+  end
+
   def test_stackdepth_bounds
     assert_raises(ArgumentError) do
       MiniRacer::Context.new(marshal_stack_depth: -2)
