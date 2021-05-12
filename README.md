@@ -87,11 +87,11 @@ context.eval 'var a = new Array(10000); while(true) {a = a.concat(new Array(1000
 
 ### Object marshal max stackdepth support
 
-Contexts can specify a stack depth limit for object marshalling. Max depth is 1023 by default. Specify marshal_max_depth: 0 to remove softlimit.
+Contexts can specify a stack depth limit for object marshalling. Max depth is 510 by default. Specify marshal_max_depth: 0 to remove softlimit.
 
 ```ruby
 # terminates script if stack depth exceeds max during marshal
-context = MiniRacer::Context.new(marshal_stack_depth: 512)
+context = MiniRacer::Context.new(marshal_stack_depth: 500)
 context.attach("a", proc{|a| a})
 
 context.eval("let arr = []; arr.push(arr); a(arr)")

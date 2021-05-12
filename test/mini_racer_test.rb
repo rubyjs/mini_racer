@@ -876,7 +876,7 @@ raise FooError, "I like foos"
   end
 
   def test_cyclical_array_js
-    context = MiniRacer::Context.new(marshal_stack_depth: 5)
+    context = MiniRacer::Context.new() # default stackdepth should catch this
     context.attach("a", proc{|a| a})
 
     assert_raises(MiniRacer::RuntimeError) { context.eval("let arr = []; arr.push(arr); a(arr)") }
@@ -919,10 +919,10 @@ raise FooError, "I like foos"
 
   def test_turn_off_stackdepth_js
     context = MiniRacer::Context.new(marshal_stack_depth: 0)
-    context.attach("a", proc{|a| a})
+    context.attach("a", proc{|a| "ok"})
 
-    # basic marshal should succeed
-    assert_equal [[[]]], context.eval("let arr = [[[]]]; a(arr)")
+    # deep object marshal should succeed
+    assert_equal "ok", context.eval("let arr = []; let top = arr; for(let i = 0; i < #{MiniRacer::MARSHAL_STACKDEPTH_MAX_VALUE+10}; i++) { let t = []; arr[0] = t; arr = t; } a(top)")
   end
 
   def test_stackdepth_bounds
@@ -931,7 +931,7 @@ raise FooError, "I like foos"
     end
 
     assert_raises(ArgumentError) do
-      MiniRacer::Context.new(marshal_stack_depth: 2**10)
+      MiniRacer::Context.new(marshal_stack_depth: MiniRacer::MARSHAL_STACKDEPTH_MAX_VALUE+1)
     end
   end
 

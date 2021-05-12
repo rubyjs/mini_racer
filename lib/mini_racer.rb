@@ -15,6 +15,9 @@ require "json"
 
 module MiniRacer
 
+  MARSHAL_STACKDEPTH_DEFAULT = 2**9-2
+  MARSHAL_STACKDEPTH_MAX_VALUE = 2**10-2
+
   class Error < ::StandardError; end
 
   class ContextDisposedError < Error; end
@@ -151,7 +154,7 @@ module MiniRacer
       @current_exception = nil
       @timeout = timeout
       @max_memory = max_memory
-      @marshal_stack_depth = marshal_stack_depth || 1023
+      @marshal_stack_depth = marshal_stack_depth || MARSHAL_STACKDEPTH_MAX_VALUE
 
       # false signals it should be fetched if requested
       @isolate = isolate || false
@@ -385,7 +388,7 @@ module MiniRacer
       assert_option_is_nil_or_a('snapshot', snapshot, Snapshot)
 
       assert_numeric_or_nil('max_memory', max_memory, min_value: 10_000, max_value: 2**32-1)
-      assert_numeric_or_nil('marshal_stack_depth', marshal_stack_depth, min_value: 0, max_value: 2**10-1)
+      assert_numeric_or_nil('marshal_stack_depth', marshal_stack_depth, min_value: 0, max_value: MARSHAL_STACKDEPTH_MAX_VALUE)
       assert_numeric_or_nil('ensure_gc_after_idle', ensure_gc_after_idle, min_value: 1)
       assert_numeric_or_nil('timeout', timeout, min_value: 1)
 
