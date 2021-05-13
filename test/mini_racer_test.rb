@@ -876,7 +876,7 @@ raise FooError, "I like foos"
   end
 
   def test_cyclical_array_js
-    context = MiniRacer::Context.new() # default stackdepth should catch this
+    context = MiniRacer::Context.new(marshal_stack_depth: 5)
     context.attach("a", proc{|a| a})
 
     assert_raises(MiniRacer::RuntimeError) { context.eval("let arr = []; arr.push(arr); a(arr)") }
