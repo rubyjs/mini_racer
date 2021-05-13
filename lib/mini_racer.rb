@@ -15,6 +15,9 @@ require "json"
 
 module MiniRacer
 
+  MARSHAL_STACKDEPTH_DEFAULT = 2**9-2
+  MARSHAL_STACKDEPTH_MAX_VALUE = 2**10-2
+
   class Error < ::StandardError; end
 
   class ContextDisposedError < Error; end
@@ -140,10 +143,10 @@ module MiniRacer
       end
     end
 
-    def initialize(max_memory: nil, timeout: nil, isolate: nil, ensure_gc_after_idle: nil, snapshot: nil)
+    def initialize(max_memory: nil, timeout: nil, isolate: nil, ensure_gc_after_idle: nil, snapshot: nil, marshal_stack_depth: nil)
       options ||= {}
 
-      check_init_options!(isolate: isolate, snapshot: snapshot, max_memory: max_memory, ensure_gc_after_idle: ensure_gc_after_idle, timeout: timeout)
+      check_init_options!(isolate: isolate, snapshot: snapshot, max_memory: max_memory, marshal_stack_depth: marshal_stack_depth, ensure_gc_after_idle: ensure_gc_after_idle, timeout: timeout)
 
       @functions = {}
       @timeout = nil
@@ -151,6 +154,7 @@ module MiniRacer
       @current_exception = nil
       @timeout = timeout
       @max_memory = max_memory
+      @marshal_stack_depth = marshal_stack_depth
 
       # false signals it should be fetched if requested
       @isolate = isolate || false
@@ -379,11 +383,12 @@ module MiniRacer
       rp.close if rp
     end
 
-    def check_init_options!(isolate:, snapshot:, max_memory:, ensure_gc_after_idle:, timeout:)
+    def check_init_options!(isolate:, snapshot:, max_memory:, marshal_stack_depth:, ensure_gc_after_idle:, timeout:)
       assert_option_is_nil_or_a('isolate', isolate, Isolate)
       assert_option_is_nil_or_a('snapshot', snapshot, Snapshot)
 
-      assert_numeric_or_nil('max_memory', max_memory, min_value: 10_000, max_value: 2**32)
+      assert_numeric_or_nil('max_memory', max_memory, min_value: 10_000, max_value: 2**32-1)
+      assert_numeric_or_nil('marshal_stack_depth', marshal_stack_depth, min_value: 1, max_value: MARSHAL_STACKDEPTH_MAX_VALUE)
       assert_numeric_or_nil('ensure_gc_after_idle', ensure_gc_after_idle, min_value: 1)
       assert_numeric_or_nil('timeout', timeout, min_value: 1)
 

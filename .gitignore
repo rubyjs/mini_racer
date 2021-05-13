@@ -10,3 +10,4 @@ Gemfile.lock
 lib/mini_racer_extension.so
 lib/mini_racer_loader.so
 *.bundle
+.vscode/

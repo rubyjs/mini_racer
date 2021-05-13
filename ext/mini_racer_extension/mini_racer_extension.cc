@@ -115,6 +115,7 @@ typedef struct {
     useconds_t timeout;
     EvalResult* result;
     size_t max_memory;
+    size_t marshal_stackdepth;
 } EvalParams;
 
 typedef struct {
@@ -126,6 +127,7 @@ typedef struct {
     Local<Value> *argv;
     EvalResult result;
     size_t max_memory;
+    size_t marshal_stackdepth;
 } FunctionCall;
 
 class IsolateData {
@@ -136,8 +138,16 @@ public:
         IN_GVL, // whether we are inside of ruby gvl or not
         DO_TERMINATE, // terminate as soon as possible
         MEM_SOFTLIMIT_REACHED, // we've hit the memory soft limit
-        MEM_SOFTLIMIT_VALUE,
+        MEM_SOFTLIMIT_MAX, // maximum memory value
+        MARSHAL_STACKDEPTH_REACHED, // we've hit our max stack depth
+        MARSHAL_STACKDEPTH_VALUE, // current stackdepth
+        MARSHAL_STACKDEPTH_MAX, // maximum stack depth during marshal
     };
+
+    static void Init(Isolate *isolate) {
+        // zero out all fields in the bitfield
+        isolate->SetData(0, 0);
+    }
 
     static uintptr_t Get(Isolate *isolate, Flag flag) {
         Bitfield u = { reinterpret_cast<uint64_t>(isolate->GetData(0)) };
@@ -145,7 +155,10 @@ public:
             case IN_GVL: return u.IN_GVL;
             case DO_TERMINATE: return u.DO_TERMINATE;
             case MEM_SOFTLIMIT_REACHED: return u.MEM_SOFTLIMIT_REACHED;
-            case MEM_SOFTLIMIT_VALUE: return u.MEM_SOFTLIMIT_VALUE << 10;
+            case MEM_SOFTLIMIT_MAX: return u.MEM_SOFTLIMIT_MAX << 10;
+            case MARSHAL_STACKDEPTH_REACHED: return u.MARSHAL_STACKDEPTH_REACHED;
+            case MARSHAL_STACKDEPTH_VALUE: return u.MARSHAL_STACKDEPTH_VALUE;
+            case MARSHAL_STACKDEPTH_MAX: return u.MARSHAL_STACKDEPTH_MAX;
         }
     }
 
@@ -156,7 +169,10 @@ public:
             case DO_TERMINATE: u.DO_TERMINATE = value; break;
             case MEM_SOFTLIMIT_REACHED: u.MEM_SOFTLIMIT_REACHED = value; break;
             // drop least significant 10 bits 'store memory amount in kb'
-            case MEM_SOFTLIMIT_VALUE: u.MEM_SOFTLIMIT_VALUE = value >> 10; break;
+            case MEM_SOFTLIMIT_MAX: u.MEM_SOFTLIMIT_MAX = value >> 10; break;
+            case MARSHAL_STACKDEPTH_REACHED: u.MARSHAL_STACKDEPTH_REACHED = value; break;
+            case MARSHAL_STACKDEPTH_VALUE: u.MARSHAL_STACKDEPTH_VALUE = value; break;
+            case MARSHAL_STACKDEPTH_MAX: u.MARSHAL_STACKDEPTH_MAX = value; break;
         }
         isolate->SetData(0, reinterpret_cast<void*>(u.dataPtr));
     }
@@ -174,13 +190,86 @@ private:
             // order in this struct matters. For cpu performance keep larger subobjects
             //  aligned on their boundaries (8 16 32), try not to straddle
             struct {
-                size_t MEM_SOFTLIMIT_VALUE:22;
+                size_t MEM_SOFTLIMIT_MAX:22;
                 bool IN_GVL:1;
                 bool DO_TERMINATE:1;
                 bool MEM_SOFTLIMIT_REACHED:1;
+                bool MARSHAL_STACKDEPTH_REACHED:1;
+                uint8_t :0; // align to next 8bit bound
+                size_t MARSHAL_STACKDEPTH_VALUE:10;
+                uint8_t :0; // align to next 8bit bound
+                size_t MARSHAL_STACKDEPTH_MAX:10;
             };
         };
     };
+};
+
+struct StackCounter {
+    static void Reset(Isolate* isolate) {
+        if (IsolateData::Get(isolate, IsolateData::MARSHAL_STACKDEPTH_MAX) > 0) {
+            IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_VALUE, 0);
+            IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_REACHED, false);
+        }
+    }
+
+    static void SetMax(Isolate* isolate, size_t marshalMaxStackDepth) {
+        if (marshalMaxStackDepth > 0) {
+            IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_MAX, marshalMaxStackDepth);
+            IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_VALUE, 0);
+            IsolateData::Set(isolate, IsolateData::MARSHAL_STACKDEPTH_REACHED, false);
+        }
+    }
+
+    StackCounter(Isolate* isolate) {
+        this->isActive = IsolateData::Get(isolate, IsolateData::MARSHAL_STACKDEPTH_MAX) > 0;
+
+        if (this->isActive) {
+            this->isolate = isolate;
+            this->IncDepth(1);
+        }
+    }
+
+    bool IsTooDeep() {
+        if (!this->IsActive()) {
+            return false;
+        }
+
+        size_t depth = IsolateData::Get(this->isolate, IsolateData::MARSHAL_STACKDEPTH_VALUE);
+        size_t maxDepth = IsolateData::Get(this->isolate, IsolateData::MARSHAL_STACKDEPTH_MAX);
+        if (depth > maxDepth) {
+            IsolateData::Set(this->isolate, IsolateData::MARSHAL_STACKDEPTH_REACHED, true);
+            return true;
+        }
+
+        return false;
+    }
+
+    bool IsActive() {
+        return this->isActive && !IsolateData::Get(this->isolate, IsolateData::DO_TERMINATE);
+    }
+
+    ~StackCounter() {
+        if (this->IsActive()) {
+            this->IncDepth(-1);
+        }
+    }
+
+private: 
+    Isolate* isolate;
+    bool isActive;
+
+    void IncDepth(int direction) {
+        int inc = direction > 0 ? 1 : -1;
+
+        size_t depth = IsolateData::Get(this->isolate, IsolateData::MARSHAL_STACKDEPTH_VALUE);
+
+        // don't decrement past 0
+        if (inc > 0 || depth > 0) {
+            depth += inc;
+        }
+
+        IsolateData::Set(this->isolate, IsolateData::MARSHAL_STACKDEPTH_VALUE, depth);
+    }
 };
 
 static VALUE rb_cContext;
@@ -257,7 +346,7 @@ static void gc_callback(Isolate *isolate, GCType type, GCCallbackFlags flags) {
         return;
     }
 
-    size_t softlimit = IsolateData::Get(isolate, IsolateData::MEM_SOFTLIMIT_VALUE);
+    size_t softlimit = IsolateData::Get(isolate, IsolateData::MEM_SOFTLIMIT_MAX);
 
     HeapStatistics stats;
     isolate->GetHeapStatistics(&stats);
@@ -376,10 +465,7 @@ nogvl_context_eval(void* arg) {
     Context::Scope context_scope(context);
     v8::ScriptOrigin *origin = NULL;
 
-    IsolateData::Set(isolate, IsolateData::IN_GVL, false);
-    IsolateData::Set(isolate, IsolateData::DO_TERMINATE, false);
-    IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_VALUE, 0);
-    IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_REACHED, false);
+    IsolateData::Init(isolate);
 
     MaybeLocal<Script> parsed_script;
 
@@ -406,11 +492,15 @@ nogvl_context_eval(void* arg) {
     } else {
         // parsing successful
         if (eval_params->max_memory > 0) {
-            IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_VALUE, eval_params->max_memory);
+            IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_MAX, eval_params->max_memory);
             if (!isolate_info->added_gc_cb) {
             isolate->AddGCEpilogueCallback(gc_callback);
                 isolate_info->added_gc_cb = true;
             }
+        }
+
+        if (eval_params->marshal_stackdepth > 0) {
+            StackCounter::SetMax(isolate, eval_params->marshal_stackdepth);
         }
 
         maybe_value = parsed_script.ToLocalChecked()->Run(context);
@@ -435,6 +525,18 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
 
     Isolate::Scope isolate_scope(isolate);
     HandleScope scope(isolate);
+
+    StackCounter stackCounter(isolate);
+
+    if (IsolateData::Get(isolate, IsolateData::MARSHAL_STACKDEPTH_REACHED)) {
+        return Qnil;
+    }
+
+    if (stackCounter.IsTooDeep()) {
+        IsolateData::Set(isolate, IsolateData::DO_TERMINATE, true);
+        isolate->TerminateExecution();
+        return Qnil;
+    }
 
     if (value->IsNull() || value->IsUndefined()){
         return Qnil;
@@ -931,8 +1033,13 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
         VALUE ruby_exception = rb_iv_get(self, "@current_exception");
         if (ruby_exception == Qnil) {
             bool mem_softlimit_reached = IsolateData::Get(isolate, IsolateData::MEM_SOFTLIMIT_REACHED);
+            bool marshal_stack_maxdepth_reached = IsolateData::Get(isolate, IsolateData::MARSHAL_STACKDEPTH_REACHED);
             // If we were terminated or have the memory softlimit flag set
-            if (result.terminated || mem_softlimit_reached) {
+            if (marshal_stack_maxdepth_reached) {
+                ruby_exception = rb_eScriptRuntimeError;
+                std::string msg = std::string("Marshal object depth too deep. Script terminated.");
+                message = rb_enc_str_new(msg.c_str(), msg.length(), rb_enc_find("utf-8"));
+            } else if (result.terminated || mem_softlimit_reached) {
                 ruby_exception = mem_softlimit_reached ? rb_eV8OutOfMemoryError : rb_eScriptTerminatedError;
             } else {
                 ruby_exception = rb_eScriptRuntimeError;
@@ -967,6 +1074,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
             VALUE json_string = rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate), rb_enc_find("utf-8"));
             ret = rb_funcall(rb_mJSON, rb_intern("parse"), 1, json_string);
         } else {
+            StackCounter::Reset(isolate);
             ret = convert_v8_to_ruby(isolate, *p_ctx, tmp);
         }
 
@@ -1024,6 +1132,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
         eval_params.result = &eval_result;
         eval_params.timeout = 0;
         eval_params.max_memory = 0;
+        eval_params.marshal_stackdepth = 0;
         VALUE timeout = rb_iv_get(self, "@timeout");
         if (timeout != Qnil) {
             eval_params.timeout = (useconds_t)NUM2LONG(timeout);
@@ -1032,6 +1141,11 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
         VALUE mem_softlimit = rb_iv_get(self, "@max_memory");
         if (mem_softlimit != Qnil) {
             eval_params.max_memory = (size_t)NUM2ULONG(mem_softlimit);
+        }
+
+        VALUE stack_depth = rb_iv_get(self, "@marshal_stack_depth");
+        if (stack_depth != Qnil) {
+            eval_params.marshal_stackdepth = (size_t)NUM2ULONG(stack_depth);
         }
 
         eval_result.message = NULL;
@@ -1103,6 +1217,7 @@ gvl_ruby_callback(void* data) {
 
         for (int i = 0; i < length; i++) {
             Local<Value> value = ((*args)[i]).As<Value>();
+            StackCounter::Reset(args->GetIsolate());
             VALUE tmp = convert_v8_to_ruby(args->GetIsolate(),
                                            *context_info->context, value);
             rb_ary_push(ruby_args, tmp);
@@ -1556,12 +1671,16 @@ nogvl_context_call(void *args) {
     IsolateData::Set(isolate, IsolateData::DO_TERMINATE, false);
 
     if (call->max_memory > 0) {
-        IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_VALUE, call->max_memory);
+        IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_MAX, call->max_memory);
         IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_REACHED, false);
         if (!isolate_info->added_gc_cb) {
-        isolate->AddGCEpilogueCallback(gc_callback);
+            isolate->AddGCEpilogueCallback(gc_callback);
             isolate_info->added_gc_cb = true;
+        }
     }
+ 
+    if (call->marshal_stackdepth > 0) {
+        StackCounter::SetMax(isolate, call->marshal_stackdepth);
     }
 
     Isolate::Scope isolate_scope(isolate);
@@ -1626,6 +1745,13 @@ static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
     if (mem_softlimit != Qnil) {
         unsigned long sl_int = NUM2ULONG(mem_softlimit);
         call.max_memory = (size_t)sl_int;
+    }
+ 
+    call.marshal_stackdepth = 0;
+    VALUE marshal_stackdepth = rb_iv_get(self, "@marshal_stack_depth");
+    if (marshal_stackdepth != Qnil) {
+        unsigned long sl_int = NUM2ULONG(marshal_stackdepth);
+        call.marshal_stackdepth = (size_t)sl_int;
     }
 
     bool missingFunction = false;
