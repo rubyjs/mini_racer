@@ -154,7 +154,7 @@ module MiniRacer
       @current_exception = nil
       @timeout = timeout
       @max_memory = max_memory
-      @marshal_stack_depth = marshal_stack_depth || MARSHAL_STACKDEPTH_MAX_VALUE
+      @marshal_stack_depth = marshal_stack_depth
 
       # false signals it should be fetched if requested
       @isolate = isolate || false
@@ -388,7 +388,7 @@ module MiniRacer
       assert_option_is_nil_or_a('snapshot', snapshot, Snapshot)
 
       assert_numeric_or_nil('max_memory', max_memory, min_value: 10_000, max_value: 2**32-1)
-      assert_numeric_or_nil('marshal_stack_depth', marshal_stack_depth, min_value: 0, max_value: MARSHAL_STACKDEPTH_MAX_VALUE)
+      assert_numeric_or_nil('marshal_stack_depth', marshal_stack_depth, min_value: 1, max_value: MARSHAL_STACKDEPTH_MAX_VALUE)
       assert_numeric_or_nil('ensure_gc_after_idle', ensure_gc_after_idle, min_value: 1)
       assert_numeric_or_nil('timeout', timeout, min_value: 1)
 
