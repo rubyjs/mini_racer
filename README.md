@@ -416,14 +416,14 @@ Or install it yourself as:
     $ gem install mini_racer
 
 
-**Note** using v8.h and compiling MiniRacer requires a C++11 standard compiler, more specifically clang 3.5 (or later) or gcc 4.8 (or later).
+**Note** using v8.h and compiling MiniRacer requires a C++11 standard compiler, more specifically clang 3.5 (or later) or GCC 6.3 (or later).
 
 
 ## Travis-ci
 
-To install `mini-racer` you will need a version of gcc that supports C++11 (gcc 4.8) this is included by default in ubuntu trusty based images.
+To install `mini-racer` you will need a version of GCC that supports C++11 (GCC 6.3) this is included by default in ubuntu trusty based images.
 
-Travis today ships by default with a precise based image. Precise Pangolin (12.04 LTS) was first released in August 2012. Even though you can install GCC 4.8 on precise the simpler approach is to opt for the trusty based image.
+Travis today ships by default with a precise based image. Precise Pangolin (12.04 LTS) was first released in August 2012. Even though you can install GCC 6.3 on precise the simpler approach is to opt for the trusty based image.
 
 Add this to your .travis.yml file:
 
