@@ -24,7 +24,4 @@ jobs:
       os: osx
       osx_image: xcode12.2
 dist: xenial
-before_install:
-  - gem update --system
-  - gem install bundler -v 1.16.2
 cache: bundler
