@@ -11,7 +11,7 @@ $CPPFLAGS += " -Wall" unless $CPPFLAGS.split.include? "-Wall"
 $CPPFLAGS += " -g" unless $CPPFLAGS.split.include? "-g"
 $CPPFLAGS += " -rdynamic" unless $CPPFLAGS.split.include? "-rdynamic"
 $CPPFLAGS += " -fPIC" unless $CPPFLAGS.split.include? "-rdynamic" or IS_DARWIN
-$CPPFLAGS += " -std=c++0x"
+$CPPFLAGS += " -std=c++14"
 $CPPFLAGS += " -fpermissive"
 $CPPFLAGS += " -DV8_COMPRESS_POINTERS"
 $CPPFLAGS += " -fvisibility=hidden "
