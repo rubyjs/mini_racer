@@ -467,6 +467,15 @@ nogvl_context_eval(void* arg) {
 
     IsolateData::Init(isolate);
 
+    if (eval_params->max_memory > 0) {
+        IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_MAX, eval_params->max_memory);
+printf("lim: %lu %lu aaa\n", (size_t)IsolateData::Get(isolate, IsolateData::MEM_SOFTLIMIT_MAX), eval_params->max_memory);
+        if (!isolate_info->added_gc_cb) {
+        isolate->AddGCEpilogueCallback(gc_callback);
+            isolate_info->added_gc_cb = true;
+        }
+    }
+
     MaybeLocal<Script> parsed_script;
 
     if (eval_params->filename) {
@@ -491,14 +500,6 @@ nogvl_context_eval(void* arg) {
         result->message->Reset(isolate, trycatch.Exception());
     } else {
         // parsing successful
-        if (eval_params->max_memory > 0) {
-            IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_MAX, eval_params->max_memory);
-            if (!isolate_info->added_gc_cb) {
-            isolate->AddGCEpilogueCallback(gc_callback);
-                isolate_info->added_gc_cb = true;
-            }
-        }
-
         if (eval_params->marshal_stackdepth > 0) {
             StackCounter::SetMax(isolate, eval_params->marshal_stackdepth);
         }
