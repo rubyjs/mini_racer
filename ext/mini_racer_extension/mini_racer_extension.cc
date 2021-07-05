@@ -469,7 +469,6 @@ nogvl_context_eval(void* arg) {
 
     if (eval_params->max_memory > 0) {
         IsolateData::Set(isolate, IsolateData::MEM_SOFTLIMIT_MAX, eval_params->max_memory);
-printf("lim: %lu %lu aaa\n", (size_t)IsolateData::Get(isolate, IsolateData::MEM_SOFTLIMIT_MAX), eval_params->max_memory);
         if (!isolate_info->added_gc_cb) {
         isolate->AddGCEpilogueCallback(gc_callback);
             isolate_info->added_gc_cb = true;
