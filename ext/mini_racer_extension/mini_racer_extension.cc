@@ -155,7 +155,7 @@ public:
             case IN_GVL: return u.IN_GVL;
             case DO_TERMINATE: return u.DO_TERMINATE;
             case MEM_SOFTLIMIT_REACHED: return u.MEM_SOFTLIMIT_REACHED;
-            case MEM_SOFTLIMIT_MAX: return u.MEM_SOFTLIMIT_MAX << 10;
+            case MEM_SOFTLIMIT_MAX: return static_cast<uintptr_t>(u.MEM_SOFTLIMIT_MAX) << 10;
             case MARSHAL_STACKDEPTH_REACHED: return u.MARSHAL_STACKDEPTH_REACHED;
             case MARSHAL_STACKDEPTH_VALUE: return u.MARSHAL_STACKDEPTH_VALUE;
             case MARSHAL_STACKDEPTH_MAX: return u.MARSHAL_STACKDEPTH_MAX;
