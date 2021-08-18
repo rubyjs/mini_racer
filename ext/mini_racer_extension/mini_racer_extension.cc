@@ -626,7 +626,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
 	    rb_enc_find("utf-8")
 	);
 
-	return ID2SYM(rb_intern_str(str_symbol));
+	return rb_str_intern(str_symbol);
     }
 
     MaybeLocal<String> rstr_maybe = value->ToString(context);
