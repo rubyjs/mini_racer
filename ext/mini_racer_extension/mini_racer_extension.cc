@@ -160,6 +160,9 @@ public:
             case MARSHAL_STACKDEPTH_VALUE: return u.MARSHAL_STACKDEPTH_VALUE;
             case MARSHAL_STACKDEPTH_MAX: return u.MARSHAL_STACKDEPTH_MAX;
         }
+
+	// avoid compiler warning
+	return u.IN_GVL;
     }
 
     static void Set(Isolate *isolate, Flag flag, uintptr_t value) {
@@ -691,7 +694,8 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, Local<Context> context,
 	length = RARRAY_LEN(value);
 	array = Array::New(isolate, (int)length);
 	for(i=0; i<length; i++) {
-            array->Set(context, i, convert_ruby_to_v8(isolate, context, rb_ary_entry(value, i)));
+            Maybe<bool> success = array->Set(context, i, convert_ruby_to_v8(isolate, context, rb_ary_entry(value, i)));
+	    (void)(success);
 	}
 	return scope.Escape(array);
     case T_HASH:
@@ -700,8 +704,9 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, Local<Context> context,
 	length = RARRAY_LEN(hash_as_array);
 	for(i=0; i<length; i++) {
 	    pair = rb_ary_entry(hash_as_array, i);
-            object->Set(context, convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 0)),
+            Maybe<bool> success = object->Set(context, convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 0)),
                   convert_ruby_to_v8(isolate, context, rb_ary_entry(pair, 1)));
+	    (void)(success);
 	}
 	return scope.Escape(object);
     case T_SYMBOL:
@@ -1243,8 +1248,11 @@ gvl_ruby_callback(void* data) {
         return NULL;
     }
 
-    result = rb_rescue2((VALUE(*)(...))&protected_callback, (VALUE)(&callback_data),
-            (VALUE(*)(...))&rescue_callback, (VALUE)(&callback_data), rb_eException, (VALUE)0);
+    VALUE callback_data_value = (VALUE)&callback_data;
+
+    // TODO: use rb_vrescue2 in Ruby 2.7 and above
+    result = rb_rescue2(RUBY_METHOD_FUNC(protected_callback), callback_data_value,
+            RUBY_METHOD_FUNC(rescue_callback), callback_data_value, rb_eException, (VALUE)0);
 
     if(callback_data.failed) {
         rb_iv_set(parent, "@current_exception", result);
@@ -1317,12 +1325,13 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
         Local<Value> external = External::New(isolate, self_copy);
 
         if (parent_object == Qnil) {
-            context->Global()->Set(
+            Maybe<bool> success = context->Global()->Set(
                         context,
                         v8_str,
                         FunctionTemplate::New(isolate, ruby_callback, external)
                             ->GetFunction(context)
                             .ToLocalChecked());
+	    (void)success;
 
         } else {
             Local<String> eval =
@@ -1342,12 +1351,13 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
                 if (!maybe_value.IsEmpty()) {
                     Local<Value> value = maybe_value.ToLocalChecked();
                     if (value->IsObject()) {
-                        value.As<Object>()->Set(
+                        Maybe<bool> success = value.As<Object>()->Set(
                                     context,
                                     v8_str,
                                     FunctionTemplate::New(isolate, ruby_callback, external)
                                         ->GetFunction(context)
                                         .ToLocalChecked());
+			(void)success;
                     attach_error = false;
                     }
                 }
