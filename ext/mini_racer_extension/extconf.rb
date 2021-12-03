@@ -16,6 +16,9 @@ $CPPFLAGS += " -fpermissive"
 #$CPPFLAGS += " -DV8_COMPRESS_POINTERS"
 $CPPFLAGS += " -fvisibility=hidden "
 
+# __declspec gets used by clang via ruby 3.x headers...
+$CPPFLAGS += " -fms-extensions"
+
 $CPPFLAGS += " -Wno-reserved-user-defined-literal" if IS_DARWIN
 
 $LDFLAGS.insert(0, " -stdlib=libc++ ") if IS_DARWIN
