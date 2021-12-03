@@ -1251,8 +1251,8 @@ gvl_ruby_callback(void* data) {
     VALUE callback_data_value = (VALUE)&callback_data;
 
     // TODO: use rb_vrescue2 in Ruby 2.7 and above
-    result = rb_rescue2(RUBY_METHOD_FUNC(protected_callback), callback_data_value,
-            RUBY_METHOD_FUNC(rescue_callback), callback_data_value, rb_eException, (VALUE)0);
+    result = rb_rescue2(protected_callback, callback_data_value,
+            rescue_callback, callback_data_value, rb_eException, (VALUE)0);
 
     if(callback_data.failed) {
         rb_iv_set(parent, "@current_exception", result);
