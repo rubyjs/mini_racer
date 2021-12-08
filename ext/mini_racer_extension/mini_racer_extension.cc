@@ -453,7 +453,7 @@ static void prepare_result(MaybeLocal<Value> v8res,
     }
 }
 
-void*
+static void*
 nogvl_context_eval(void* arg) {
 
     EvalParams* eval_params = (EvalParams*)arg;
@@ -786,6 +786,7 @@ create_snapshot_data_blob(const char *embedded_source = nullptr) {
             SnapshotCreator::FunctionCodeHandling::kClear);
     }
 
+static
 StartupData warm_up_snapshot_data_blob(StartupData cold_snapshot_blob,
                                        const char *warmup_source) {
     // Use following steps to create a warmed up snapshot blob from a cold one:
@@ -1190,7 +1191,7 @@ VALUE rescue_callback(VALUE rdata, VALUE exception) {
     return exception;
 }
 
-void*
+static void*
 gvl_ruby_callback(void* data) {
 
     FunctionCallbackInfo<Value>* args = (FunctionCallbackInfo<Value>*)data;
