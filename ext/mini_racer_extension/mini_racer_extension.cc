@@ -1230,7 +1230,7 @@ gvl_ruby_callback(void* data) {
         HandleScope scope(args->GetIsolate());
         Local<External> external = Local<External>::Cast(args->Data());
 
-        self = *(VALUE*)(external->Value());
+        self = (VALUE)(external->Value());
         callback = rb_iv_get(self, "@callback");
 
         parent = rb_iv_get(self, "@parent");
@@ -1341,12 +1341,9 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
                                 NewStringType::kNormal, (int)RSTRING_LEN(name))
                 .ToLocalChecked();
 
-        // copy self so we can access from v8 external
-        VALUE* self_copy;
-        Data_Get_Struct(self, VALUE, self_copy);
-        *self_copy = self;
-
-        Local<Value> external = External::New(isolate, self_copy);
+        // Note that self (rb_cExternalFunction) is a pure Ruby T_OBJECT,
+        // not a T_DATA type like most other classes in this file
+        Local<Value> external = External::New(isolate, (void *)self);
 
         if (parent_object == Qnil) {
             Maybe<bool> success = context->Global()->Set(
@@ -1538,10 +1535,6 @@ static void mark_context(void* data) {
     }
 }
 
-static void deallocate_external_function(void * data) {
-    xfree(data);
-}
-
 static void deallocate_snapshot(void * data) {
     SnapshotInfo* snapshot_info = (SnapshotInfo*)data;
     delete[] snapshot_info->data;
@@ -1551,11 +1544,6 @@ static void deallocate_snapshot(void * data) {
 static size_t snapshot_memsize(const void *data) {
     SnapshotInfo* snapshot_info = (SnapshotInfo*)data;
     return sizeof(*snapshot_info) + snapshot_info->raw_size;
-}
-
-static VALUE allocate_external_function(VALUE klass) {
-    VALUE* self = ALLOC(VALUE);
-    return Data_Wrap_Struct(klass, NULL, deallocate_external_function, (void*)self);
 }
 
 static VALUE allocate(VALUE klass) {
@@ -1911,7 +1899,6 @@ extern "C" {
         rb_define_alloc_func(rb_cIsolate, allocate_isolate);
 
         rb_define_private_method(rb_cExternalFunction, "notify_v8", (VALUE(*)(...))&rb_external_function_notify_v8, 0);
-        rb_define_alloc_func(rb_cExternalFunction, allocate_external_function);
 
         rb_define_method(rb_cSnapshot, "size", (VALUE(*)(...))&rb_snapshot_size, 0);
         rb_define_method(rb_cSnapshot, "dump", (VALUE(*)(...))&rb_snapshot_dump, 0);
