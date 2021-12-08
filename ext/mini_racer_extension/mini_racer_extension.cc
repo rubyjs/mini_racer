@@ -299,6 +299,14 @@ static pthread_rwlock_t exit_lock = PTHREAD_RWLOCK_INITIALIZER;
 static bool ruby_exiting = false; // guarded by exit_lock
 static bool single_threaded = false;
 
+static void mark_context(void *);
+static void deallocate(void *);
+static size_t context_memsize(const void *);
+static const rb_data_type_t context_type = {
+    "mini_racer/context_info",
+    { mark_context, deallocate, context_memsize }
+};
+
 static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
     bool platform_already_initialized = false;
 
@@ -957,7 +965,7 @@ static VALUE rb_isolate_pump_message_loop(VALUE self) {
 
 static VALUE rb_context_init_unsafe(VALUE self, VALUE isolate, VALUE snap) {
     ContextInfo* context_info;
-    Data_Get_Struct(self, ContextInfo, context_info);
+    TypedData_Get_Struct(self, ContextInfo, &context_type, context_info);
 
     init_v8();
 
@@ -1002,7 +1010,7 @@ static VALUE rb_context_init_unsafe(VALUE self, VALUE isolate, VALUE snap) {
 static VALUE convert_result_to_ruby(VALUE self /* context */,
                                     EvalResult& result) {
     ContextInfo *context_info;
-    Data_Get_Struct(self, ContextInfo, context_info);
+    TypedData_Get_Struct(self, ContextInfo, &context_type, context_info);
 
     Isolate *isolate = context_info->isolate_info->isolate;
     Persistent<Context> *p_ctx = context_info->context;
@@ -1103,7 +1111,7 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
     EvalResult eval_result;
     ContextInfo* context_info;
 
-    Data_Get_Struct(self, ContextInfo, context_info);
+    TypedData_Get_Struct(self, ContextInfo, &context_type, context_info);
     Isolate* isolate = context_info->isolate_info->isolate;
 
     if(TYPE(str) != T_STRING) {
@@ -1215,7 +1223,7 @@ gvl_ruby_callback(void* data) {
             return NULL;
         }
 
-        Data_Get_Struct(parent, ContextInfo, context_info);
+        TypedData_Get_Struct(parent, ContextInfo, &context_type, context_info);
 
         if (length > 0) {
             ruby_args = rb_ary_tmp_new(length);
@@ -1302,7 +1310,7 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
     bool parse_error = false;
     bool attach_error = false;
 
-    Data_Get_Struct(parent, ContextInfo, context_info);
+    TypedData_Get_Struct(parent, ContextInfo, &context_type, context_info);
     Isolate* isolate = context_info->isolate_info->isolate;
 
     {
@@ -1380,7 +1388,7 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
 
 static VALUE rb_context_isolate_mutex(VALUE self) {
     ContextInfo* context_info;
-    Data_Get_Struct(self, ContextInfo, context_info);
+    TypedData_Get_Struct(self, ContextInfo, &context_type, context_info);
 
     if (!context_info->isolate_info) {
         rb_raise(rb_eScriptRuntimeError, "Context has no Isolate available anymore");
@@ -1498,6 +1506,11 @@ static void deallocate(void* data) {
     xfree(data);
 }
 
+static size_t context_memsize(const void *ptr)
+{
+    return sizeof(ContextInfo);
+}
+
 static void mark_context(void* data) {
     ContextInfo* context_info = (ContextInfo*)data;
     if (context_info->isolate_info) {
@@ -1521,11 +1534,8 @@ static VALUE allocate_external_function(VALUE klass) {
 }
 
 static VALUE allocate(VALUE klass) {
-    ContextInfo* context_info = ALLOC(ContextInfo);
-    context_info->isolate_info = NULL;
-    context_info->context = NULL;
-
-    return Data_Wrap_Struct(klass, mark_context, deallocate, (void*)context_info);
+    ContextInfo* context_info;
+    return TypedData_Make_Struct(klass, ContextInfo, &context_type, context_info);
 }
 
 static VALUE allocate_snapshot(VALUE klass) {
@@ -1546,7 +1556,7 @@ static VALUE
 rb_heap_stats(VALUE self) {
 
     ContextInfo* context_info;
-    Data_Get_Struct(self, ContextInfo, context_info);
+    TypedData_Get_Struct(self, ContextInfo, &context_type, context_info);
     Isolate* isolate;
     v8::HeapStatistics stats;
 
@@ -1616,7 +1626,7 @@ rb_heap_snapshot(VALUE self, VALUE file) {
 
 
     ContextInfo* context_info;
-    Data_Get_Struct(self, ContextInfo, context_info);
+    TypedData_Get_Struct(self, ContextInfo, &context_type, context_info);
     Isolate* isolate;
     isolate = context_info->isolate_info ? context_info->isolate_info->isolate : NULL;
 
@@ -1644,7 +1654,7 @@ static VALUE
 rb_context_stop(VALUE self) {
 
     ContextInfo* context_info;
-    Data_Get_Struct(self, ContextInfo, context_info);
+    TypedData_Get_Struct(self, ContextInfo, &context_type, context_info);
 
     Isolate* isolate = context_info->isolate_info->isolate;
 
@@ -1661,7 +1671,7 @@ static VALUE
 rb_context_dispose(VALUE self) {
 
     ContextInfo* context_info;
-    Data_Get_Struct(self, ContextInfo, context_info);
+    TypedData_Get_Struct(self, ContextInfo, &context_type, context_info);
 
     free_context(context_info);
 
@@ -1724,7 +1734,7 @@ static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
     FunctionCall call;
     VALUE *call_argv = NULL;
 
-    Data_Get_Struct(self, ContextInfo, context_info);
+    TypedData_Get_Struct(self, ContextInfo, &context_type, context_info);
     Isolate* isolate = context_info->isolate_info->isolate;
 
     if (argc < 1) {
@@ -1814,7 +1824,7 @@ static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
 
 static VALUE rb_context_create_isolate_value(VALUE self) {
     ContextInfo* context_info;
-    Data_Get_Struct(self, ContextInfo, context_info);
+    TypedData_Get_Struct(self, ContextInfo, &context_type, context_info);
     IsolateInfo *isolate_info = context_info->isolate_info;
 
     if (!isolate_info) {
