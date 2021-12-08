@@ -307,6 +307,13 @@ static const rb_data_type_t context_type = {
     { mark_context, deallocate, context_memsize }
 };
 
+static void deallocate_snapshot(void *);
+static size_t snapshot_memsize(const void *);
+static const rb_data_type_t snapshot_type = {
+    "mini_racer/snapshot_info",
+    { NULL, deallocate_snapshot, snapshot_memsize }
+};
+
 static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
     bool platform_already_initialized = false;
 
@@ -830,14 +837,14 @@ StartupData warm_up_snapshot_data_blob(StartupData cold_snapshot_blob,
 
 static VALUE rb_snapshot_size(VALUE self, VALUE str) {
     SnapshotInfo* snapshot_info;
-    Data_Get_Struct(self, SnapshotInfo, snapshot_info);
+    TypedData_Get_Struct(self, SnapshotInfo, &snapshot_type, snapshot_info);
 
     return INT2NUM(snapshot_info->raw_size);
 }
 
 static VALUE rb_snapshot_load(VALUE self, VALUE str) {
     SnapshotInfo* snapshot_info;
-    Data_Get_Struct(self, SnapshotInfo, snapshot_info);
+    TypedData_Get_Struct(self, SnapshotInfo, &snapshot_type, snapshot_info);
 
     if(TYPE(str) != T_STRING) {
         rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE " (should be a string)",
@@ -860,14 +867,14 @@ static VALUE rb_snapshot_load(VALUE self, VALUE str) {
 
 static VALUE rb_snapshot_dump(VALUE self, VALUE str) {
     SnapshotInfo* snapshot_info;
-    Data_Get_Struct(self, SnapshotInfo, snapshot_info);
+    TypedData_Get_Struct(self, SnapshotInfo, &snapshot_type, snapshot_info);
 
     return rb_str_new(snapshot_info->data, snapshot_info->raw_size);
 }
 
 static VALUE rb_snapshot_warmup_unsafe(VALUE self, VALUE str) {
     SnapshotInfo* snapshot_info;
-    Data_Get_Struct(self, SnapshotInfo, snapshot_info);
+    TypedData_Get_Struct(self, SnapshotInfo, &snapshot_type, snapshot_info);
 
     if(TYPE(str) != T_STRING) {
         rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE " (should be a string)",
@@ -920,7 +927,7 @@ static VALUE rb_isolate_init_with_snapshot(VALUE self, VALUE snapshot) {
 
     SnapshotInfo* snapshot_info = nullptr;
     if (!NIL_P(snapshot)) {
-        Data_Get_Struct(snapshot, SnapshotInfo, snapshot_info);
+        TypedData_Get_Struct(snapshot, SnapshotInfo, &snapshot_type, snapshot_info);
     }
 
     isolate_info->init(snapshot_info);
@@ -976,7 +983,7 @@ static VALUE rb_context_init_unsafe(VALUE self, VALUE isolate, VALUE snap) {
 
         SnapshotInfo *snapshot_info = nullptr;
         if (!NIL_P(snap) && rb_obj_is_kind_of(snap, rb_cSnapshot)) {
-            Data_Get_Struct(snap, SnapshotInfo, snapshot_info);
+            TypedData_Get_Struct(snap, SnapshotInfo, &snapshot_type, snapshot_info);
         }
         isolate_info->init(snapshot_info);
     } else { // given isolate or snapshot
@@ -1528,6 +1535,11 @@ static void deallocate_snapshot(void * data) {
     xfree(snapshot_info);
 }
 
+static size_t snapshot_memsize(const void *data) {
+    SnapshotInfo* snapshot_info = (SnapshotInfo*)data;
+    return sizeof(*snapshot_info) + snapshot_info->raw_size;
+}
+
 static VALUE allocate_external_function(VALUE klass) {
     VALUE* self = ALLOC(VALUE);
     return Data_Wrap_Struct(klass, NULL, deallocate_external_function, (void*)self);
@@ -1539,11 +1551,9 @@ static VALUE allocate(VALUE klass) {
 }
 
 static VALUE allocate_snapshot(VALUE klass) {
-    SnapshotInfo* snapshot_info = ALLOC(SnapshotInfo);
-    snapshot_info->data = NULL;
-    snapshot_info->raw_size = 0;
+    SnapshotInfo* snapshot_info;
 
-    return Data_Wrap_Struct(klass, NULL, deallocate_snapshot, (void*)snapshot_info);
+    return TypedData_Make_Struct(klass, SnapshotInfo, &snapshot_type, snapshot_info);
 }
 
 static VALUE allocate_isolate(VALUE klass) {
