@@ -11,6 +11,7 @@
 #include <mutex>
 #include <atomic>
 #include <math.h>
+#include <errno.h>
 
 using namespace v8;
 
@@ -1599,7 +1600,9 @@ rb_heap_stats(VALUE self) {
 // https://github.com/bnoordhuis/node-heapdump/blob/master/src/heapdump.cc
 class FileOutputStream : public OutputStream {
  public:
-  FileOutputStream(FILE* stream) : stream_(stream) {}
+  int err;
+
+  FileOutputStream(int fd) : fd(fd) { err = 0; }
 
   virtual int GetChunkSize() {
     return 65536;
@@ -1608,17 +1611,27 @@ class FileOutputStream : public OutputStream {
   virtual void EndOfStream() {}
 
   virtual WriteResult WriteAsciiChunk(char* data, int size) {
-    const size_t len = static_cast<size_t>(size);
-    size_t off = 0;
+    size_t len = static_cast<size_t>(size);
 
-    while (off < len && !feof(stream_) && !ferror(stream_))
-      off += fwrite(data + off, 1, len - off, stream_);
+    while (len) {
+        ssize_t w = write(fd, data, len);
 
-    return off == len ? kContinue : kAbort;
+        if (w > 0) {
+            data += w;
+            len -= w;
+        } else if (w < 0) {
+            err = errno;
+            return kAbort;
+        } else { /* w == 0, could be out-of-space */
+            err = -1;
+            return kAbort;
+        }
+    }
+    return kContinue;
   }
 
  private:
-  FILE* stream_;
+  int fd;
 };
 
 
@@ -1631,10 +1644,8 @@ rb_heap_snapshot(VALUE self, VALUE file) {
 
     if (!fptr) return Qfalse;
 
-    FILE* fp;
-    fp = fdopen(fptr->fd, "w");
-    if (fp == NULL) return Qfalse;
-
+    // prepare for unbuffered write(2) below:
+    rb_funcall(file, rb_intern("flush"), 0);
 
     ContextInfo* context_info;
     TypedData_Get_Struct(self, ContextInfo, &context_type, context_info);
@@ -1651,12 +1662,13 @@ rb_heap_snapshot(VALUE self, VALUE file) {
 
     const HeapSnapshot* const snap = heap_profiler->TakeHeapSnapshot();
 
-    FileOutputStream stream(fp);
+    FileOutputStream stream(fptr->fd);
     snap->Serialize(&stream, HeapSnapshot::kJSON);
 
-    fflush(fp);
-
     const_cast<HeapSnapshot*>(snap)->Delete();
+
+    /* TODO: perhaps rb_sys_fail here */
+    if (stream.err) return Qfalse;
 
     return Qtrue;
 }
