@@ -314,6 +314,14 @@ static const rb_data_type_t snapshot_type = {
     { NULL, deallocate_snapshot, snapshot_memsize }
 };
 
+static void mark_isolate(void *);
+static void deallocate_isolate(void *);
+static size_t isolate_memsize(const void *);
+static const rb_data_type_t isolate_type = {
+    "mini_racer/isolate_info",
+    { mark_isolate, deallocate_isolate, isolate_memsize }
+};
+
 static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
     bool platform_already_initialized = false;
 
@@ -921,7 +929,7 @@ void IsolateInfo::init(SnapshotInfo* snapshot_info) {
 
 static VALUE rb_isolate_init_with_snapshot(VALUE self, VALUE snapshot) {
     IsolateInfo* isolate_info;
-    Data_Get_Struct(self, IsolateInfo, isolate_info);
+    TypedData_Get_Struct(self, IsolateInfo, &isolate_type, isolate_info);
 
     init_v8();
 
@@ -938,7 +946,7 @@ static VALUE rb_isolate_init_with_snapshot(VALUE self, VALUE snapshot) {
 
 static VALUE rb_isolate_idle_notification(VALUE self, VALUE idle_time_in_ms) {
     IsolateInfo* isolate_info;
-    Data_Get_Struct(self, IsolateInfo, isolate_info);
+    TypedData_Get_Struct(self, IsolateInfo, &isolate_type, isolate_info);
 
     if (current_platform == NULL) return Qfalse;
 
@@ -949,7 +957,7 @@ static VALUE rb_isolate_idle_notification(VALUE self, VALUE idle_time_in_ms) {
 
 static VALUE rb_isolate_low_memory_notification(VALUE self) {
     IsolateInfo* isolate_info;
-    Data_Get_Struct(self, IsolateInfo, isolate_info);
+    TypedData_Get_Struct(self, IsolateInfo, &isolate_type, isolate_info);
 
     if (current_platform == NULL) return Qfalse;
 
@@ -959,7 +967,7 @@ static VALUE rb_isolate_low_memory_notification(VALUE self) {
 
 static VALUE rb_isolate_pump_message_loop(VALUE self) {
     IsolateInfo* isolate_info;
-    Data_Get_Struct(self, IsolateInfo, isolate_info);
+    TypedData_Get_Struct(self, IsolateInfo, &isolate_type, isolate_info);
 
     if (current_platform == NULL) return Qfalse;
 
@@ -987,7 +995,7 @@ static VALUE rb_context_init_unsafe(VALUE self, VALUE isolate, VALUE snap) {
         }
         isolate_info->init(snapshot_info);
     } else { // given isolate or snapshot
-        Data_Get_Struct(isolate, IsolateInfo, isolate_info);
+        TypedData_Get_Struct(isolate, IsolateInfo, &isolate_type, isolate_info);
     }
 
     context_info->isolate_info = isolate_info;
@@ -1505,6 +1513,11 @@ static void mark_isolate(void* data) {
     isolate_info->mark();
 }
 
+static size_t isolate_memsize(const void *ptr) {
+     const IsolateInfo *isolate_info = (const IsolateInfo *)ptr;
+     return sizeof(*isolate_info);
+}
+
 static void deallocate(void* data) {
     ContextInfo* context_info = (ContextInfo*)data;
 
@@ -1559,7 +1572,7 @@ static VALUE allocate_snapshot(VALUE klass) {
 static VALUE allocate_isolate(VALUE klass) {
     IsolateInfo* isolate_info = new IsolateInfo();
 
-    return Data_Wrap_Struct(klass, mark_isolate, deallocate_isolate, (void*)isolate_info);
+    return TypedData_Wrap_Struct(klass, &isolate_type, isolate_info);
 }
 
 static VALUE
@@ -1842,7 +1855,7 @@ static VALUE rb_context_create_isolate_value(VALUE self) {
     }
 
     isolate_info->hold();
-    return Data_Wrap_Struct(rb_cIsolate, NULL, &deallocate_isolate, isolate_info);
+    return TypedData_Wrap_Struct(rb_cIsolate, &isolate_type, isolate_info);
 }
 
 static void set_ruby_exiting(VALUE value) {
