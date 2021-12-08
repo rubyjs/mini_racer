@@ -1,5 +1,12 @@
 - 11-04-2021
 
+- 0.5.0
+  - Fixes issues on aarch (Apple M1)
+  - Update to use libv8-node 16.x (#210) [Loic Nageleisen]
+  - FEATURE: Configurable max marshal stack depth (#202) [seanmakesgames]
+  - FEATURE: Configurable max marshal stack depth (#202) [seanmakesgames]
+  - Ruby 2.3 and 2.4 are EOL, we no longer support them
+
 - 0.4.0
 
   - FEATURE: upgrade to libv8 node 15.14.0 (v8 8.6.395.17)
