@@ -583,6 +583,10 @@ raise FooError, "I like foos"
 
     equals_after_sleep = {}
 
+    # workaround Rubies prior to commit 475c8701d74ebebe
+    # (Make SecureRandom support Ractor, 2020-09-04)
+    SecureRandom.hex
+
     (1..10).map do |i|
       Thread.new {
         random = SecureRandom.hex
