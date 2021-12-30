@@ -1268,7 +1268,6 @@ gvl_ruby_callback(void* data) {
         args->GetIsolate()->TerminateExecution();
         if (length > 0) {
             rb_ary_clear(ruby_args);
-            rb_gc_force_recycle(ruby_args);
         }
         return NULL;
     }
@@ -1291,7 +1290,6 @@ gvl_ruby_callback(void* data) {
 
     if (length > 0) {
         rb_ary_clear(ruby_args);
-        rb_gc_force_recycle(ruby_args);
     }
 
     if (IsolateData::Get(args->GetIsolate(), IsolateData::DO_TERMINATE)) {
