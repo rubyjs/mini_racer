@@ -21,7 +21,11 @@ $CXXFLAGS += " -fms-extensions"
 
 $CXXFLAGS += " -Wno-reserved-user-defined-literal" if IS_DARWIN
 
-$LDFLAGS.insert(0, " -stdlib=libc++ ") if IS_DARWIN
+if IS_DARWIN
+  $LDFLAGS.insert(0, " -stdlib=libc++ ")
+else
+  $LDFLAGS.insert(0, " -lstdc++ ")
+end
 
 # check for missing symbols at link time
 # $LDFLAGS += " -Wl,--no-undefined " unless IS_DARWIN
