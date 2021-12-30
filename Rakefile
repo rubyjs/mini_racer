@@ -92,5 +92,5 @@ task :lint do
               portability-*
               readability-*).join(',')
 
-  sh RbConfig::expand("clang-tidy -checks='#{checks}' ext/mini_racer_extension/mini_racer_extension.cc -- #$INCFLAGS #$CPPFLAGS", conf)
+  sh RbConfig::expand("clang-tidy -checks='#{checks}' ext/mini_racer_extension/mini_racer_extension.cc -- #$INCFLAGS #$CXXFLAGS", conf)
 end

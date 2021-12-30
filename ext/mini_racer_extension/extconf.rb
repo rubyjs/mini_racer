@@ -7,19 +7,19 @@ IS_DARWIN = RUBY_PLATFORM =~ /darwin/
 
 have_library('pthread')
 have_library('objc') if IS_DARWIN
-$CPPFLAGS += " -Wall" unless $CPPFLAGS.split.include? "-Wall"
-$CPPFLAGS += " -g" unless $CPPFLAGS.split.include? "-g"
-$CPPFLAGS += " -rdynamic" unless $CPPFLAGS.split.include? "-rdynamic"
-$CPPFLAGS += " -fPIC" unless $CPPFLAGS.split.include? "-rdynamic" or IS_DARWIN
-$CPPFLAGS += " -std=c++14"
-$CPPFLAGS += " -fpermissive"
-#$CPPFLAGS += " -DV8_COMPRESS_POINTERS"
-$CPPFLAGS += " -fvisibility=hidden "
+$CXXFLAGS += " -Wall" unless $CXXFLAGS.split.include? "-Wall"
+$CXXFLAGS += " -g" unless $CXXFLAGS.split.include? "-g"
+$CXXFLAGS += " -rdynamic" unless $CXXFLAGS.split.include? "-rdynamic"
+$CXXFLAGS += " -fPIC" unless $CXXFLAGS.split.include? "-rdynamic" or IS_DARWIN
+$CXXFLAGS += " -std=c++14"
+$CXXFLAGS += " -fpermissive"
+#$CXXFLAGS += " -DV8_COMPRESS_POINTERS"
+$CXXFLAGS += " -fvisibility=hidden "
 
 # __declspec gets used by clang via ruby 3.x headers...
-$CPPFLAGS += " -fms-extensions"
+$CXXFLAGS += " -fms-extensions"
 
-$CPPFLAGS += " -Wno-reserved-user-defined-literal" if IS_DARWIN
+$CXXFLAGS += " -Wno-reserved-user-defined-literal" if IS_DARWIN
 
 $LDFLAGS.insert(0, " -stdlib=libc++ ") if IS_DARWIN
 
@@ -67,7 +67,7 @@ end
 Libv8::Node.configure_makefile
 
 if enable_config('asan')
-  $CPPFLAGS.insert(0, " -fsanitize=address ")
+  $CXXFLAGS.insert(0, " -fsanitize=address ")
   $LDFLAGS.insert(0, " -fsanitize=address ")
 end
 
