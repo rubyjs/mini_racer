@@ -1,3 +1,12 @@
+- 31-12-2021
+
+- 0.6.0
+
+   - Ruby 3.1 support
+   - Fixes memory leak in heap snapshotting
+   - Improved compilation ergonomics in clang
+   - Migrated internal storage in c extension to TypedData
+
 - 11-04-2021
 
 - 0.5.0
