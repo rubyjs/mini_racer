@@ -360,7 +360,11 @@ static void init_v8() {
 
     if (current_platform == NULL) {
         V8::InitializeICU();
-        current_platform = platform::NewDefaultPlatform();
+	if (single_threaded) {
+	    current_platform = platform::NewSingleThreadedDefaultPlatform();
+	} else {
+	    current_platform = platform::NewDefaultPlatform();
+	}
         V8::InitializePlatform(current_platform.get());
         V8::Initialize();
     }

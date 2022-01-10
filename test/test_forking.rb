@@ -1,4 +1,4 @@
-$LOAD_PATH.unshift File.expand_path('../../lib', __FILE__)
+# use bundle exec to run this script
 require 'mini_racer'
 
 MiniRacer::Platform.set_flags! :single_threaded
@@ -20,6 +20,9 @@ def trigger_gc
 end
 
 trigger_gc
+
+MiniRacer::Context.new.dispose
+
 Process.wait fork { puts @ctx.eval("a"); @ctx.dispose; puts Process.pid; trigger_gc; puts "done #{Process.pid}" }
 
 
