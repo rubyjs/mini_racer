@@ -1,5 +1,10 @@
 - 31-12-2021
 
+- 0.6.1
+
+  - Added support for single threaded platform: `MiniRacer::Platform.set_flags! :single_threaded`
+  must be called prior to booting ANY MiniRacer::Context
+
 - 0.6.0
 
    - Ruby 3.1 support
