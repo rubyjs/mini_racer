@@ -1087,6 +1087,8 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
             } else {
                 rb_raise(ruby_exception, "Unknown JavaScript Error during execution");
             }
+        } else if (rb_obj_is_kind_of(ruby_exception, rb_eException)) {
+            rb_exc_raise(ruby_exception);
         } else {
             VALUE rb_str = rb_funcall(ruby_exception, rb_intern("to_s"), 0);
             rb_raise(CLASS_OF(ruby_exception), "%s", RSTRING_PTR(rb_str));

@@ -991,4 +991,22 @@ raise FooError, "I like foos"
 
     assert_equal(3, context.eval("instance.exports.add(1,2)"))
   end
+
+  class ReproError < StandardError
+    def initialize(response)
+      super("response said #{response.code}")
+    end
+  end
+
+  Response = Struct.new(:code)
+
+  def test_exception_objects
+    context = MiniRacer::Context.new
+    context.attach('repro', lambda {
+      raise ReproError.new(Response.new(404))
+    })
+    assert_raises(ReproError) do
+      context.eval('repro();')
+    end
+  end
 end
