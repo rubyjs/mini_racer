@@ -658,7 +658,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
 
     if (value->IsSymbol()) {
 	v8::String::Utf8Value symbol_name(isolate,
-	    Local<Symbol>::Cast(value)->Name());
+	    Local<Symbol>::Cast(value)->Description(isolate));
 
 	VALUE str_symbol = rb_utf8_str_new(*symbol_name, symbol_name.length());
 
