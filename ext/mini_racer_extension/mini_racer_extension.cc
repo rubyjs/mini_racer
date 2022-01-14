@@ -409,28 +409,32 @@ static void prepare_result(MaybeLocal<Value> v8res,
         Local<Value> local_value = v8res.ToLocalChecked();
         if ((local_value->IsObject() || local_value->IsArray()) &&
                 !local_value->IsDate() && !local_value->IsFunction()) {
-            Local<Object> JSON = context->Global()->Get(
-                        context, String::NewFromUtf8Literal(isolate, "JSON"))
-                    .ToLocalChecked().As<Object>();
+            MaybeLocal<v8::Value> ml = context->Global()->Get(
+                        context, String::NewFromUtf8Literal(isolate, "JSON"));
 
-            Local<Function> stringify = JSON->Get(
-                        context, v8::String::NewFromUtf8Literal(isolate, "stringify"))
-                    .ToLocalChecked().As<Function>();
-
-            Local<Object> object = local_value->ToObject(context).ToLocalChecked();
-            const unsigned argc = 1;
-            Local<Value> argv[argc] = { object };
-            MaybeLocal<Value> json = stringify->Call(context, JSON, argc, argv);
-
-            if (json.IsEmpty()) {
+            if (ml.IsEmpty()) { // exception
                 evalRes.executed = false;
             } else {
-                evalRes.json = true;
-                Persistent<Value>* persistent = new Persistent<Value>();
-                persistent->Reset(isolate, json.ToLocalChecked());
-                evalRes.value = persistent;
-            }
+                Local<Object> JSON = ml.ToLocalChecked().As<Object>();
 
+                Local<Function> stringify = JSON->Get(
+                            context, v8::String::NewFromUtf8Literal(isolate, "stringify"))
+                        .ToLocalChecked().As<Function>();
+
+                Local<Object> object = local_value->ToObject(context).ToLocalChecked();
+                const unsigned argc = 1;
+                Local<Value> argv[argc] = { object };
+                MaybeLocal<Value> json = stringify->Call(context, JSON, argc, argv);
+
+                if (json.IsEmpty()) {
+                    evalRes.executed = false;
+                } else {
+                    evalRes.json = true;
+                    Persistent<Value>* persistent = new Persistent<Value>();
+                    persistent->Reset(isolate, json.ToLocalChecked());
+                    evalRes.value = persistent;
+                }
+            }
         } else {
             Persistent<Value>* persistent = new Persistent<Value>();
             persistent->Reset(isolate, local_value);

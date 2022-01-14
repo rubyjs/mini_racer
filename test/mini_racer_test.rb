@@ -1009,4 +1009,17 @@ raise FooError, "I like foos"
       context.eval('repro();')
     end
   end
+
+  def test_timeout
+    context = MiniRacer::Context.new(timeout: 500, max_memory: 20_000_000)
+    assert_raises(MiniRacer::ScriptTerminatedError) do
+      context.eval <<~JS
+        var doit = async() => {
+        while (true)
+          await new Promise(resolve => resolve())
+        }
+        doit();
+        JS
+    end
+  end
 end
