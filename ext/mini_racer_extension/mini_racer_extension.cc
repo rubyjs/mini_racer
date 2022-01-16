@@ -2,6 +2,7 @@
 #include <ruby.h>
 #include <ruby/thread.h>
 #include <ruby/io.h>
+#include <ruby/version.h>
 #include <v8.h>
 #include <v8-profiler.h>
 #include <libplatform/libplatform.h>
@@ -12,6 +13,14 @@
 #include <atomic>
 #include <math.h>
 #include <errno.h>
+
+/* workaround C Ruby <= 2.x problems w/ clang in C++ mode */
+#if defined(ENGINE_IS_CRUBY) && \
+	RUBY_API_VERSION_MAJOR == 2 && RUBY_API_VERSION_MINOR <= 6
+#  define MR_METHOD_FUNC(fn) RUBY_METHOD_FUNC(fn)
+#else
+#  define MR_METHOD_FUNC(fn) fn
+#endif
 
 using namespace v8;
 
@@ -1285,8 +1294,8 @@ gvl_ruby_callback(void* data) {
     VALUE callback_data_value = (VALUE)&callback_data;
 
     // TODO: use rb_vrescue2 in Ruby 2.7 and above
-    result = rb_rescue2(protected_callback, callback_data_value,
-            rescue_callback, callback_data_value, rb_eException, (VALUE)0);
+    result = rb_rescue2(MR_METHOD_FUNC(protected_callback), callback_data_value,
+            MR_METHOD_FUNC(rescue_callback), callback_data_value, rb_eException, (VALUE)0);
 
     if(callback_data.failed) {
         rb_iv_set(parent, "@current_exception", result);
