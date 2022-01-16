@@ -1,3 +1,13 @@
+- 17-01-2021
+
+- 0.6.2
+
+  - Fix support for compilation on 2.6, llvm compiles
+  - Stability patches to handle rare memory leaks
+  - Corrected re-raising of exceptions to support strings
+  - During early termination of context under certain conditions MiniRacer could crash
+
+
 - 31-12-2021
 
 - 0.6.1
