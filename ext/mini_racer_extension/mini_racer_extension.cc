@@ -1070,7 +1070,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
     // a v8 scope, if we do the scope is never cleaned up properly and we leak
     if (!result.parsed) {
         if(TYPE(message) == T_STRING) {
-            rb_raise(rb_eParseError, "%s", RSTRING_PTR(message));
+            rb_raise(rb_eParseError, "%" PRIsVALUE, message);
         } else {
             rb_raise(rb_eParseError, "Unknown JavaScript Error during parse");
         }
@@ -1094,9 +1094,9 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
 
             // exception report about what happened
             if (TYPE(backtrace) == T_STRING) {
-                rb_raise(ruby_exception, "%s", RSTRING_PTR(backtrace));
+                rb_raise(ruby_exception, "%" PRIsVALUE, backtrace);
             } else if(TYPE(message) == T_STRING) {
-                rb_raise(ruby_exception, "%s", RSTRING_PTR(message));
+                rb_raise(ruby_exception, "%" PRIsVALUE, message);
             } else {
                 rb_raise(ruby_exception, "Unknown JavaScript Error during execution");
             }
@@ -1104,7 +1104,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
             rb_exc_raise(ruby_exception);
         } else {
             VALUE rb_str = rb_funcall(ruby_exception, rb_intern("to_s"), 0);
-            rb_raise(CLASS_OF(ruby_exception), "%s", RSTRING_PTR(rb_str));
+            rb_raise(CLASS_OF(ruby_exception), "%" PRIsVALUE, rb_str);
         }
     }
 
