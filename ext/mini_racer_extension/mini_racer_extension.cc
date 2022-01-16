@@ -1835,23 +1835,15 @@ static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
         if (val.IsEmpty() || !val.ToLocalChecked()->IsFunction()) {
             missingFunction = true;
         } else {
-
             Local<v8::Function> fun = Local<v8::Function>::Cast(val.ToLocalChecked());
+            VALUE tmp;
             call.fun = fun;
-            int fun_argc = call.argc;
-
-            if (fun_argc > 0) {
-                call.argv = (v8::Local<Value> *) malloc(sizeof(void *) * fun_argc);
-                if (!call.argv) {
-                    return Qnil;
-                }
-                for(int i=0; i < fun_argc; i++) {
-                    call.argv[i] = convert_ruby_to_v8(isolate, context, call_argv[i]);
-                }
+            call.argv = (v8::Local<Value> *)RB_ALLOCV_N(void *, tmp, call.argc);
+            for(int i=0; i < call.argc; i++) {
+                call.argv[i] = convert_ruby_to_v8(isolate, context, call_argv[i]);
             }
             rb_thread_call_without_gvl(nogvl_context_call, &call, unblock_function, &call);
-            free(call.argv);
-
+            RB_ALLOCV_END(tmp);
         }
     }
 
