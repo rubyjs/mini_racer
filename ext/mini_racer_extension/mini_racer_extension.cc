@@ -346,7 +346,7 @@ static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
 	if (!strcmp(RSTRING_PTR(flag_as_str), "--single_threaded")) {
 	   single_threaded = true;
 	}
-        V8::SetFlagsFromString(RSTRING_PTR(flag_as_str), (int)RSTRING_LEN(flag_as_str));
+        V8::SetFlagsFromString(RSTRING_PTR(flag_as_str), RSTRING_LENINT(flag_as_str));
     } else {
         platform_already_initialized = true;
     }
@@ -724,7 +724,7 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, Local<Context> context,
     case T_FLOAT:
 	return scope.Escape(Number::New(isolate, NUM2DBL(value)));
     case T_STRING:
-	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, (int)RSTRING_LEN(value)).ToLocalChecked());
+	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, RSTRING_LENINT(value)).ToLocalChecked());
     case T_NIL:
 	return scope.Escape(Null(isolate));
     case T_TRUE:
@@ -752,7 +752,7 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, Local<Context> context,
 	return scope.Escape(object);
     case T_SYMBOL:
 	value = rb_funcall(value, rb_intern("to_s"), 0);
-	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, (int)RSTRING_LEN(value)).ToLocalChecked());
+	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, RSTRING_LENINT(value)).ToLocalChecked());
     case T_DATA:
         klass = rb_funcall(value, rb_intern("class"), 0);
         if (klass == rb_cTime || klass == rb_cDateTime)
@@ -1164,13 +1164,13 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
         HandleScope handle_scope(isolate);
 
         Local<String> eval = String::NewFromUtf8(isolate, RSTRING_PTR(str),
-                    NewStringType::kNormal, (int)RSTRING_LEN(str)).ToLocalChecked();
+                    NewStringType::kNormal, RSTRING_LENINT(str)).ToLocalChecked();
 
         Local<String> local_filename;
 
         if (filename != Qnil) {
             local_filename = String::NewFromUtf8(isolate, RSTRING_PTR(filename),
-                NewStringType::kNormal, (int)RSTRING_LEN(filename)).ToLocalChecked();
+                NewStringType::kNormal, RSTRING_LENINT(filename)).ToLocalChecked();
             eval_params.filename = &local_filename;
         } else {
             eval_params.filename = NULL;
@@ -1356,7 +1356,7 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
 
         Local<String> v8_str =
             String::NewFromUtf8(isolate, RSTRING_PTR(name),
-                                NewStringType::kNormal, (int)RSTRING_LEN(name))
+                                NewStringType::kNormal, RSTRING_LENINT(name))
                 .ToLocalChecked();
 
         // Note that self (rb_cExternalFunction) is a pure Ruby T_OBJECT,
@@ -1376,7 +1376,7 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
             Local<String> eval =
                 String::NewFromUtf8(isolate, RSTRING_PTR(parent_object_eval),
                                     NewStringType::kNormal,
-                                    (int)RSTRING_LEN(parent_object_eval))
+                                    RSTRING_LENINT(parent_object_eval))
                     .ToLocalChecked();
 
             MaybeLocal<Script> parsed_script = Script::Compile(context, eval);
