@@ -1,6 +1,5 @@
 require "bundler/gem_tasks"
 require "rake/testtask"
-require "rake/extensiontask"
 
 Rake::TestTask.new(:test) do |t|
   t.libs << "test"
@@ -11,8 +10,21 @@ end
 task :default => [:compile, :test]
 
 gem = Gem::Specification.load( File.dirname(__FILE__) + '/mini_racer.gemspec' )
-Rake::ExtensionTask.new( 'mini_racer_loader', gem )
-Rake::ExtensionTask.new( 'mini_racer_extension', gem )
+
+if RUBY_ENGINE == "truffleruby"
+  task :compile do
+    # noop
+  end
+
+  task :clean do
+    # noop
+  end
+else
+  require 'rake/extensiontask'
+  Rake::ExtensionTask.new( 'mini_racer_loader', gem )
+  Rake::ExtensionTask.new( 'mini_racer_extension', gem )
+end
+
 
 
 # via http://blog.flavorjon.es/2009/06/easily-valgrind-gdb-your-ruby-c.html

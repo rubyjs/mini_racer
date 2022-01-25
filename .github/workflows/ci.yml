@@ -3,6 +3,26 @@ on:
   - push
 
 jobs:
+  test-truffleruby:
+    name: Test TruffleRuby
+    runs-on: ubuntu-20.04
+    env:
+      TRUFFLERUBYOPT: "--jvm --polyglot"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: truffleruby+graalvm-head
+      - name: Install GraalVM js component
+        run: if ! gu list | grep '^js '; then gu install js; fi
+      - name: Bundle
+        run: bundle install
+      - name: Compile
+        run: bundle exec rake compile
+      - name: Test
+        run: bundle exec rake test
   test-darwin:
     strategy:
       fail-fast: false
