@@ -75,4 +75,9 @@ if enable_config('asan')
   $LDFLAGS.insert(0, " -fsanitize=address ")
 end
 
+# there doesn't seem to be a CPP macro for this in Ruby 2.6:
+if RUBY_ENGINE == 'ruby'
+  $CPPFLAGS += ' -DENGINE_IS_CRUBY '
+end
+
 create_makefile 'mini_racer_extension'

@@ -1,3 +1,13 @@
+- 17-01-2021
+
+- 0.6.2
+
+  - Fix support for compilation on 2.6, llvm compiles
+  - Stability patches to handle rare memory leaks
+  - Corrected re-raising of exceptions to support strings
+  - During early termination of context under certain conditions MiniRacer could crash
+
+
 - 31-12-2021
 
 - 0.6.1
@@ -17,7 +27,6 @@
 - 0.5.0
   - Fixes issues on aarch (Apple M1)
   - Update to use libv8-node 16.x (#210) [Loic Nageleisen]
-  - FEATURE: Configurable max marshal stack depth (#202) [seanmakesgames]
   - FEATURE: Configurable max marshal stack depth (#202) [seanmakesgames]
   - Ruby 2.3 and 2.4 are EOL, we no longer support them
 

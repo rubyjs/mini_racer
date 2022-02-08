@@ -2,6 +2,7 @@
 #include <ruby.h>
 #include <ruby/thread.h>
 #include <ruby/io.h>
+#include <ruby/version.h>
 #include <v8.h>
 #include <v8-profiler.h>
 #include <libplatform/libplatform.h>
@@ -12,6 +13,14 @@
 #include <atomic>
 #include <math.h>
 #include <errno.h>
+
+/* workaround C Ruby <= 2.x problems w/ clang in C++ mode */
+#if defined(ENGINE_IS_CRUBY) && \
+	RUBY_API_VERSION_MAJOR == 2 && RUBY_API_VERSION_MINOR <= 6
+#  define MR_METHOD_FUNC(fn) RUBY_METHOD_FUNC(fn)
+#else
+#  define MR_METHOD_FUNC(fn) fn
+#endif
 
 using namespace v8;
 
@@ -337,7 +346,7 @@ static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
 	if (!strcmp(RSTRING_PTR(flag_as_str), "--single_threaded")) {
 	   single_threaded = true;
 	}
-        V8::SetFlagsFromString(RSTRING_PTR(flag_as_str), (int)RSTRING_LEN(flag_as_str));
+        V8::SetFlagsFromString(RSTRING_PTR(flag_as_str), RSTRING_LENINT(flag_as_str));
     } else {
         platform_already_initialized = true;
     }
@@ -715,7 +724,7 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, Local<Context> context,
     case T_FLOAT:
 	return scope.Escape(Number::New(isolate, NUM2DBL(value)));
     case T_STRING:
-	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, (int)RSTRING_LEN(value)).ToLocalChecked());
+	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, RSTRING_LENINT(value)).ToLocalChecked());
     case T_NIL:
 	return scope.Escape(Null(isolate));
     case T_TRUE:
@@ -743,7 +752,7 @@ static Local<Value> convert_ruby_to_v8(Isolate* isolate, Local<Context> context,
 	return scope.Escape(object);
     case T_SYMBOL:
 	value = rb_funcall(value, rb_intern("to_s"), 0);
-	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, (int)RSTRING_LEN(value)).ToLocalChecked());
+	return scope.Escape(String::NewFromUtf8(isolate, RSTRING_PTR(value), NewStringType::kNormal, RSTRING_LENINT(value)).ToLocalChecked());
     case T_DATA:
         klass = rb_funcall(value, rb_intern("class"), 0);
         if (klass == rb_cTime || klass == rb_cDateTime)
@@ -1061,7 +1070,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
     // a v8 scope, if we do the scope is never cleaned up properly and we leak
     if (!result.parsed) {
         if(TYPE(message) == T_STRING) {
-            rb_raise(rb_eParseError, "%s", RSTRING_PTR(message));
+            rb_raise(rb_eParseError, "%" PRIsVALUE, message);
         } else {
             rb_raise(rb_eParseError, "Unknown JavaScript Error during parse");
         }
@@ -1085,9 +1094,9 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
 
             // exception report about what happened
             if (TYPE(backtrace) == T_STRING) {
-                rb_raise(ruby_exception, "%s", RSTRING_PTR(backtrace));
+                rb_raise(ruby_exception, "%" PRIsVALUE, backtrace);
             } else if(TYPE(message) == T_STRING) {
-                rb_raise(ruby_exception, "%s", RSTRING_PTR(message));
+                rb_raise(ruby_exception, "%" PRIsVALUE, message);
             } else {
                 rb_raise(ruby_exception, "Unknown JavaScript Error during execution");
             }
@@ -1095,7 +1104,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
             rb_exc_raise(ruby_exception);
         } else {
             VALUE rb_str = rb_funcall(ruby_exception, rb_intern("to_s"), 0);
-            rb_raise(CLASS_OF(ruby_exception), "%s", RSTRING_PTR(rb_str));
+            rb_raise(CLASS_OF(ruby_exception), "%" PRIsVALUE, rb_str);
         }
     }
 
@@ -1155,13 +1164,13 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
         HandleScope handle_scope(isolate);
 
         Local<String> eval = String::NewFromUtf8(isolate, RSTRING_PTR(str),
-                    NewStringType::kNormal, (int)RSTRING_LEN(str)).ToLocalChecked();
+                    NewStringType::kNormal, RSTRING_LENINT(str)).ToLocalChecked();
 
         Local<String> local_filename;
 
         if (filename != Qnil) {
             local_filename = String::NewFromUtf8(isolate, RSTRING_PTR(filename),
-                NewStringType::kNormal, (int)RSTRING_LEN(filename)).ToLocalChecked();
+                NewStringType::kNormal, RSTRING_LENINT(filename)).ToLocalChecked();
             eval_params.filename = &local_filename;
         } else {
             eval_params.filename = NULL;
@@ -1285,8 +1294,8 @@ gvl_ruby_callback(void* data) {
     VALUE callback_data_value = (VALUE)&callback_data;
 
     // TODO: use rb_vrescue2 in Ruby 2.7 and above
-    result = rb_rescue2(protected_callback, callback_data_value,
-            rescue_callback, callback_data_value, rb_eException, (VALUE)0);
+    result = rb_rescue2(MR_METHOD_FUNC(protected_callback), callback_data_value,
+            MR_METHOD_FUNC(rescue_callback), callback_data_value, rb_eException, (VALUE)0);
 
     if(callback_data.failed) {
         rb_iv_set(parent, "@current_exception", result);
@@ -1347,7 +1356,7 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
 
         Local<String> v8_str =
             String::NewFromUtf8(isolate, RSTRING_PTR(name),
-                                NewStringType::kNormal, (int)RSTRING_LEN(name))
+                                NewStringType::kNormal, RSTRING_LENINT(name))
                 .ToLocalChecked();
 
         // Note that self (rb_cExternalFunction) is a pure Ruby T_OBJECT,
@@ -1367,7 +1376,7 @@ static VALUE rb_external_function_notify_v8(VALUE self) {
             Local<String> eval =
                 String::NewFromUtf8(isolate, RSTRING_PTR(parent_object_eval),
                                     NewStringType::kNormal,
-                                    (int)RSTRING_LEN(parent_object_eval))
+                                    RSTRING_LENINT(parent_object_eval))
                     .ToLocalChecked();
 
             MaybeLocal<Script> parsed_script = Script::Compile(context, eval);
@@ -1826,23 +1835,15 @@ static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
         if (val.IsEmpty() || !val.ToLocalChecked()->IsFunction()) {
             missingFunction = true;
         } else {
-
             Local<v8::Function> fun = Local<v8::Function>::Cast(val.ToLocalChecked());
+            VALUE tmp;
             call.fun = fun;
-            int fun_argc = call.argc;
-
-            if (fun_argc > 0) {
-                call.argv = (v8::Local<Value> *) malloc(sizeof(void *) * fun_argc);
-                if (!call.argv) {
-                    return Qnil;
-                }
-                for(int i=0; i < fun_argc; i++) {
-                    call.argv[i] = convert_ruby_to_v8(isolate, context, call_argv[i]);
-                }
+            call.argv = (v8::Local<Value> *)RB_ALLOCV_N(void *, tmp, call.argc);
+            for(int i=0; i < call.argc; i++) {
+                call.argv[i] = convert_ruby_to_v8(isolate, context, call_argv[i]);
             }
             rb_thread_call_without_gvl(nogvl_context_call, &call, unblock_function, &call);
-            free(call.argv);
-
+            RB_ALLOCV_END(tmp);
         }
     }
 
