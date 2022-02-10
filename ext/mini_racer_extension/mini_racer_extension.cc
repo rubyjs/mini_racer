@@ -305,8 +305,7 @@ static std::unique_ptr<Platform> current_platform = NULL;
 static std::mutex platform_lock;
 
 static pthread_attr_t *thread_attr_p;
-static pthread_rwlock_t exit_lock = PTHREAD_RWLOCK_INITIALIZER;
-static bool ruby_exiting = false; // guarded by exit_lock
+static std::atomic_int ruby_exiting(0);
 static bool single_threaded = false;
 
 static void mark_context(void *);
@@ -1477,24 +1476,15 @@ static void free_context_raw(void *arg) {
 }
 
 static void *free_context_thr(void* arg) {
-    if (pthread_rwlock_tryrdlock(&exit_lock) != 0) {
-        return NULL;
+    if (ruby_exiting.load() == 0) {
+        free_context_raw(arg);
+        xfree(arg);
     }
-    if (ruby_exiting) {
-        return NULL;
-    }
-
-    free_context_raw(arg);
-    xfree(arg);
-
-    pthread_rwlock_unlock(&exit_lock);
-
     return NULL;
 }
 
 // destroys everything except freeing the ContextInfo struct (see deallocate())
 static void free_context(ContextInfo* context_info) {
-
     IsolateInfo* isolate_info = context_info->isolate_info;
 
     if (isolate_info && isolate_info->refs() > 1) {
@@ -1870,12 +1860,7 @@ static VALUE rb_context_create_isolate_value(VALUE self) {
 static void set_ruby_exiting(VALUE value) {
     (void)value;
 
-    int res = pthread_rwlock_wrlock(&exit_lock);
-
-    ruby_exiting  = true;
-    if (res == 0) {
-        pthread_rwlock_unlock(&exit_lock);
-    }
+    ruby_exiting.store(1);
 }
 
 extern "C" {
@@ -1941,9 +1926,5 @@ extern "C" {
                 thread_attr_p = &attr;
             }
         }
-        auto on_fork_for_child = []() {
-            exit_lock = PTHREAD_RWLOCK_INITIALIZER;
-        };
-        pthread_atfork(nullptr, nullptr, on_fork_for_child);
     }
 }
