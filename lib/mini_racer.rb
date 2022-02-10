@@ -12,6 +12,7 @@ MiniRacer::Loader.load(ext_found.to_s)
 
 require "thread"
 require "json"
+require "io/wait"
 
 module MiniRacer
 
@@ -349,7 +350,7 @@ module MiniRacer
 
       t = Thread.new do
         begin
-          result = IO.select([rp],[],[],(@timeout/1000.0))
+          result = rp.wait_readable(@timeout/1000.0)
           if !result
             mutex.synchronize do
               stop unless done
