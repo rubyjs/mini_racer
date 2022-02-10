@@ -1474,8 +1474,6 @@ static void free_context_raw(void *arg) {
     if (isolate_info) {
         isolate_info->release();
     }
-
-    xfree(context_info);
 }
 
 static void *free_context_thr(void* arg) {
@@ -1487,6 +1485,7 @@ static void *free_context_thr(void* arg) {
     }
 
     free_context_raw(arg);
+    xfree(arg);
 
     pthread_rwlock_unlock(&exit_lock);
 
@@ -1498,18 +1497,19 @@ static void free_context(ContextInfo* context_info) {
 
     IsolateInfo* isolate_info = context_info->isolate_info;
 
-    ContextInfo* context_info_copy = ALLOC(ContextInfo);
-    context_info_copy->isolate_info = context_info->isolate_info;
-    context_info_copy->context = context_info->context;
-
     if (isolate_info && isolate_info->refs() > 1) {
         pthread_t free_context_thread;
+        ContextInfo* context_info_copy = ALLOC(ContextInfo);
+
+        context_info_copy->isolate_info = context_info->isolate_info;
+        context_info_copy->context = context_info->context;
         if (pthread_create(&free_context_thread, thread_attr_p,
                            free_context_thr, (void*)context_info_copy)) {
             fprintf(stderr, "WARNING failed to release memory in MiniRacer, thread to release could not be created, process will leak memory\n");
+            xfree(context_info_copy);
         }
     } else {
-        free_context_raw(context_info_copy);
+        free_context_raw(context_info);
     }
 
     context_info->context = NULL;
