@@ -71,6 +71,8 @@ jobs:
         run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} apk add --no-cache build-base linux-headers bash python2 python3 git curl tar clang binutils-gold
       - name: Checkout
         uses: actions/checkout@v2
+      - name: Update Rubygems
+        run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} gem update --system
       - name: Bundle
         run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} bundle install
       - name: Compile
