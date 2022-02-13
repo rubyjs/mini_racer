@@ -112,16 +112,21 @@ context.eval('bar()', filename: 'a/bar.js')
 
 ### Fork safety
 
-Some Ruby web servers employ forking (for example unicorn or puma in clustered mode). V8 is not fork safe.
-Sadly Ruby does not have support for fork notifications per [#5446](https://bugs.ruby-lang.org/issues/5446).
+Some Ruby web servers employ forking (for example unicorn or puma in clustered mode). V8 is not fork safe by default and sadly Ruby does not have support for fork notifications per [#5446](https://bugs.ruby-lang.org/issues/5446).
+
+Since 0.6.1 mini_racer does support V8 single threaded platform mode which should remove most forking related issues. To enable run this before using `MiniRacer::Context`:
+
+```ruby
+MiniRacer::Platform.set_flags!(:single_threaded)
+```
 
 If you want to ensure your application does not leak memory after fork either:
 
-1. Ensure no MiniRacer::Context objects are created in the master process
+1. Ensure no `MiniRacer::Context` objects are created in the master process
 
 Or
 
-2. Dispose manually of all MiniRacer::Context objects prior to forking
+2. Dispose manually of all `MiniRacer::Context` objects prior to forking
 
 ```ruby
 # before fork
