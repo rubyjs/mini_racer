@@ -12,7 +12,7 @@ MiniRacer has an adapter for [execjs](https://github.com/rails/execjs) so it can
 
 ### A note about Ruby version Support
 
-MiniRacer only supports non-EOL versions of Ruby. See [Ruby](https://www.ruby-lang.org/en/downloads) to see the list of non-EOL Rubies.
+MiniRacer only supports non-EOL versions of Ruby. See [Ruby Maintenance Branches](https://www.ruby-lang.org/en/downloads/branches/) for the list of non-EOL Rubies.
 
 If you require support for older versions of Ruby install an older version of the gem.
 
