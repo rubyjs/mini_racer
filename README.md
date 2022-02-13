@@ -1,6 +1,6 @@
 # MiniRacer
 
-[![Build Status](https://travis-ci.org/rubyjs/mini_racer.svg?branch=master)](https://travis-ci.org/rubyjs/mini_racer)
+[![Test](https://github.com/rubyjs/mini_racer/actions/workflows/ci.yml/badge.svg)](https://github.com/rubyjs/mini_racer/actions/workflows/ci.yml)
 
 Minimal, modern embedded V8 for Ruby.
 
@@ -418,19 +418,6 @@ Or install it yourself as:
 
 **Note** using v8.h and compiling MiniRacer requires a C++11 standard compiler, more specifically clang 3.5 (or later) or GCC 6.3 (or later).
 
-
-## Travis-ci
-
-To install `mini-racer` you will need a version of GCC that supports C++11 (GCC 6.3) this is included by default in ubuntu trusty based images.
-
-Travis today ships by default with a precise based image. Precise Pangolin (12.04 LTS) was first released in August 2012. Even though you can install GCC 6.3 on precise the simpler approach is to opt for the trusty based image.
-
-Add this to your .travis.yml file:
-
-```
-- sudo: required
-- dist: trusty
-```
 
 ## Similar Projects
 
