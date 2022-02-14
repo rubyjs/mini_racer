@@ -419,6 +419,17 @@ Or install it yourself as:
 **Note** using v8.h and compiling MiniRacer requires a C++11 standard compiler, more specifically clang 3.5 (or later) or GCC 6.3 (or later).
 
 
+### Troubleshooting
+
+If you have a problem installing mini_racer, please consider the following steps:
+
+* make sure you try the latest released version of mini_racer
+* make sure you have Rubygems >= 3.2.13 and bundler >= 2.2.13 installed via `gem update --system`
+* if you are using bundler, make sure to have `PLATFORMS` set correctly in `Gemfile.lock` via `bundle lock --add-platform`
+* make sure to recompile/reinstall `mini_racer` and `libv8-node` after system upgrades (for example via `gem uninstall --all mini_racer libv8-node`)
+* make sure you are on the latest patch/teeny version of a supported Ruby branch
+
+
 ## Travis-ci
 
 To install `mini-racer` you will need a version of GCC that supports C++11 (GCC 6.3) this is included by default in ubuntu trusty based images.
