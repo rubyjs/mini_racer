@@ -660,11 +660,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
 	v8::String::Utf8Value symbol_name(isolate,
 	    Local<Symbol>::Cast(value)->Name());
 
-	VALUE str_symbol = rb_enc_str_new(
-	    *symbol_name,
-	    symbol_name.length(),
-	    rb_enc_find("utf-8")
-	);
+	VALUE str_symbol = rb_utf8_str_new(*symbol_name, symbol_name.length());
 
 	return rb_str_intern(str_symbol);
     }
@@ -675,7 +671,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
 	return Qnil;
     } else {
 	Local<String> rstr = rstr_maybe.ToLocalChecked();
-	return rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate), rb_enc_find("utf-8"));
+	return rb_utf8_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate));
     }
 }
 
@@ -1074,8 +1070,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
             // If we were terminated or have the memory softlimit flag set
             if (marshal_stack_maxdepth_reached) {
                 ruby_exception = rb_eScriptRuntimeError;
-                std::string msg = std::string("Marshal object depth too deep. Script terminated.");
-                message = rb_enc_str_new(msg.c_str(), msg.length(), rb_enc_find("utf-8"));
+                message = rb_utf8_str_new_literal("Marshal object depth too deep. Script terminated.");
             } else if (result.terminated || mem_softlimit_reached) {
                 ruby_exception = mem_softlimit_reached ? rb_eV8OutOfMemoryError : rb_eScriptTerminatedError;
             } else {
@@ -1110,7 +1105,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
 
         if (result.json) {
             Local<String> rstr = tmp->ToString(p_ctx->Get(isolate)).ToLocalChecked();
-            VALUE json_string = rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate), rb_enc_find("utf-8"));
+            VALUE json_string = rb_utf8_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate));
             ret = rb_funcall(rb_mJSON, rb_intern("parse"), 1, json_string);
         } else {
             StackCounter::Reset(isolate);
