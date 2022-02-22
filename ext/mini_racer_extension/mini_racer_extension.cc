@@ -857,7 +857,7 @@ StartupData warm_up_snapshot_data_blob(StartupData cold_snapshot_blob,
     return result;
 }
 
-static VALUE rb_snapshot_size(VALUE self, VALUE str) {
+static VALUE rb_snapshot_size(VALUE self) {
     SnapshotInfo* snapshot_info;
     TypedData_Get_Struct(self, SnapshotInfo, &snapshot_type, snapshot_info);
 
@@ -884,7 +884,7 @@ static VALUE rb_snapshot_load(VALUE self, VALUE str) {
     return Qnil;
 }
 
-static VALUE rb_snapshot_dump(VALUE self, VALUE str) {
+static VALUE rb_snapshot_dump(VALUE self) {
     SnapshotInfo* snapshot_info;
     TypedData_Get_Struct(self, SnapshotInfo, &snapshot_type, snapshot_info);
 
