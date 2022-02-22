@@ -46,7 +46,7 @@ class MiniRacerTest < Minitest::Test
 
   def test_compile_nil_context
     context = MiniRacer::Context.new
-    assert_raises(ArgumentError) do
+    assert_raises(TypeError) do
         assert_equal 2, context.eval(nil)
     end
   end
@@ -463,7 +463,7 @@ raise FooError, "I like foos"
   end
 
   def test_invalid_warmup_sources_throw_an_exception_2
-    assert_raises(ArgumentError) do
+    assert_raises(TypeError) do
       MiniRacer::Snapshot.new('function f() { return 1 }').warmup!([])
     end
   end

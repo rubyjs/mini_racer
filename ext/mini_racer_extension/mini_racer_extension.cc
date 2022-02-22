@@ -334,10 +334,7 @@ static const rb_data_type_t isolate_type = {
 static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
     bool platform_already_initialized = false;
 
-    if(TYPE(flag_as_str) != T_STRING) {
-        rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE" (should be a string)",
-                rb_obj_class(flag_as_str));
-    }
+    Check_Type(flag_as_str, T_STRING);
 
     platform_lock.lock();
 
@@ -871,10 +868,7 @@ static VALUE rb_snapshot_load(VALUE self, VALUE str) {
     SnapshotInfo* snapshot_info;
     TypedData_Get_Struct(self, SnapshotInfo, &snapshot_type, snapshot_info);
 
-    if(TYPE(str) != T_STRING) {
-        rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE " (should be a string)",
-                rb_obj_class(str));
-    }
+    Check_Type(str, T_STRING);
 
     init_v8();
 
@@ -901,10 +895,7 @@ static VALUE rb_snapshot_warmup_unsafe(VALUE self, VALUE str) {
     SnapshotInfo* snapshot_info;
     TypedData_Get_Struct(self, SnapshotInfo, &snapshot_type, snapshot_info);
 
-    if(TYPE(str) != T_STRING) {
-        rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE " (should be a string)",
-                rb_obj_class(str));
-    }
+    Check_Type(str, T_STRING);
 
     init_v8();
 
@@ -1148,13 +1139,10 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
     TypedData_Get_Struct(self, ContextInfo, &context_type, context_info);
     Isolate* isolate = context_info->isolate_info->isolate;
 
-    if(TYPE(str) != T_STRING) {
-        rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE " (should be a string)",
-                rb_obj_class(str));
-    }
-    if(filename != Qnil && TYPE(filename) != T_STRING) {
-        rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE " (should be nil or a string)",
-                rb_obj_class(filename));
+    Check_Type(str, T_STRING);
+
+    if (!NIL_P(filename)) {
+        Check_Type(filename, T_STRING);
     }
 
     {
@@ -1772,9 +1760,7 @@ static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
     }
 
     VALUE function_name = argv[0];
-    if (TYPE(function_name) != T_STRING) {
-        rb_raise(rb_eTypeError, "first argument should be a String");
-    }
+    Check_Type(function_name, T_STRING);
 
     char *fname = RSTRING_PTR(function_name);
     if (!fname) {
