@@ -367,7 +367,7 @@ module MiniRacer
         done = true
       end
 
-      wp.write("done")
+      wp.close
 
       # ensure we do not leak a thread in state
       t.join
@@ -376,12 +376,9 @@ module MiniRacer
       rval
     ensure
       # exceptions need to be handled
-      if t && wp
-        wp.write("done")
-        t.join
-      end
-      wp.close if wp
-      rp.close if rp
+      wp&.close
+      t&.join
+      rp&.close
     end
 
     def check_init_options!(isolate:, snapshot:, max_memory:, marshal_stack_depth:, ensure_gc_after_idle:, timeout:)
