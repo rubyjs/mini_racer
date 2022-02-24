@@ -70,6 +70,9 @@ end
 
 Libv8::Node.configure_makefile
 
+# --exclude-libs is only for i386 PE and ELF targeted ports
+append_ldflags("-Wl,--exclude-libs=ALL ")
+
 if enable_config('asan')
   $CXXFLAGS.insert(0, " -fsanitize=address ")
   $LDFLAGS.insert(0, " -fsanitize=address ")
