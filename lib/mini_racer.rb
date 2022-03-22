@@ -203,7 +203,7 @@ module MiniRacer
       end
 
       if !(File === f)
-        raise ArgumentError("file_or_io")
+        raise ArgumentError, "file_or_io"
       end
 
       write_heap_snapshot_unsafe(f)
