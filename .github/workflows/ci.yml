@@ -9,7 +9,8 @@ jobs:
       matrix:
         os:
           - '10.15'
-          - '11.0'
+          - '11'
+          - '12'
         platform:
           - x86_64
           # arm64
