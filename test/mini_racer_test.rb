@@ -8,7 +8,6 @@ class MiniRacerTest < Minitest::Test
   # see `test_platform_set_flags_works` below
   MiniRacer::Platform.set_flags! :use_strict
 
-
   def test_locale
     skip "TruffleRuby does not have all js timezone by default" if RUBY_ENGINE == "truffleruby"
     val = MiniRacer::Context.new.eval("new Date('April 28 2021').toLocaleDateString('es-MX');")
@@ -439,7 +438,7 @@ raise FooError, "I like foos"
   end
 
   def test_snapshots_can_be_warmed_up_with_no_side_effects
-    # shamelessly insipired by https://github.com/v8/v8/blob/5.3.254/test/cctest/test-serialize.cc#L792-L854
+    # shamelessly inspired by https://github.com/v8/v8/blob/5.3.254/test/cctest/test-serialize.cc#L792-L854
     snapshot_source = <<-JS
       function f() { return Math.sin(1); }
       var a = 5;
@@ -985,16 +984,16 @@ raise FooError, "I like foos"
     context.attach("print", proc {|f| puts f})
 
     context.eval <<~JS
-    WebAssembly
-      .instantiate(new Uint8Array(loadwasm()), {
-        wasi_snapshot_preview1: {
-          proc_exit: function() { print("exit"); },
-          args_get: function() { return 0 },
-          args_sizes_get: function() { return 0 }
-        }
-      })
-      .then(i => { instance = i["instance"];})
-      .catch(e => print(e.toString()));
+      WebAssembly
+        .instantiate(new Uint8Array(loadwasm()), {
+          wasi_snapshot_preview1: {
+            proc_exit: function() { print("exit"); },
+            args_get: function() { return 0 },
+            args_sizes_get: function() { return 0 }
+          }
+        })
+        .then(i => { instance = i["instance"];})
+        .catch(e => print(e.toString()));
     JS
 
     while !context.eval("instance") do
@@ -1033,5 +1032,28 @@ raise FooError, "I like foos"
         doit();
         JS
     end
+  end
+
+  def test_eval_returns_unfrozen_string
+    context = MiniRacer::Context.new
+    result = context.eval("'Hello George!'")
+    assert_equal("Hello George!", result)
+    assert_equal(false, result.frozen?)
+  end
+
+  def test_call_returns_unfrozen_string
+    context = MiniRacer::Context.new
+    context.eval('function hello(name) { return "Hello " + name + "!" }')
+    result = context.call('hello', 'George')
+    assert_equal("Hello George!", result)
+    assert_equal(false, result.frozen?)
+  end
+
+  def test_callback_string_arguments_are_not_frozen
+    context = MiniRacer::Context.new
+    context.attach("test", proc{ |text| text.frozen? })
+
+    frozen = context.eval("test('Hello George!')")
+    assert_equal(false, frozen)
   end
 end
