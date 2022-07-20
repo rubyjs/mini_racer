@@ -1,6 +1,10 @@
-name: Test
+name: Tests
+
 on:
-  - push
+  pull_request:
+  push:
+    branches:
+      - main
 
 jobs:
   test-darwin:
@@ -8,72 +12,17 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - '10.15'
-          - '11.0'
-        platform:
-          - x86_64
-          # arm64
-    name: Test (darwin)
+          - "10.15"
+          - "11"
+          - "12"
+    name: Test (macOS)
     runs-on: macos-${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
       - name: Bundle
         run: bundle install
       - name: Compile
         run: bundle exec rake compile
       - name: Test
         run: bundle exec rake test
-  test-linux:
-    strategy:
-      fail-fast: false
-      matrix:
-        ruby:
-          - '2.6'
-          - '2.7'
-          - '3.0'
-          - '3.1'
-        platform:
-          - amd64
-          - arm64
-          # arm
-          # ppc64le
-          # s390x
-        libc:
-          - gnu
-          - musl
-    name: Test (linux)
-    runs-on: ubuntu-20.04
-    steps:
-      - name: Enable ${{ matrix.platform }} platform
-        id: qemu
-        if: ${{ matrix.platform != 'amd64' }}
-        run: |
-          docker run --privileged --rm tonistiigi/binfmt:latest --install ${{ matrix.platform }} | tee platforms.json
-          echo "::set-output name=platforms::$(cat platforms.json)"
-      - name: Start container
-        id: container
-        run: |
-          case ${{ matrix.libc }} in
-            gnu)
-              echo 'ruby:${{ matrix.ruby }}'
-              ;;
-            musl)
-              echo 'ruby:${{ matrix.ruby }}-alpine'
-              ;;
-          esac > container_image
-          echo "::set-output name=image::$(cat container_image)"
-          docker run --rm -d -v "${PWD}":"${PWD}" -w "${PWD}" --platform linux/${{ matrix.platform }} $(cat container_image) /bin/sleep 64d | tee container_id
-          docker exec -w "${PWD}" $(cat container_id) uname -a
-          echo "::set-output name=id::$(cat container_id)"
-      - name: Install Alpine system dependencies
-        if: ${{ matrix.libc == 'musl' }}
-        run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} apk add --no-cache build-base linux-headers bash python2 python3 git curl tar clang binutils-gold
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Bundle
-        run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} bundle install
-      - name: Compile
-        run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} bundle exec rake compile
-      - name: Test
-        run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} bundle exec rake test
