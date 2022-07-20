@@ -649,7 +649,7 @@ raise FooError, "I like foos"
 
   def test_timeout_in_ruby_land
     context = MiniRacer::Context.new(timeout: 50)
-    context.attach('sleep', proc{ sleep 0.1 })
+    context.attach('sleep', proc{ sleep 0.5 })
     assert_raises(MiniRacer::ScriptTerminatedError) do
       context.eval('sleep(); "hi";')
     end
@@ -759,7 +759,7 @@ raise FooError, "I like foos"
 
     context.eval("'#{"x" * 10_000_000}'")
 
-    sleep 0.005
+    sleep 0.01
 
     end_heap = context.heap_stats[:used_heap_size]
 
@@ -906,7 +906,7 @@ raise FooError, "I like foos"
     skip "TruffleRuby does not yet implement marshal_stack_depth" if RUBY_ENGINE == "truffleruby"
     context = MiniRacer::Context.new(marshal_stack_depth: 5)
     context.attach("a", proc{|a| a})
-  
+
     js = <<~JS
       var d=0;
       function get(z) {
