@@ -1,69 +1,92 @@
-name: Test
+name: Tests
+
 on:
-  - push
+  pull_request:
+  push:
+    branches:
+      - master
 
 jobs:
   test-truffleruby:
-    name: Test TruffleRuby
-    runs-on: ubuntu-20.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - "macos-11"
+          - "macos-12"
+          - "ubuntu-20.04"
+        ruby:
+          - "truffleruby+graalvm-head"
+
+    name: ${{ matrix.os }} - ${{ matrix.ruby }}
+    runs-on: ${{ matrix.os }}
+
     env:
       TRUFFLERUBYOPT: "--jvm --polyglot"
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@v3
+      - uses: ruby/setup-ruby@v1
         with:
-          ruby-version: truffleruby+graalvm-head
-      - name: Install GraalVM js component
-        run: if ! gu list | grep '^js '; then gu install js; fi
-      - name: Bundle
-        run: bundle install
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+      - name: Install GraalVM JS component
+        run: gu install js
       - name: Compile
         run: bundle exec rake compile
       - name: Test
         run: bundle exec rake test
+
   test-darwin:
     strategy:
       fail-fast: false
       matrix:
         os:
-          - '10.15'
-          - '11.0'
-        platform:
-          - x86_64
-          # arm64
-    name: Test (darwin)
-    runs-on: macos-${{ matrix.os }}
+          - "macos-11"
+          - "macos-12"
+        ruby:
+          - "ruby-2.6"
+          - "ruby-2.7"
+          - "ruby-3.0"
+          - "ruby-3.1"
+
+    name: ${{ matrix.os }} - ${{ matrix.ruby }}
+    runs-on: ${{ matrix.os }}
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Bundle
-        run: bundle install
+      - uses: actions/checkout@v3
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
       - name: Compile
         run: bundle exec rake compile
       - name: Test
         run: bundle exec rake test
+
   test-linux:
     strategy:
       fail-fast: false
       matrix:
         ruby:
-          - '2.6'
-          - '2.7'
-          - '3.0'
-          - '3.1'
+          - "2.6"
+          - "2.7"
+          - "3.0"
+          - "3.1"
         platform:
-          - amd64
-          - arm64
-          # arm
-          # ppc64le
-          # s390x
+          - "amd64"
+          - "arm64"
         libc:
-          - gnu
-          - musl
-    name: Test (linux)
+          - "gnu"
+          - "musl"
+        exclude:
+          # there's no libv8-node (v16) for aarch64-linux-musl at the moment
+          - platform: "arm64"
+            libc: "musl"
+
+    name: linux-${{ matrix.platform }} - ruby-${{ matrix.ruby }} - ${{ matrix.libc }}
     runs-on: ubuntu-20.04
+
     steps:
       - name: Enable ${{ matrix.platform }} platform
         id: qemu
@@ -88,9 +111,11 @@ jobs:
           echo "::set-output name=id::$(cat container_id)"
       - name: Install Alpine system dependencies
         if: ${{ matrix.libc == 'musl' }}
-        run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} apk add --no-cache build-base linux-headers bash python2 python3 git curl tar clang binutils-gold
+        run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} apk add --no-cache build-base bash git
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
+      - name: Update Rubygems
+        run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} gem update --system
       - name: Bundle
         run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} bundle install
       - name: Compile
