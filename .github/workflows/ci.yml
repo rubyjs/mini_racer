@@ -47,7 +47,6 @@ jobs:
           - musl
     name: Test (linux)
     runs-on: ubuntu-20.04
-    if: ${{ env.LIBV8_NODE_GIT != 0 || env.LIBV8_NODE_GIT_BRANCH != 0 }}
     steps:
       - name: Enable ${{ matrix.platform }} platform
         id: qemu
