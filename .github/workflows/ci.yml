@@ -2,6 +2,9 @@ name: Test
 on:
   - push
 
+env:
+  LIBV8_NODE_GIT_BRANCH: 'node-18'
+
 jobs:
   test-darwin:
     strategy:
