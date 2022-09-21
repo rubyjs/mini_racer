@@ -872,6 +872,14 @@ raise FooError, "I like foos"
     end
   end
 
+  def test_capture_ruby_exception_message
+    context = MiniRacer::Context.new()
+    error_message = "Actual Error Message"
+    context.attach("a", proc{|a| raise error_message})
+
+    assert_equal error_message, context.eval("try { a(); \'no throw\' } catch (e) { e }")
+  end
+
   def test_symbol_support
     context = MiniRacer::Context.new()
     assert_equal :foo, context.eval("Symbol('foo')")
