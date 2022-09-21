@@ -877,7 +877,7 @@ raise FooError, "I like foos"
     error_message = "Actual Error Message"
     context.attach("a", proc{|a| raise error_message})
 
-    assert_equal error_message, context.eval("try { a(); \'no throw\' } catch (e) { e }")
+    assert_equal error_message, context.eval("try { a(); } catch (e) { e }")
   end
 
   def test_symbol_support
