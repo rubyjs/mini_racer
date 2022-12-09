@@ -10,11 +10,13 @@ It was created as an alternative to the excellent [therubyracer](https://github.
 
 MiniRacer has an adapter for [execjs](https://github.com/rails/execjs) so it can be used directly with Rails projects to minify assets, run babel or compile CoffeeScript.
 
-### A note about Ruby version Support
+### Supported Ruby Versions
 
 MiniRacer only supports non-EOL versions of Ruby. See [Ruby Maintenance Branches](https://www.ruby-lang.org/en/downloads/branches/) for the list of non-EOL Rubies.
 
 If you require support for older versions of Ruby install an older version of the gem.
+
+MiniRacer **does not support** [Ruby built on MinGW](https://github.com/rubyjs/mini_racer/issues/252#issuecomment-1201172236, "pure windows" no Cygwin, no WSL2) (see https://github.com/rubyjs/libv8-node/issues/9).
 
 ## Features
 
