@@ -23,6 +23,6 @@ trigger_gc
 
 MiniRacer::Context.new.dispose
 
-Process.wait fork { puts @ctx.eval("a"); @ctx.dispose; puts Process.pid; trigger_gc; puts "done #{Process.pid}" }
-
-
+if Process.respond_to?(:fork)
+  Process.wait fork { puts @ctx.eval("a"); @ctx.dispose; puts Process.pid; trigger_gc; puts "done #{Process.pid}" }
+end

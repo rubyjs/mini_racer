@@ -1,6 +1,6 @@
 # MiniRacer
 
-[![Build Status](https://travis-ci.org/rubyjs/mini_racer.svg?branch=master)](https://travis-ci.org/rubyjs/mini_racer)
+[![Test](https://github.com/rubyjs/mini_racer/actions/workflows/ci.yml/badge.svg)](https://github.com/rubyjs/mini_racer/actions/workflows/ci.yml)
 
 Minimal, modern embedded V8 for Ruby.
 
@@ -10,11 +10,13 @@ It was created as an alternative to the excellent [therubyracer](https://github.
 
 MiniRacer has an adapter for [execjs](https://github.com/rails/execjs) so it can be used directly with Rails projects to minify assets, run babel or compile CoffeeScript.
 
-### A note about Ruby version Support
+### Supported Ruby Versions
 
-MiniRacer only supports non-EOL versions of Ruby. See [Ruby](https://www.ruby-lang.org/en/downloads) to see the list of non-EOL Rubies.
+MiniRacer only supports non-EOL versions of Ruby. See [Ruby Maintenance Branches](https://www.ruby-lang.org/en/downloads/branches/) for the list of non-EOL Rubies.
 
 If you require support for older versions of Ruby install an older version of the gem.
+
+MiniRacer **does not support** [Ruby built on MinGW](https://github.com/rubyjs/mini_racer/issues/252#issuecomment-1201172236, "pure windows" no Cygwin, no WSL2) (see https://github.com/rubyjs/libv8-node/issues/9).
 
 ## Features
 
@@ -112,16 +114,21 @@ context.eval('bar()', filename: 'a/bar.js')
 
 ### Fork safety
 
-Some Ruby web servers employ forking (for example unicorn or puma in clustered mode). V8 is not fork safe.
-Sadly Ruby does not have support for fork notifications per [#5446](https://bugs.ruby-lang.org/issues/5446).
+Some Ruby web servers employ forking (for example unicorn or puma in clustered mode). V8 is not fork safe by default and sadly Ruby does not have support for fork notifications per [#5446](https://bugs.ruby-lang.org/issues/5446).
+
+Since 0.6.1 mini_racer does support V8 single threaded platform mode which should remove most forking related issues. To enable run this before using `MiniRacer::Context`:
+
+```ruby
+MiniRacer::Platform.set_flags!(:single_threaded)
+```
 
 If you want to ensure your application does not leak memory after fork either:
 
-1. Ensure no MiniRacer::Context objects are created in the master process
+1. Ensure no `MiniRacer::Context` objects are created in the master process
 
 Or
 
-2. Dispose manually of all MiniRacer::Context objects prior to forking
+2. Dispose manually of all `MiniRacer::Context` objects prior to forking
 
 ```ruby
 # before fork
@@ -419,18 +426,15 @@ Or install it yourself as:
 **Note** using v8.h and compiling MiniRacer requires a C++11 standard compiler, more specifically clang 3.5 (or later) or GCC 6.3 (or later).
 
 
-## Travis-ci
+### Troubleshooting
 
-To install `mini-racer` you will need a version of GCC that supports C++11 (GCC 6.3) this is included by default in ubuntu trusty based images.
+If you have a problem installing mini_racer, please consider the following steps:
 
-Travis today ships by default with a precise based image. Precise Pangolin (12.04 LTS) was first released in August 2012. Even though you can install GCC 6.3 on precise the simpler approach is to opt for the trusty based image.
-
-Add this to your .travis.yml file:
-
-```
-- sudo: required
-- dist: trusty
-```
+* make sure you try the latest released version of mini_racer
+* make sure you have Rubygems >= 3.2.13 and bundler >= 2.2.13 installed via `gem update --system`
+* if you are using bundler, make sure to have `PLATFORMS` set correctly in `Gemfile.lock` via `bundle lock --add-platform`
+* make sure to recompile/reinstall `mini_racer` and `libv8-node` after system upgrades (for example via `gem uninstall --all mini_racer libv8-node`)
+* make sure you are on the latest patch/teeny version of a supported Ruby branch
 
 ## Similar Projects
 

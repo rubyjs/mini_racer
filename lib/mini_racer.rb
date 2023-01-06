@@ -1,17 +1,22 @@
 require "mini_racer/version"
-require "mini_racer_loader"
 require "pathname"
 
-ext_filename = "mini_racer_extension.#{RbConfig::CONFIG['DLEXT']}"
-ext_path = Gem.loaded_specs['mini_racer'].require_paths
-  .map { |p| (p = Pathname.new(p)).absolute? ? p : Pathname.new(__dir__).parent + p }
-ext_found = ext_path.map { |p| p + ext_filename }.find { |p| p.file? }
+if RUBY_ENGINE == "truffleruby"
+  require "mini_racer/truffleruby"
+else
+  require "mini_racer_loader" 
+  ext_filename = "mini_racer_extension.#{RbConfig::CONFIG['DLEXT']}"
+  ext_path = Gem.loaded_specs['mini_racer'].require_paths
+    .map { |p| (p = Pathname.new(p)).absolute? ? p : Pathname.new(__dir__).parent + p }
+  ext_found = ext_path.map { |p| p + ext_filename }.find { |p| p.file? }
 
-raise LoadError, "Could not find #{ext_filename} in #{ext_path.map(&:to_s)}" unless ext_found
-MiniRacer::Loader.load(ext_found.to_s)
+  raise LoadError, "Could not find #{ext_filename} in #{ext_path.map(&:to_s)}" unless ext_found
+  MiniRacer::Loader.load(ext_found.to_s)
+end
 
 require "thread"
 require "json"
+require "io/wait"
 
 module MiniRacer
 
@@ -202,7 +207,7 @@ module MiniRacer
       end
 
       if !(File === f)
-        raise ArgumentError("file_or_io")
+        raise ArgumentError, "file_or_io"
       end
 
       write_heap_snapshot_unsafe(f)
@@ -349,7 +354,7 @@ module MiniRacer
 
       t = Thread.new do
         begin
-          result = IO.select([rp],[],[],(@timeout/1000.0))
+          result = rp.wait_readable(@timeout/1000.0)
           if !result
             mutex.synchronize do
               stop unless done
@@ -366,7 +371,7 @@ module MiniRacer
         done = true
       end
 
-      wp.write("done")
+      wp.close
 
       # ensure we do not leak a thread in state
       t.join
@@ -375,12 +380,9 @@ module MiniRacer
       rval
     ensure
       # exceptions need to be handled
-      if t && wp
-        wp.write("done")
-        t.join
-      end
-      wp.close if wp
-      rp.close if rp
+      wp&.close
+      t&.join
+      rp&.close
     end
 
     def check_init_options!(isolate:, snapshot:, max_memory:, marshal_stack_depth:, ensure_gc_after_idle:, timeout:)

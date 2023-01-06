@@ -8,8 +8,8 @@ class MiniRacerTest < Minitest::Test
   # see `test_platform_set_flags_works` below
   MiniRacer::Platform.set_flags! :use_strict
 
-
   def test_locale
+    skip "TruffleRuby does not have all js timezone by default" if RUBY_ENGINE == "truffleruby"
     val = MiniRacer::Context.new.eval("new Date('April 28 2021').toLocaleDateString('es-MX');")
     assert_equal '28/4/2021', val
 
@@ -46,7 +46,7 @@ class MiniRacerTest < Minitest::Test
 
   def test_compile_nil_context
     context = MiniRacer::Context.new
-    assert_raises(ArgumentError) do
+    assert_raises(TypeError) do
         assert_equal 2, context.eval(nil)
     end
   end
@@ -88,7 +88,7 @@ class MiniRacerTest < Minitest::Test
 
     begin
       Thread.new do
-        sleep 0.001
+        sleep 0.01
         context.stop
       end
       context.eval('while(true){}')
@@ -102,6 +102,7 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_it_can_timeout_during_serialization
+    skip "TruffleRuby needs a fix for timing out during translation" if RUBY_ENGINE == "truffleruby"
     context = MiniRacer::Context.new(timeout: 500)
 
     assert_raises(MiniRacer::ScriptTerminatedError) do
@@ -302,12 +303,14 @@ raise FooError, "I like foos"
   end
 
   def test_max_memory
+    skip "TruffleRuby does not yet implement max_memory" if RUBY_ENGINE == "truffleruby"
     context = MiniRacer::Context.new(max_memory: 200_000_000)
 
     assert_raises(MiniRacer::V8OutOfMemoryError) { context.eval('let s = 1000; var a = new Array(s); a.fill(0); while(true) {s *= 1.1; let n = new Array(Math.floor(s)); n.fill(0); a = a.concat(n); };') }
   end
 
   def test_max_memory_for_call
+    skip "TruffleRuby does not yet implement max_memory" if RUBY_ENGINE == "truffleruby"
     context = MiniRacer::Context.new(max_memory: 100_000_000)
     context.eval(<<~JS)
       let s;
@@ -399,6 +402,7 @@ raise FooError, "I like foos"
   end
 
   def test_snapshot_size
+    skip "TruffleRuby does not yet implement snapshots" if RUBY_ENGINE == "truffleruby"
     snapshot = MiniRacer::Snapshot.new('var foo = "bar";')
 
     # for some reason sizes seem to change across runs, so we just
@@ -407,6 +411,7 @@ raise FooError, "I like foos"
   end
 
   def test_snapshot_dump
+    skip "TruffleRuby does not yet implement snapshots" if RUBY_ENGINE == "truffleruby"
     snapshot = MiniRacer::Snapshot.new('var foo = "bar";')
     dump = snapshot.dump
 
@@ -433,7 +438,7 @@ raise FooError, "I like foos"
   end
 
   def test_snapshots_can_be_warmed_up_with_no_side_effects
-    # shamelessly insipired by https://github.com/v8/v8/blob/5.3.254/test/cctest/test-serialize.cc#L792-L854
+    # shamelessly inspired by https://github.com/v8/v8/blob/5.3.254/test/cctest/test-serialize.cc#L792-L854
     snapshot_source = <<-JS
       function f() { return Math.sin(1); }
       var a = 5;
@@ -463,7 +468,7 @@ raise FooError, "I like foos"
   end
 
   def test_invalid_warmup_sources_throw_an_exception_2
-    assert_raises(ArgumentError) do
+    assert_raises(TypeError) do
       MiniRacer::Snapshot.new('function f() { return 1 }').warmup!([])
     end
   end
@@ -581,13 +586,11 @@ raise FooError, "I like foos"
   def test_concurrent_access_over_the_same_isolate_2
     isolate = MiniRacer::Isolate.new
 
-    equals_after_sleep = {}
-
     # workaround Rubies prior to commit 475c8701d74ebebe
     # (Make SecureRandom support Ractor, 2020-09-04)
     SecureRandom.hex
 
-    (1..10).map do |i|
+    equals_after_sleep = (1..10).map do |i|
       Thread.new {
         random = SecureRandom.hex
         context = MiniRacer::Context.new(isolate: isolate)
@@ -598,12 +601,12 @@ raise FooError, "I like foos"
 
         # cruby hashes are thread safe as long as you don't mess with the
         # same key in different threads
-        equals_after_sleep[i] = context.eval('a') == random
+        context.eval('a') == random
        }
-    end.each(&:join)
+    end.map(&:value)
 
     assert_equal 10, equals_after_sleep.size
-    assert equals_after_sleep.values.all?
+    assert equals_after_sleep.all?
   end
 
   def test_platform_set_flags_raises_an_exception_if_already_initialized
@@ -645,7 +648,7 @@ raise FooError, "I like foos"
 
   def test_timeout_in_ruby_land
     context = MiniRacer::Context.new(timeout: 50)
-    context.attach('sleep', proc{ sleep 0.1 })
+    context.attach('sleep', proc{ sleep 0.5 })
     assert_raises(MiniRacer::ScriptTerminatedError) do
       context.eval('sleep(); "hi";')
     end
@@ -711,6 +714,7 @@ raise FooError, "I like foos"
   end
 
   def test_estimated_size
+    skip "TruffleRuby does not yet implement heap_stats" if RUBY_ENGINE == "truffleruby"
     context = MiniRacer::Context.new(timeout: 5)
     context.eval("let a='testing';")
 
@@ -754,7 +758,7 @@ raise FooError, "I like foos"
 
     context.eval("'#{"x" * 10_000_000}'")
 
-    sleep 0.005
+    sleep 0.01
 
     end_heap = context.heap_stats[:used_heap_size]
 
@@ -780,7 +784,7 @@ raise FooError, "I like foos"
 
   def test_estimated_size_when_disposed
 
-    context = MiniRacer::Context.new(timeout: 5)
+    context = MiniRacer::Context.new(timeout: 50)
     context.eval("let a='testing';")
     context.dispose
 
@@ -805,7 +809,7 @@ raise FooError, "I like foos"
   end
 
   def test_attached_recursion
-    context = MiniRacer::Context.new(timeout: 20)
+    context = MiniRacer::Context.new(timeout: 200)
     context.attach("a", proc{|a| a})
     context.attach("b", proc{|a| a})
 
@@ -842,6 +846,7 @@ raise FooError, "I like foos"
   end
 
   def test_heap_dump
+    skip "TruffleRuby does not yet implement heap_dump" if RUBY_ENGINE == "truffleruby"
     f = Tempfile.new("heap")
     path = f.path
     f.unlink
@@ -873,6 +878,7 @@ raise FooError, "I like foos"
   end
 
   def test_cyclical_object_js
+    skip "TruffleRuby does not yet implement marshal_stack_depth" if RUBY_ENGINE == "truffleruby"
     context = MiniRacer::Context.new(marshal_stack_depth: 5)
     context.attach("a", proc{|a| a})
 
@@ -880,6 +886,7 @@ raise FooError, "I like foos"
   end
 
   def test_cyclical_array_js
+    skip "TruffleRuby does not yet implement marshal_stack_depth" if RUBY_ENGINE == "truffleruby"
     context = MiniRacer::Context.new(marshal_stack_depth: 5)
     context.attach("a", proc{|a| a})
 
@@ -887,6 +894,7 @@ raise FooError, "I like foos"
   end
 
   def test_cyclical_elem_in_array_js
+    skip "TruffleRuby does not yet implement marshal_stack_depth" if RUBY_ENGINE == "truffleruby"
     context = MiniRacer::Context.new(marshal_stack_depth: 5)
     context.attach("a", proc{|a| a})
 
@@ -894,9 +902,10 @@ raise FooError, "I like foos"
   end
 
   def test_infinite_object_js
+    skip "TruffleRuby does not yet implement marshal_stack_depth" if RUBY_ENGINE == "truffleruby"
     context = MiniRacer::Context.new(marshal_stack_depth: 5)
     context.attach("a", proc{|a| a})
-  
+
     js = <<~JS
       var d=0;
       function get(z) {
@@ -911,6 +920,7 @@ raise FooError, "I like foos"
   end
 
   def test_deep_object_js
+    skip "TruffleRuby does not yet implement marshal_stack_depth" if RUBY_ENGINE == "truffleruby"
     context = MiniRacer::Context.new(marshal_stack_depth: 5)
     context.attach("a", proc{|a| a})
 
@@ -966,6 +976,7 @@ raise FooError, "I like foos"
   end
 
   def test_webassembly
+    skip "TruffleRuby does not enable WebAssembly by default" if RUBY_ENGINE == "truffleruby"
     context = MiniRacer::Context.new()
     context.eval("let instance = null;")
     filename = File.expand_path("../support/add.wasm", __FILE__)
@@ -973,16 +984,16 @@ raise FooError, "I like foos"
     context.attach("print", proc {|f| puts f})
 
     context.eval <<~JS
-    WebAssembly
-      .instantiate(new Uint8Array(loadwasm()), {
-        wasi_snapshot_preview1: {
-          proc_exit: function() { print("exit"); },
-          args_get: function() { return 0 },
-          args_sizes_get: function() { return 0 }
-        }
-      })
-      .then(i => { instance = i["instance"];})
-      .catch(e => print(e.toString()));
+      WebAssembly
+        .instantiate(new Uint8Array(loadwasm()), {
+          wasi_snapshot_preview1: {
+            proc_exit: function() { print("exit"); },
+            args_get: function() { return 0 },
+            args_sizes_get: function() { return 0 }
+          }
+        })
+        .then(i => { instance = i["instance"];})
+        .catch(e => print(e.toString()));
     JS
 
     while !context.eval("instance") do
@@ -1021,5 +1032,28 @@ raise FooError, "I like foos"
         doit();
         JS
     end
+  end
+
+  def test_eval_returns_unfrozen_string
+    context = MiniRacer::Context.new
+    result = context.eval("'Hello George!'")
+    assert_equal("Hello George!", result)
+    assert_equal(false, result.frozen?)
+  end
+
+  def test_call_returns_unfrozen_string
+    context = MiniRacer::Context.new
+    context.eval('function hello(name) { return "Hello " + name + "!" }')
+    result = context.call('hello', 'George')
+    assert_equal("Hello George!", result)
+    assert_equal(false, result.frozen?)
+  end
+
+  def test_callback_string_arguments_are_not_frozen
+    context = MiniRacer::Context.new
+    context.attach("test", proc{ |text| text.frozen? })
+
+    frozen = context.eval("test('Hello George!')")
+    assert_equal(false, frozen)
   end
 end

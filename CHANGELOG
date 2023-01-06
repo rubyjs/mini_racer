@@ -1,4 +1,14 @@
-- 17-01-2021
+- 16-08-2022
+
+- 0.6.3
+
+  - Truffle ruby support! Thanks to Brandon Fish and the truffle team
+  - Hide libv8 symbols on ELF targets
+  - Slightly shrunk binary size
+  - Simplified timeout implementation
+  - Some stability fixes
+
+- 17-01-2022
 
 - 0.6.2
 

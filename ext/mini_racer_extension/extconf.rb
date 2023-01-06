@@ -1,4 +1,10 @@
 require 'mkmf'
+
+if RUBY_ENGINE == "truffleruby"
+  File.write("Makefile", dummy_makefile($srcdir).join(""))
+  return
+end
+
 require_relative '../../lib/mini_racer/version'
 gem 'libv8-node', MiniRacer::LIBV8_NODE_VERSION
 require 'libv8-node'
@@ -69,6 +75,9 @@ if enable_config('debug') || enable_config('asan')
 end
 
 Libv8::Node.configure_makefile
+
+# --exclude-libs is only for i386 PE and ELF targeted ports
+append_ldflags("-Wl,--exclude-libs=ALL ")
 
 if enable_config('asan')
   $CXXFLAGS.insert(0, " -fsanitize=address ")

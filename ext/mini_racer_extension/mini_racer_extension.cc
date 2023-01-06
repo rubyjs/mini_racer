@@ -305,8 +305,7 @@ static std::unique_ptr<Platform> current_platform = NULL;
 static std::mutex platform_lock;
 
 static pthread_attr_t *thread_attr_p;
-static pthread_rwlock_t exit_lock = PTHREAD_RWLOCK_INITIALIZER;
-static bool ruby_exiting = false; // guarded by exit_lock
+static std::atomic_int ruby_exiting(0);
 static bool single_threaded = false;
 
 static void mark_context(void *);
@@ -335,10 +334,7 @@ static const rb_data_type_t isolate_type = {
 static VALUE rb_platform_set_flag_as_str(VALUE _klass, VALUE flag_as_str) {
     bool platform_already_initialized = false;
 
-    if(TYPE(flag_as_str) != T_STRING) {
-        rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE" (should be a string)",
-                rb_obj_class(flag_as_str));
-    }
+    Check_Type(flag_as_str, T_STRING);
 
     platform_lock.lock();
 
@@ -664,11 +660,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
 	v8::String::Utf8Value symbol_name(isolate,
 	    Local<Symbol>::Cast(value)->Description(isolate));
 
-	VALUE str_symbol = rb_enc_str_new(
-	    *symbol_name,
-	    symbol_name.length(),
-	    rb_enc_find("utf-8")
-	);
+	VALUE str_symbol = rb_utf8_str_new(*symbol_name, symbol_name.length());
 
 	return rb_str_intern(str_symbol);
     }
@@ -679,7 +671,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
 	return Qnil;
     } else {
 	Local<String> rstr = rstr_maybe.ToLocalChecked();
-	return rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate), rb_enc_find("utf-8"));
+	return rb_utf8_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate));
     }
 }
 
@@ -861,7 +853,7 @@ StartupData warm_up_snapshot_data_blob(StartupData cold_snapshot_blob,
     return result;
 }
 
-static VALUE rb_snapshot_size(VALUE self, VALUE str) {
+static VALUE rb_snapshot_size(VALUE self) {
     SnapshotInfo* snapshot_info;
     TypedData_Get_Struct(self, SnapshotInfo, &snapshot_type, snapshot_info);
 
@@ -872,10 +864,7 @@ static VALUE rb_snapshot_load(VALUE self, VALUE str) {
     SnapshotInfo* snapshot_info;
     TypedData_Get_Struct(self, SnapshotInfo, &snapshot_type, snapshot_info);
 
-    if(TYPE(str) != T_STRING) {
-        rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE " (should be a string)",
-                rb_obj_class(str));
-    }
+    Check_Type(str, T_STRING);
 
     init_v8();
 
@@ -891,7 +880,7 @@ static VALUE rb_snapshot_load(VALUE self, VALUE str) {
     return Qnil;
 }
 
-static VALUE rb_snapshot_dump(VALUE self, VALUE str) {
+static VALUE rb_snapshot_dump(VALUE self) {
     SnapshotInfo* snapshot_info;
     TypedData_Get_Struct(self, SnapshotInfo, &snapshot_type, snapshot_info);
 
@@ -902,10 +891,7 @@ static VALUE rb_snapshot_warmup_unsafe(VALUE self, VALUE str) {
     SnapshotInfo* snapshot_info;
     TypedData_Get_Struct(self, SnapshotInfo, &snapshot_type, snapshot_info);
 
-    if(TYPE(str) != T_STRING) {
-        rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE " (should be a string)",
-                rb_obj_class(str));
-    }
+    Check_Type(str, T_STRING);
 
     init_v8();
 
@@ -1084,8 +1070,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
             // If we were terminated or have the memory softlimit flag set
             if (marshal_stack_maxdepth_reached) {
                 ruby_exception = rb_eScriptRuntimeError;
-                std::string msg = std::string("Marshal object depth too deep. Script terminated.");
-                message = rb_enc_str_new(msg.c_str(), msg.length(), rb_enc_find("utf-8"));
+                message = rb_utf8_str_new_literal("Marshal object depth too deep. Script terminated.");
             } else if (result.terminated || mem_softlimit_reached) {
                 ruby_exception = mem_softlimit_reached ? rb_eV8OutOfMemoryError : rb_eScriptTerminatedError;
             } else {
@@ -1120,7 +1105,7 @@ static VALUE convert_result_to_ruby(VALUE self /* context */,
 
         if (result.json) {
             Local<String> rstr = tmp->ToString(p_ctx->Get(isolate)).ToLocalChecked();
-            VALUE json_string = rb_enc_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate), rb_enc_find("utf-8"));
+            VALUE json_string = rb_utf8_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate));
             ret = rb_funcall(rb_mJSON, rb_intern("parse"), 1, json_string);
         } else {
             StackCounter::Reset(isolate);
@@ -1149,13 +1134,10 @@ static VALUE rb_context_eval_unsafe(VALUE self, VALUE str, VALUE filename) {
     TypedData_Get_Struct(self, ContextInfo, &context_type, context_info);
     Isolate* isolate = context_info->isolate_info->isolate;
 
-    if(TYPE(str) != T_STRING) {
-        rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE " (should be a string)",
-                rb_obj_class(str));
-    }
-    if(filename != Qnil && TYPE(filename) != T_STRING) {
-        rb_raise(rb_eArgError, "wrong type argument %" PRIsVALUE " (should be nil or a string)",
-                rb_obj_class(filename));
+    Check_Type(str, T_STRING);
+
+    if (!NIL_P(filename)) {
+        Check_Type(filename, T_STRING);
     }
 
     {
@@ -1474,42 +1456,33 @@ static void free_context_raw(void *arg) {
     if (isolate_info) {
         isolate_info->release();
     }
-
-    xfree(context_info);
 }
 
 static void *free_context_thr(void* arg) {
-    if (pthread_rwlock_tryrdlock(&exit_lock) != 0) {
-        return NULL;
+    if (ruby_exiting.load() == 0) {
+        free_context_raw(arg);
+        xfree(arg);
     }
-    if (ruby_exiting) {
-        return NULL;
-    }
-
-    free_context_raw(arg);
-
-    pthread_rwlock_unlock(&exit_lock);
-
     return NULL;
 }
 
 // destroys everything except freeing the ContextInfo struct (see deallocate())
 static void free_context(ContextInfo* context_info) {
-
     IsolateInfo* isolate_info = context_info->isolate_info;
-
-    ContextInfo* context_info_copy = ALLOC(ContextInfo);
-    context_info_copy->isolate_info = context_info->isolate_info;
-    context_info_copy->context = context_info->context;
 
     if (isolate_info && isolate_info->refs() > 1) {
         pthread_t free_context_thread;
+        ContextInfo* context_info_copy = ALLOC(ContextInfo);
+
+        context_info_copy->isolate_info = context_info->isolate_info;
+        context_info_copy->context = context_info->context;
         if (pthread_create(&free_context_thread, thread_attr_p,
                            free_context_thr, (void*)context_info_copy)) {
             fprintf(stderr, "WARNING failed to release memory in MiniRacer, thread to release could not be created, process will leak memory\n");
+            xfree(context_info_copy);
         }
     } else {
-        free_context_raw(context_info_copy);
+        free_context_raw(context_info);
     }
 
     context_info->context = NULL;
@@ -1782,9 +1755,7 @@ static VALUE rb_context_call_unsafe(int argc, VALUE *argv, VALUE self) {
     }
 
     VALUE function_name = argv[0];
-    if (TYPE(function_name) != T_STRING) {
-        rb_raise(rb_eTypeError, "first argument should be a String");
-    }
+    Check_Type(function_name, T_STRING);
 
     char *fname = RSTRING_PTR(function_name);
     if (!fname) {
@@ -1870,12 +1841,7 @@ static VALUE rb_context_create_isolate_value(VALUE self) {
 static void set_ruby_exiting(VALUE value) {
     (void)value;
 
-    int res = pthread_rwlock_wrlock(&exit_lock);
-
-    ruby_exiting  = true;
-    if (res == 0) {
-        pthread_rwlock_unlock(&exit_lock);
-    }
+    ruby_exiting.store(1);
 }
 
 extern "C" {
@@ -1941,9 +1907,5 @@ extern "C" {
                 thread_attr_p = &attr;
             }
         }
-        auto on_fork_for_child = []() {
-            exit_lock = PTHREAD_RWLOCK_INITIALIZER;
-        };
-        pthread_atfork(nullptr, nullptr, on_fork_for_child);
     }
 }
