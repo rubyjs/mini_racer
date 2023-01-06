@@ -11,18 +11,21 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - '11'
-          - '12'
-        platform:
-          - x86_64
-          # arm64
-    name: Test (darwin)
-    runs-on: macos-${{ matrix.os }}
+          - "macos-11"
+          - "macos-12"
+        ruby:
+          - "ruby-2.6"
+          - "ruby-2.7"
+          - "ruby-3.0"
+          - "ruby-3.1"
+    name: ${{ matrix.os }} - ${{ matrix.ruby }}
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Bundle
-        run: bundle install
+      - uses: actions/checkout@v3
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
       - name: Compile
         run: bundle exec rake compile
       - name: Test
