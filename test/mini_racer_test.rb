@@ -8,13 +8,24 @@ class MiniRacerTest < Minitest::Test
   # see `test_platform_set_flags_works` below
   MiniRacer::Platform.set_flags! :use_strict
 
-  def test_locale
+  def test_locale_mx
     skip "TruffleRuby does not have all js timezone by default" if RUBY_ENGINE == "truffleruby"
     val = MiniRacer::Context.new.eval("new Date('April 28 2021').toLocaleDateString('es-MX');")
     assert_equal '28/4/2021', val
+  end
 
+  def test_locale_us
+    skip "TruffleRuby does not have all js timezone by default" if RUBY_ENGINE == "truffleruby"
     val = MiniRacer::Context.new.eval("new Date('April 28 2021').toLocaleDateString('en-US');")
     assert_equal '4/28/2021', val
+  end
+
+  def test_locale_fr
+    # TODO: this causes a segfault on Linux
+
+    skip "TruffleRuby does not have all js timezone by default" if RUBY_ENGINE == "truffleruby"
+    val = MiniRacer::Context.new.eval("new Date('April 28 2021').toLocaleDateString('fr-FR');")
+    assert_equal '28/04/2021', val
   end
 
   def test_segfault
