@@ -6,9 +6,6 @@ on:
     branches:
       - master
 
-env:
-  LIBV8_NODE_GIT_BRANCH: 'node-18'
-
 jobs:
   test-truffleruby:
     strategy:
