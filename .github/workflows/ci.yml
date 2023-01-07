@@ -79,10 +79,6 @@ jobs:
         libc:
           - "gnu"
           - "musl"
-        exclude:
-          # there's no libv8-node (v16) for aarch64-linux-musl at the moment
-          - platform: "arm64"
-            libc: "musl"
 
     name: linux-${{ matrix.platform }} - ruby-${{ matrix.ruby }} - ${{ matrix.libc }}
     runs-on: ubuntu-20.04
