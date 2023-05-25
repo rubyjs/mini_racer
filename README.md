@@ -1,6 +1,6 @@
 # MiniRacer
 
-[![Test](https://github.com/rubyjs/mini_racer/actions/workflows/ci.yml/badge.svg)](https://github.com/rubyjs/mini_racer/actions/workflows/ci.yml)
+[![Test](https://github.com/rubyjs/mini_racer/actions/workflows/ci.yml/badge.svg)](https://github.com/rubyjs/mini_racer/actions/workflows/ci.yml) ![Gem](https://img.shields.io/gem/v/mini_racer)
 
 Minimal, modern embedded V8 for Ruby.
 
