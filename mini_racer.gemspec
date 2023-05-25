@@ -35,5 +35,5 @@ Gem::Specification.new do |spec|
 
   spec.extensions = ["ext/mini_racer_loader/extconf.rb", "ext/mini_racer_extension/extconf.rb"]
 
-  spec.required_ruby_version = '>= 2.6'
+  spec.required_ruby_version = '>= 3.0'
 end
