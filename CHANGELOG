@@ -23,7 +23,6 @@
   - Corrected re-raising of exceptions to support strings
   - During early termination of context under certain conditions MiniRacer could crash
 
-
 - 31-12-2021
 
 - 0.6.1
@@ -33,10 +32,10 @@
 
 - 0.6.0
 
-   - Ruby 3.1 support
-   - Fixes memory leak in heap snapshotting
-   - Improved compilation ergonomics in clang
-   - Migrated internal storage in c extension to TypedData
+  - Ruby 3.1 support
+  - Fixes memory leak in heap snapshotting
+  - Improved compilation ergonomics in clang
+  - Migrated internal storage in c extension to TypedData
 
 - 11-04-2021
 
@@ -87,7 +86,7 @@
 
 - 0.2.13
 
-   - FIX: edge case around ensure_gc_after_idle possibly firing when context is not idle
+  - FIX: edge case around ensure_gc_after_idle possibly firing when context is not idle
 
 - 15-05-2020
 
@@ -137,7 +136,7 @@
 
 - 0.2.5
 
-  - FIX: Compatiblity fixes for V8 7 and above @ignisf
+  - FIX: Compatibility fixes for V8 7 and above @ignisf
   - FIX: Memory leak in gc_callback @messense
   - IMPROVEMENT: Added example of sourcemap support @ianks
   - URGENT: you will need this release for latest version of libv8 to work
@@ -154,15 +153,15 @@
 - 0.2.3
 
   - Drop all conditional logic from Mini Racer compilation for clang, always
-	  rely on MacOS being High Sierra or up
+    rely on MacOS being High Sierra or up
 
 - 26-09-2018
 
 - 0.2.2
 
   - WORKAROUND: RUBY_PLATFORM is hardcoded on Ruby compile and can not be
-	trusted for feature detection, use a different technique when checking for
-	macOS Mojave
+    trusted for feature detection, use a different technique when checking for
+    macOS Mojave
 
 - 25-09-2018
 
@@ -190,7 +189,7 @@
 
 - 0.1.14
 
-  - libv8 erronuously bumped to beta, reverted change
+  - libv8 erroneously bumped to beta, reverted change
 
 23-08-2017
 
@@ -203,7 +202,7 @@
 - 0.1.12
 
   - Feature: upgrade libv8 to 5.9
-  - Fix: warning when runnin with ruby warnings enabled (missed @disposed initialize)
+  - Fix: warning when running with ruby warnings enabled (missed @disposed initialize)
 
 18-07-2017
 
@@ -215,16 +214,16 @@
 
 - 0.1.10
 
- - Fix leak: memory leak when disposing a context (20 bytes per context)
- - Feature: added #heap_stats so you can get visibility from context to actual memory usage of isolate
- - Feature: added #dispose so you reclaim all v8 memory right away as opposed to waiting for GC
- - Feature: you can now specify filename in an eval eg: eval('a = 1', filename: 'my_awesome.js')
+  - Fix leak: memory leak when disposing a context (20 bytes per context)
+  - Feature: added #heap_stats so you can get visibility from context to actual memory usage of isolate
+  - Feature: added #dispose so you reclaim all v8 memory right away as opposed to waiting for GC
+  - Feature: you can now specify filename in an eval eg: eval('a = 1', filename: 'my_awesome.js')
 
 09-03-2017
 
 - 0.1.9
 
- - Perf: speed up ruby/node boundary performance when moving large objects
+  - Perf: speed up ruby/node boundary performance when moving large objects
 
 06-02-2017
 
@@ -264,7 +263,6 @@
   - Support more conversions from Ruby back to JS (Hash, Symbol, Array)
   - Support attaching nested objects
 
-
 17-05-2016
 
 - 0.1.2
@@ -282,4 +280,4 @@
 
 - 0.1.1.beta.1
 
-   - First release
+  - First release
