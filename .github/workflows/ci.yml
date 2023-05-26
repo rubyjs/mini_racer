@@ -29,6 +29,7 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby }}
+          bundler: latest # to get this fix: https://github.com/rubygems/rubygems/issues/6165
           bundler-cache: true
       - name: Install GraalVM JS component
         run: gu install js
