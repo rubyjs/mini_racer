@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
 module MiniRacer
-  VERSION = "0.7.0"
-  LIBV8_NODE_VERSION = "~> 17.9.1.0"
+  VERSION = "0.8.0"
+  LIBV8_NODE_VERSION = "~> 18.16.0.0"
 end

@@ -518,7 +518,7 @@ nogvl_context_eval(void* arg) {
     MaybeLocal<Script> parsed_script;
 
     if (eval_params->filename) {
-        origin = new v8::ScriptOrigin(*eval_params->filename);
+        origin = new v8::ScriptOrigin(isolate, *eval_params->filename);
     }
 
     parsed_script = Script::Compile(context, *eval_params->eval, origin);
@@ -791,7 +791,7 @@ static bool run_extra_code(Isolate *isolate, Local<v8::Context> context,
     }
     Local<String> resource_name =
             String::NewFromUtf8(isolate, name).ToLocalChecked();
-    ScriptOrigin origin(resource_name);
+    ScriptOrigin origin(isolate, resource_name);
     ScriptCompiler::Source source(source_string, origin);
     Local<Script> script;
     if (!ScriptCompiler::Compile(context, &source).ToLocal(&script))
