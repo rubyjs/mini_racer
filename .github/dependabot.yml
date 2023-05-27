@@ -1,0 +1,7 @@
+version: 2
+updates:
+  # Look for updates to Github Action modules once a week
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
