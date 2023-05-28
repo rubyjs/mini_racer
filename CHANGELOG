@@ -1,23 +1,16 @@
-- Unreleased 0.8.0
+- 0.8.0 - 29-05-2022
 
   - Target Node to 18.16.0.0
 
-
-- 0.7.0
-
-- 29-05-2022
+- 0.7.0 - 29-05-2022
 
   - Target Node to 17.9.1.0
 
-- 25-05-2022
-
-- 0.6.4
+- 0.6.4 - 25-05-2022
 
   - Target Node 16.19.0.0
 
-- 16-08-2022
-
-- 0.6.3
+- 0.6.3 - 16-08-2022
 
   - Truffle ruby support! Thanks to Brandon Fish and the truffle team
   - Hide libv8 symbols on ELF targets
@@ -25,164 +18,130 @@
   - Simplified timeout implementation
   - Some stability fixes
 
-- 17-01-2022
-
-- 0.6.2
+- 17-01-2022 - 0.6.2
 
   - Fix support for compilation on 2.6, llvm compiles
   - Stability patches to handle rare memory leaks
   - Corrected re-raising of exceptions to support strings
   - During early termination of context under certain conditions MiniRacer could crash
 
-- 31-12-2021
-
-- 0.6.1
+- 0.6.1 - 31-12-2021
 
   - Added support for single threaded platform: `MiniRacer::Platform.set_flags! :single_threaded`
   must be called prior to booting ANY MiniRacer::Context
 
-- 0.6.0
+- 0.6.0 - 11-04-2021
 
   - Ruby 3.1 support
   - Fixes memory leak in heap snapshotting
   - Improved compilation ergonomics in clang
   - Migrated internal storage in c extension to TypedData
 
-- 11-04-2021
 
 - 0.5.0
+
   - Fixes issues on aarch (Apple M1)
   - Update to use libv8-node 16.x (#210) [Loic Nageleisen]
   - FEATURE: Configurable max marshal stack depth (#202) [seanmakesgames]
   - Ruby 2.3 and 2.4 are EOL, we no longer support them
 
-- 0.4.0
+- 0.4.0 - 08-04-2021
 
   - FEATURE: upgrade to libv8 node 15.14.0 (v8 8.6.395.17)
   - Promote 0.4.0.beta1 to release, using libv8-node release path
 
-- 08-04-2021
 
-- 0.4.0.beta1
+- 0.4.0.beta1 - 23-07-2020
 
   - FIX: on downgrade mkmf was picking the wrong version of libv8, this fix will correct future issues
   - FEATURE: upgraded libv8 to use node libv8 build which supports M1 and various ARM builds v8 moved to (8.6.395.17)
 
-- 23-07-2020
 
-- 0.3.1
+- 0.3.1 - 22-07-2020
 
   - FIX: specify that libv8 must be larger than 8.4.255 but smaller than 8.5, this avoids issues going forward
 
-- 22-07-2020
-
-- 0.3.0
+- 0.3.0 - 29-06-2020
 
   - FEATURE: upgraded to libv8 version 8.4.255.0
 
-- 29-06-2020
 
-- 0.2.15
+- 0.2.15 - 15-05-2020
 
   - FEATURE: basic wasm support via pump_message_loop
 
-- 15-05-2020
 
-- 0.2.14
+- 0.2.14 - 15-05-2020
 
   - FIX: ensure_gc_after_idle should take in milliseconds like the rest of the APIs not seconds
   - FEATURE: strict params on MiniRacer::Context.new
 
-- 15-05-2020
 
-- 0.2.13
+- 0.2.13 - 15-05-2020
 
   - FIX: edge case around ensure_gc_after_idle possibly firing when context is not idle
 
-- 15-05-2020
 
-- 0.2.12
+- 0.2.12 - 14-05-2020
 
   - FEATURE: isolate.low_memory_notification which can force a full GC
   - FEATURE: MiniRacer::Context.new(ensure_gc_after_idle: 2) - to force full GC 2 seconds after context is idle, this allows you to conserve memory on isolates
 
-- 14-05-2020
 
 - 0.2.11
 
   - FIX: dumping heap snapshots was not flushing the file leading to corrupt snapshots
   - FIX: a use-after-free shutdown crash
 
-- 0.2.10
-
-- 22-04-2020
-
+- 0.2.10 - 22-04-2020
   - FEATURE: memory softlimit support for nogvl_context_call
 
-- 0.2.9
-
-- 09-01-2020
+- 0.2.9 - 09-01-2020
 
   - FIX: correct segfault when JS returns a Symbol and properly cast to ruby symbol
 
-- 0.2.8
+- 0.2.8 - 11-11-2019
 
-- 11-11-2019
 
   - FIX: ensure thread live cycle is properly accounter for following file descriptor fix
 
-- 0.2.7
-
-- 11-11-2019
+- 0.2.7 - 11-11-2019
 
   - FIX: release the file descriptor for timeout pipe earlier (this avoids holding too many files open in Ruby 2.7)
 
-- 14-05-2019
-
-- 0.2.6
+- 0.2.6 - 14-05-2019
 
   - FEATURE: add support for write_heap_snapshot which helps you analyze memory
 
-- 25-04-2019
-
-- 0.2.5
+- 0.2.5 - 25-04-2019
 
   - FIX: Compatibility fixes for V8 7 and above @ignisf
   - FIX: Memory leak in gc_callback @messense
   - IMPROVEMENT: Added example of sourcemap support @ianks
   - URGENT: you will need this release for latest version of libv8 to work
 
-- 02-11-2018
-
-- 0.2.4
+- 0.2.4 - 02-11-2018
 
   - FIX: deadlock releasing context when shared isolates are used
   - FEATURE: include js backtrace when snapshots do not compile
 
-- 28-09-2018
-
-- 0.2.3
+- 0.2.3 - 28-09-2018
 
   - Drop all conditional logic from Mini Racer compilation for clang, always
     rely on MacOS being High Sierra or up
 
-- 26-09-2018
-
-- 0.2.2
+- 0.2.2 - 26-09-2018
 
   - WORKAROUND: RUBY_PLATFORM is hardcoded on Ruby compile and can not be
     trusted for feature detection, use a different technique when checking for
     macOS Mojave
 
-- 25-09-2018
-
-- 0.2.1
+- 0.2.1 - 25-09-2018
 
   - FEATURE: Mojave macOS support
 
-- 06-07-2018
+- 0.2.0 - 06-07-2018
 
-- 0.2.0
   - FEATURE: context#call to allow for cheaper invocation of functions
   - FIX: rare memory leak when terminating a long running attached function
   - FIX: rare segfault when terminating a long running attached function
@@ -190,105 +149,80 @@
   - Account for changes in the upstream V8 API @ignisf
   - Support for libv8 6.7
 
-23-08-2017
-
-- 0.1.15
+- 0.1.15 - 23-08-2017
 
   - bump dependency of libv8 to 6.3
 
-23-08-2017
-
-- 0.1.14
+- 0.1.14 - 23-08-2017
 
   - libv8 erroneously bumped to beta, reverted change
 
-23-08-2017
-
-- 0.1.13
+- 0.1.13 - 23-08-2017
 
   - Fix: amend array buffer allocator to use v8 6.0 compatible allocator @ignisf
 
-18-07-2017
-
-- 0.1.12
+- 0.1.12 - 18-07-2017
 
   - Feature: upgrade libv8 to 5.9
   - Fix: warning when running with ruby warnings enabled (missed @disposed initialize)
 
-18-07-2017
-
-- 0.1.11
+- 0.1.11 - 18-07-2017
 
   - Feature: upgrade libv8 to 5.7
 
-13-07-2017
 
-- 0.1.10
+- 0.1.10 - 13-07-2017
 
   - Fix leak: memory leak when disposing a context (20 bytes per context)
   - Feature: added #heap_stats so you can get visibility from context to actual memory usage of isolate
   - Feature: added #dispose so you reclaim all v8 memory right away as opposed to waiting for GC
   - Feature: you can now specify filename in an eval eg: eval('a = 1', filename: 'my_awesome.js')
 
-09-03-2017
 
-- 0.1.9
+- 0.1.9 - 09-03-2017
 
   - Perf: speed up ruby/node boundary performance when moving large objects
 
-06-02-2017
-
-- 0.1.8
+- 0.1.8 - 06-02-2017
 
   - Fix: Include math.h to fix use of undeclared identifier floor with rbx. See #51
 
-02-11-2016
-
-- 0.1.7
+- 0.1.7 - 02-11-2016
 
   - Fix: if for some reason an isolate was forked don't free it and raise a warning instead to avoid hanging process
 
-25-10-2016
-
-- 0.1.6
+- 0.1.6 - 25-10-2016
 
   - Fix: timeout behavior was incorrect, in some cases stop could be called on already stopped contexts
 
-10-10-2016
-
-- 0.1.5
+- 0.1.5 - 10-10-2016
 
   - Support for snapshots, shared isolates, runtime flags thanks to @wk8
   - Fix timeout behavior when it occurs in an attached Ruby method
 
-19-05-2016
-
-- 0.1.4
+- 0.1.4 - 19-05-2016
 
   - Set upper bound for libv8 inclusion @ignisf
   - Support conversion of Date, Time and DateTime from Ruby to JS @seanmakesgames
   - Support conversion of large numbers back from Ruby to JS @seanmakesgames
 
-- 0.1.3
+- 0.1.3 - 17-05-2016
 
   - Support more conversions from Ruby back to JS (Hash, Symbol, Array)
   - Support attaching nested objects
 
-17-05-2016
 
-- 0.1.2
+- 0.1.2 - 17-05-2016
 
   - Gemspec specifies minimal version of Ruby (2.0)
   - Implement #load on Context to load files
 
-17-05-2016
 
 - 0.1.1
 
   - Added unblock function so SIGINT does not lead to a crash
 
-14-05-2016
 
-- 0.1.1.beta.1
+- 0.1.1.beta.1 - 14-05-2016
 
   - First release
