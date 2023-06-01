@@ -975,6 +975,8 @@ static VALUE rb_isolate_pump_message_loop(VALUE self) {
 
     if (current_platform == NULL) return Qfalse;
 
+    Locker guard { isolate_info->isolate };
+
     if (platform::PumpMessageLoop(current_platform.get(), isolate_info->isolate)){
 	return Qtrue;
     } else {
