@@ -21,7 +21,7 @@ Gem::Specification.new do |spec|
     "source_code_uri"   => "https://github.com/discourse/mini_racer/tree/v#{spec.version}",
   }
 
-  spec.files         = Dir["lib/**/*", "ext/**/*", "README.md", "LICENSE.txt", "CHANGELOG", "CODE_OF_CONDUCT.md"]
+  spec.files         = FileList["lib/**/*", "ext/**/*", "README.md", "LICENSE.txt", "CHANGELOG", "CODE_OF_CONDUCT.md"].exclude("**/*.bundle", "**/*.{c,cc}")
   spec.require_paths = ["lib"]
 
   spec.add_development_dependency "bundler"
