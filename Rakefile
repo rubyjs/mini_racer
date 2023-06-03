@@ -1,6 +1,9 @@
 require "bundler/gem_tasks"
 require "rake/testtask"
 
+CLEAN.add("{ext,lib}/**/*.{o,so,bundle}", "pkg")
+CLOBBER.add("Gemfile.lock")
+
 Rake::TestTask.new(:test) do |t|
   t.libs << "test"
   t.libs << "lib"
@@ -24,7 +27,6 @@ else
   Rake::ExtensionTask.new( 'mini_racer_loader', gem )
   Rake::ExtensionTask.new( 'mini_racer_extension', gem )
 end
-
 
 
 # via http://blog.flavorjon.es/2009/06/easily-valgrind-gdb-your-ruby-c.html
