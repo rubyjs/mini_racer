@@ -88,7 +88,6 @@ jobs:
         if: ${{ matrix.platform != 'amd64' }}
         run: |
           docker run --privileged --rm tonistiigi/binfmt:latest --install ${{ matrix.platform }} | tee platforms.json
-          echo "platforms=$(cat platforms.json)" >> $GITHUB_OUTPUT
       - name: Start container
         id: container
         run: |
