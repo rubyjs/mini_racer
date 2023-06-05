@@ -88,7 +88,7 @@ jobs:
         if: ${{ matrix.platform != 'amd64' }}
         run: |
           docker run --privileged --rm tonistiigi/binfmt:latest --install ${{ matrix.platform }} | tee platforms.json
-          echo "::set-output name=platforms::$(cat platforms.json)"
+          echo "platforms=$(cat platforms.json)" >> $GITHUB_OUTPUT
       - name: Start container
         id: container
         run: |
@@ -100,20 +100,20 @@ jobs:
               echo 'ruby:${{ matrix.ruby }}-alpine'
               ;;
           esac > container_image
-          echo "::set-output name=image::$(cat container_image)"
+          echo "image=$(cat container_image)" >> $GITHUB_OUTPUT
           docker run --rm -d -v "${PWD}":"${PWD}" -w "${PWD}" --platform linux/${{ matrix.platform }} $(cat container_image) /bin/sleep 64d | tee container_id
           docker exec -w "${PWD}" $(cat container_id) uname -a
-          echo "::set-output name=id::$(cat container_id)"
+          echo "container_id=$(cat container_id)" >> $GITHUB_OUTPUT
       - name: Install Alpine system dependencies
         if: ${{ matrix.libc == 'musl' }}
-        run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} apk add --no-cache build-base bash git
+        run: docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} apk add --no-cache build-base bash git
       - name: Checkout
         uses: actions/checkout@v3
       - name: Update Rubygems
-        run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} gem update --system
+        run: docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} gem update --system
       - name: Bundle
-        run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} bundle install
+        run: docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} bundle install
       - name: Compile
-        run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} bundle exec rake compile
+        run: docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} bundle exec rake compile
       - name: Test
-        run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} bundle exec rake test
+        run: docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} bundle exec rake test
