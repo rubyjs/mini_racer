@@ -25,7 +25,7 @@ jobs:
       TRUFFLERUBYOPT: "--jvm --polyglot"
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby }}
@@ -54,7 +54,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby }}
@@ -108,7 +108,7 @@ jobs:
         if: ${{ matrix.libc == 'musl' }}
         run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} apk add --no-cache build-base bash git
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Update Rubygems
         run: docker exec -w "${PWD}" ${{ steps.container.outputs.id }} gem update --system
       - name: Bundle
