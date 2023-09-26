@@ -72,8 +72,7 @@ module MiniRacer
 
       unless Polyglot.languages.include? "js"
         raise "The language 'js' is not available, you likely need to `export TRUFFLERUBYOPT='--jvm --polyglot'`\n" \
-          "You also need to install the 'js' component with 'gu install js' on GraalVM 22.2+\n" \
-          "Note that you need TruffleRuby+GraalVM and not just the TruffleRuby standalone to use MiniRacer"
+          "You also need to install the 'js' component, see https://github.com/oracle/truffleruby/blob/master/doc/user/polyglot.md#installing-other-languages"
       end
 
       @context = Polyglot::InnerContext.new(on_cancelled: -> { 

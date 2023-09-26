@@ -16,7 +16,7 @@ jobs:
           - "macos-12"
           - "ubuntu-20.04"
         ruby:
-          - "truffleruby+graalvm-head"
+          - "truffleruby+graalvm"
 
     name: ${{ matrix.os }} - ${{ matrix.ruby }}
     runs-on: ${{ matrix.os }}
@@ -32,7 +32,7 @@ jobs:
           bundler: latest # to get this fix: https://github.com/rubygems/rubygems/issues/6165
           bundler-cache: true
       - name: Install GraalVM JS component
-        run: gu install js
+        run: truffleruby-polyglot-get js
       - name: Compile
         run: bundle exec rake compile
       - name: Test
