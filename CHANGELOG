@@ -1,6 +1,7 @@
 - 0.8.0 - 29-05-2022
 
   - Target Node to 18.16.0.0
+  - Drop supporting EOL'd Ruby 2.7
 
 - 0.7.0 - 29-05-2022
 
