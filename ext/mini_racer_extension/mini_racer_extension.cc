@@ -1281,7 +1281,8 @@ gvl_ruby_callback(void* data) {
 
     if(callback_data.failed) {
         rb_iv_set(parent, "@current_exception", result);
-        args->GetIsolate()->ThrowException(String::NewFromUtf8Literal(args->GetIsolate(), "Ruby exception"));
+        VALUE message = rb_funcall(result, rb_intern("message"), 0);
+        args->GetIsolate()->ThrowException(String::NewFromUtf8(args->GetIsolate(), RSTRING_PTR(message), NewStringType::kNormal, RSTRING_LENINT(message)).ToLocalChecked());
     }
     else {
         HandleScope scope(args->GetIsolate());
