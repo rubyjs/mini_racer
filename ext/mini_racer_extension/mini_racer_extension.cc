@@ -965,6 +965,8 @@ static VALUE rb_isolate_low_memory_notification(VALUE self) {
 
     if (current_platform == NULL) return Qfalse;
 
+    Locker guard { isolate_info->isolate };
+
     isolate_info->isolate->LowMemoryNotification();
     return Qnil;
 }
