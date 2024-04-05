@@ -1,13 +1,13 @@
 require "bundler/gem_tasks"
-require "rake/testtask"
+require "minitest/test_task"
 
 CLEAN.add("{ext,lib}/**/*.{o,so,bundle}", "pkg")
 CLOBBER.add("Gemfile.lock")
 
-Rake::TestTask.new(:test) do |t|
+Minitest::TestTask.create(:test) do |t|
   t.libs << "test"
   t.libs << "lib"
-  t.test_files = FileList['test/**/*_test.rb']
+  t.test_globs = FileList['test/**/*_test.rb']
 end
 
 task :default => [:compile, :test]
