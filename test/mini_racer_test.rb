@@ -999,56 +999,47 @@ raise FooError, "I like foos"
     assert_equal(v, 99)
   end
 
-# Fatal error in HandleScope::HandleScope
-# Entering the V8 API without proper locking in place
-# log has been seen as (in order):
-# abcdcdcdcdcdcdcdcdcdcdcdcdc
-# abcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdc
-# abcdcdcdcdcdcdcdcdcdcdcdcdc
-# abcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdc
-# abcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdc
-# cuts after c + cuts before d + never e => likely to be Isolate#pump_message_loop
-# def test_webassembly
-#   skip "TruffleRuby does not enable WebAssembly by default" if RUBY_ENGINE == "truffleruby"
-#   log = File.open('testlog2', 'wb')
-#   context = MiniRacer::Context.new()
-#   context.eval("let instance = null;")
-#   filename = File.expand_path("../support/add.wasm", __FILE__)
-#   context.attach("loadwasm", proc {|f| File.read(filename).each_byte.to_a})
-#   context.attach("print", proc {|f| puts f})
+  def test_webassembly
+    skip "TruffleRuby does not enable WebAssembly by default" if RUBY_ENGINE == "truffleruby"
+    log = File.open('testlog2', 'wb')
+    context = MiniRacer::Context.new()
+    context.eval("let instance = null;")
+    filename = File.expand_path("../support/add.wasm", __FILE__)
+    context.attach("loadwasm", proc {|f| File.read(filename).each_byte.to_a})
+    context.attach("print", proc {|f| puts f})
 
-#   log << 'a'
-#   log.flush
+    log << 'a'
+    log.flush
 
-#   context.eval <<~JS
-#     WebAssembly
-#       .instantiate(new Uint8Array(loadwasm()), {
-#         wasi_snapshot_preview1: {
-#           proc_exit: function() { print("exit"); },
-#           args_get: function() { return 0 },
-#           args_sizes_get: function() { return 0 }
-#         }
-#       })
-#       .then(i => { instance = i["instance"];})
-#       .catch(e => print(e.toString()));
-#   JS
-#   log << 'b'
-#   log.flush
+    context.eval <<~JS
+      WebAssembly
+        .instantiate(new Uint8Array(loadwasm()), {
+          wasi_snapshot_preview1: {
+            proc_exit: function() { print("exit"); },
+            args_get: function() { return 0 },
+            args_sizes_get: function() { return 0 }
+          }
+        })
+        .then(i => { instance = i["instance"];})
+        .catch(e => print(e.toString()));
+    JS
+    log << 'b'
+    log.flush
 
-#   while !context.eval("instance") do
-#     log << 'c'
-#     log.flush
-#     context.isolate.pump_message_loop
-#     log << 'd'
-#     log.flush
-#   end
-#   log << 'e'
-#   log.flush
+    while !context.eval("instance") do
+      log << 'c'
+      log.flush
+      context.isolate.pump_message_loop
+      log << 'd'
+      log.flush
+    end
+    log << 'e'
+    log.flush
 
-#   assert_equal(3, context.eval("instance.exports.add(1,2)"))
-# ensure
-#   log.close
-# end
+    assert_equal(3, context.eval("instance.exports.add(1,2)"))
+  ensure
+    log.close
+  end
 
   class ReproError < StandardError
     def initialize(response)
