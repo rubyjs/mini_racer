@@ -1001,15 +1001,11 @@ raise FooError, "I like foos"
 
   def test_webassembly
     skip "TruffleRuby does not enable WebAssembly by default" if RUBY_ENGINE == "truffleruby"
-    log = File.open('testlog2', 'wb')
     context = MiniRacer::Context.new()
     context.eval("let instance = null;")
     filename = File.expand_path("../support/add.wasm", __FILE__)
     context.attach("loadwasm", proc {|f| File.read(filename).each_byte.to_a})
     context.attach("print", proc {|f| puts f})
-
-    log << 'a'
-    log.flush
 
     context.eval <<~JS
       WebAssembly
@@ -1023,22 +1019,12 @@ raise FooError, "I like foos"
         .then(i => { instance = i["instance"];})
         .catch(e => print(e.toString()));
     JS
-    log << 'b'
-    log.flush
 
     while !context.eval("instance") do
-      log << 'c'
-      log.flush
       context.isolate.pump_message_loop
-      log << 'd'
-      log.flush
     end
-    log << 'e'
-    log.flush
 
     assert_equal(3, context.eval("instance.exports.add(1,2)"))
-  ensure
-    log.close
   end
 
   class ReproError < StandardError
