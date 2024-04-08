@@ -450,33 +450,29 @@ raise FooError, "I like foos"
     GC.start
   end
 
-# segfault
-# CFUNC  :warmup_unsafe!
-# METHOD /Users/loic.nageleisen/Source/github.com/rubyjs/libv8-node/test/mini_racer/lib/mini_racer.rb:452 (def warmup!)
-#
-# def test_snapshots_can_be_warmed_up_with_no_side_effects
-#   # shamelessly inspired by https://github.com/v8/v8/blob/5.3.254/test/cctest/test-serialize.cc#L792-L854
-#   snapshot_source = <<-JS
-#     function f() { return Math.sin(1); }
-#     var a = 5;
-#   JS
+  def test_snapshots_can_be_warmed_up_with_no_side_effects
+    # shamelessly inspired by https://github.com/v8/v8/blob/5.3.254/test/cctest/test-serialize.cc#L792-L854
+    snapshot_source = <<-JS
+      function f() { return Math.sin(1); }
+      var a = 5;
+    JS
 
-#   snapshot = MiniRacer::Snapshot.new(snapshot_source)
+    snapshot = MiniRacer::Snapshot.new(snapshot_source)
 
-#   warmup_source = <<-JS
-#     Math.tan(1);
-#     var a = f();
-#     Math.sin = 1;
-#   JS
+    warmup_source = <<-JS
+      Math.tan(1);
+      var a = f();
+      Math.sin = 1;
+    JS
 
-#   warmed_up_snapshot = snapshot.warmup!(warmup_source)
+    warmed_up_snapshot = snapshot.warmup!(warmup_source)
 
-#   context = MiniRacer::Context.new(snapshot: snapshot)
+    context = MiniRacer::Context.new(snapshot: snapshot)
 
-#   assert_equal 5, context.eval("a")
-#   assert_equal "function", context.eval("typeof(Math.sin)")
-#   assert_same snapshot, warmed_up_snapshot
-# end
+    assert_equal 5, context.eval("a")
+    assert_equal "function", context.eval("typeof(Math.sin)")
+    assert_same snapshot, warmed_up_snapshot
+  end
 
   def test_invalid_warmup_sources_throw_an_exception
     assert_raises(MiniRacer::SnapshotError) do
@@ -545,42 +541,38 @@ raise FooError, "I like foos"
     GC.start
   end
 
-# segfault
-# CFUNC  :init_with_snapshot
-# METHOD /Users/loic.nageleisen/Source/github.com/rubyjs/libv8-node/test/mini_racer/lib/mini_racer.rb:81 (Isolate#initialize)
-#
-# def test_isolates_from_snapshot_dont_get_corrupted_if_the_snapshot_gets_warmed_up_or_GCed
-#   # basically tests that isolates get their own copy of the snapshot and don't
-#   # get corrupted if the snapshot is subsequently warmed up
-#   snapshot_source = <<-JS
-#     function f() { return Math.sin(1); }
-#     var a = 5;
-#   JS
+  def test_isolates_from_snapshot_dont_get_corrupted_if_the_snapshot_gets_warmed_up_or_GCed
+    # basically tests that isolates get their own copy of the snapshot and don't
+    # get corrupted if the snapshot is subsequently warmed up
+    snapshot_source = <<-JS
+      function f() { return Math.sin(1); }
+      var a = 5;
+    JS
 
-#   snapshot = MiniRacer::Snapshot.new(snapshot_source)
-#   isolate = MiniRacer::Isolate.new(snapshot)
+    snapshot = MiniRacer::Snapshot.new(snapshot_source)
+    isolate = MiniRacer::Isolate.new(snapshot)
 
-#   warmump_source = <<-JS
-#     Math.tan(1);
-#     var a = f();
-#     Math.sin = 1;
-#   JS
+    warmump_source = <<-JS
+      Math.tan(1);
+      var a = f();
+      Math.sin = 1;
+    JS
 
-#   snapshot.warmup!(warmump_source)
+    snapshot.warmup!(warmump_source)
 
-#   context1 = MiniRacer::Context.new(isolate: isolate)
+    context1 = MiniRacer::Context.new(isolate: isolate)
 
-#   assert_equal 5, context1.eval("a")
-#   assert_equal "function", context1.eval("typeof(Math.sin)")
+    assert_equal 5, context1.eval("a")
+    assert_equal "function", context1.eval("typeof(Math.sin)")
 
-#   snapshot = nil
-#   GC.start
+    snapshot = nil
+    GC.start
 
-#   context2 = MiniRacer::Context.new(isolate: isolate)
+    context2 = MiniRacer::Context.new(isolate: isolate)
 
-#   assert_equal 5, context2.eval("a")
-#   assert_equal "function", context2.eval("typeof(Math.sin)")
-# end
+    assert_equal 5, context2.eval("a")
+    assert_equal "function", context2.eval("typeof(Math.sin)")
+  end
 
   def test_isolate_can_be_notified_of_idle_time
     isolate = MiniRacer::Isolate.new
@@ -734,23 +726,20 @@ raise FooError, "I like foos"
     end
   end
 
-# Failure: expecting the isolate to have values for all the vals
-# {:total_physical_size=>835584, :total_heap_size_executable=>0, :total_heap_size=>1392640, :used_heap_size=>345736, :heap_size_limit=>1518338048}
-# def test_estimated_size
-#   skip "TruffleRuby does not yet implement heap_stats" if RUBY_ENGINE == "truffleruby"
-#   context = MiniRacer::Context.new(timeout: 5)
-#   context.eval("let a='testing';")
+  def test_estimated_size
+    skip "TruffleRuby does not yet implement heap_stats" if RUBY_ENGINE == "truffleruby"
+    context = MiniRacer::Context.new(timeout: 5)
+    context.eval("let a='testing';")
 
-#   stats = context.heap_stats
-#   # eg: {:total_physical_size=>1280640, :total_heap_size_executable=>4194304, :total_heap_size=>3100672, :used_heap_size=>1205376, :heap_size_limit=>1501560832}
-#   assert_equal(
-#     [:total_physical_size, :total_heap_size_executable, :total_heap_size, :used_heap_size, :heap_size_limit].sort,
-#     stats.keys.sort
-#   )
+    stats = context.heap_stats
+    # eg: {:total_physical_size=>1280640, :total_heap_size_executable=>4194304, :total_heap_size=>3100672, :used_heap_size=>1205376, :heap_size_limit=>1501560832}
+    assert_equal(
+      [:total_physical_size, :total_heap_size_executable, :total_heap_size, :used_heap_size, :heap_size_limit].sort,
+      stats.keys.sort
+    )
 
-#   File.open('testlog', 'wb') { |f| f << stats.inspect }
-#   assert(stats.values.all?{|v| v > 0}, "expecting the isolate to have values for all the vals")
-# end
+    assert(stats.values.all?{|v| v > 0}, "expecting the isolate to have values for all the vals")
+  end
 
   def test_releasing_memory
     context = MiniRacer::Context.new
