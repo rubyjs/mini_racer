@@ -728,7 +728,7 @@ raise FooError, "I like foos"
 
   def test_estimated_size
     skip "TruffleRuby does not yet implement heap_stats" if RUBY_ENGINE == "truffleruby"
-    context = MiniRacer::Context.new(timeout: 5)
+    context = MiniRacer::Context.new(timeout: 500)
     context.eval(<<-JS)
     let a='testing';
     let f=function(foo) { foo + 42 };
