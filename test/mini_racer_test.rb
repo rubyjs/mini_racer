@@ -729,7 +729,13 @@ raise FooError, "I like foos"
   def test_estimated_size
     skip "TruffleRuby does not yet implement heap_stats" if RUBY_ENGINE == "truffleruby"
     context = MiniRacer::Context.new(timeout: 5)
-    context.eval("let a='testing';")
+    context.eval(<<-JS)
+    let a='testing';
+    let f=function(foo) { foo + 42 };
+
+    // call `f` a lot to have things JIT'd so that total_heap_size_executable becomes > 0
+    for (let i = 0; i < 1000000; i++) { f(10); }
+    JS
 
     stats = context.heap_stats
     # eg: {:total_physical_size=>1280640, :total_heap_size_executable=>4194304, :total_heap_size=>3100672, :used_heap_size=>1205376, :heap_size_limit=>1501560832}
