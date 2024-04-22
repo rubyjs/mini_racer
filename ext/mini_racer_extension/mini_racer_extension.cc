@@ -965,6 +965,8 @@ static VALUE rb_isolate_low_memory_notification(VALUE self) {
 
     if (current_platform == NULL) return Qfalse;
 
+    Locker guard { isolate_info->isolate };
+
     isolate_info->isolate->LowMemoryNotification();
     return Qnil;
 }
@@ -974,6 +976,8 @@ static VALUE rb_isolate_pump_message_loop(VALUE self) {
     TypedData_Get_Struct(self, IsolateInfo, &isolate_type, isolate_info);
 
     if (current_platform == NULL) return Qfalse;
+
+    Locker guard { isolate_info->isolate };
 
     if (platform::PumpMessageLoop(current_platform.get(), isolate_info->isolate)){
 	return Qtrue;
