@@ -39,6 +39,13 @@ jobs:
         run: bundle exec rake compile
       - name: Test
         run: bundle exec rake test
+      - name: Build & Install gem
+        run: |
+          bundle exec rake build
+          gem uninstall --all --force mini_racer
+          gem install pkg/*.gem
+      - name: Smoke Test installed gem
+        run: ruby test/smoke/minimal.rb
 
   test-darwin:
     strategy:
@@ -68,6 +75,13 @@ jobs:
         run: bundle exec rake compile
       - name: Test
         run: bundle exec rake test
+      - name: Build & Install gem
+        run: |
+          bundle exec rake build
+          gem uninstall --all --force mini_racer
+          gem install pkg/*.gem
+      - name: Smoke Test installed gem
+        run: ruby test/smoke/minimal.rb
 
   test-linux:
     strategy:
@@ -122,3 +136,10 @@ jobs:
         run: docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} bundle exec rake compile
       - name: Test
         run: docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} bundle exec rake test
+      - name: Build & Install gem
+        run: |
+          docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} bundle exec rake build
+          docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} gem uninstall --all --force mini_racer
+          docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} gem install pkg/*.gem
+      - name: Smoke Test installed gem
+        run: docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} ruby test/smoke/minimal.rb
