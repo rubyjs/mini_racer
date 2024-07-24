@@ -12,7 +12,6 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - "macos-11" # deprecated by GitHub
           - "macos-12"
           - "macos-13"
           - "macos-14" # arm64
@@ -52,7 +51,6 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - "macos-11" # deprecated by GitHub
           - "macos-12"
           - "macos-13"
           - "macos-14" # arm64
