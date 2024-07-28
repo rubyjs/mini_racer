@@ -55,7 +55,6 @@ jobs:
           - "macos-13"
           - "macos-14" # arm64
         ruby:
-          - "ruby-3.0" # EOL as of 2024-04-23
           - "ruby-3.1"
           - "ruby-3.2"
           - "ruby-3.3"
@@ -86,7 +85,6 @@ jobs:
       fail-fast: false
       matrix:
         ruby:
-          - "3.0" # EOL as of 2024-04-23
           - "3.1"
           - "3.2"
           - "3.3"
