@@ -1,3 +1,8 @@
+- 0.13.0 - 29-07-2024
+
+  - Target Node to 22.5.1.0 0 - corrects segfault in earlier release
+  - Remove Ruby 3.0 which is EOL (use ealier version of gem if needed)
+
 - 0.9.0 - 25-03-2024
 
   - Target Node to 18.19.0.0
