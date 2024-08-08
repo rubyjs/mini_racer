@@ -3,7 +3,7 @@ require "pathname"
 
 if RUBY_ENGINE == "truffleruby"
   require "mini_racer/truffleruby"
-elsif false
+elsif true
   require "mini_racer_loader"
   ext_filename = "mini_racer_extension.#{RbConfig::CONFIG["DLEXT"]}"
   ext_path =
