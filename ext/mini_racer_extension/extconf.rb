@@ -1,26 +1,25 @@
-require 'mkmf'
+require "mkmf"
 
 if RUBY_ENGINE == "truffleruby"
   File.write("Makefile", dummy_makefile($srcdir).join(""))
   return
 end
 
-require_relative '../../lib/mini_racer/version'
-gem 'libv8-node', MiniRacer::LIBV8_NODE_VERSION
-require 'libv8-node'
+require_relative "../../lib/mini_racer/version"
 
 IS_DARWIN = RUBY_PLATFORM =~ /darwin/
 
-have_library('pthread')
-have_library('objc') if IS_DARWIN
+have_library("pthread")
+have_library("objc") if IS_DARWIN
 $CXXFLAGS += " -Wall" unless $CXXFLAGS.split.include? "-Wall"
 $CXXFLAGS += " -g" unless $CXXFLAGS.split.include? "-g"
 $CXXFLAGS += " -rdynamic" unless $CXXFLAGS.split.include? "-rdynamic"
 $CXXFLAGS += " -fPIC" unless $CXXFLAGS.split.include? "-rdynamic" or IS_DARWIN
-$CXXFLAGS += " -std=c++17"
+$CXXFLAGS += " -std=c++20"
 $CXXFLAGS += " -fpermissive"
 #$CXXFLAGS += " -DV8_COMPRESS_POINTERS"
-$CXXFLAGS += " -fvisibility=hidden "
+$CXXFLAGS += " -latomic"
+# $CXXFLAGS += " -fvisibility=hidden "
 
 # __declspec gets used by clang via ruby 3.x headers...
 $CXXFLAGS += " -fms-extensions"
@@ -37,9 +36,9 @@ end
 # $LDFLAGS += " -Wl,--no-undefined " unless IS_DARWIN
 # $LDFLAGS += " -Wl,-undefined,error " if IS_DARWIN
 
-if ENV['CXX']
+if ENV["CXX"]
   puts "SETTING CXX"
-  CONFIG['CXX'] = ENV['CXX']
+  CONFIG["CXX"] = ENV["CXX"]
 end
 
 CXX11_TEST = <<EOS
@@ -48,9 +47,8 @@ CXX11_TEST = <<EOS
 #endif
 EOS
 
-`echo "#{CXX11_TEST}" | #{CONFIG['CXX']} -std=c++0x -x c++ -E -`
-unless $?.success?
-  warn <<EOS
+`echo "#{CXX11_TEST}" | #{CONFIG["CXX"]} -std=c++0x -x c++ -E -`
+warn <<EOS unless $?.success?
 
 
 WARNING: C++11 support is required for compiling mini_racer. Please make sure
@@ -62,31 +60,33 @@ installing GCC 4.8. See mini_racer's README.md for more information.
 
 
 EOS
+
+CONFIG["LDSHARED"] = "$(CXX) -shared" unless IS_DARWIN
+if CONFIG["warnflags"]
+  CONFIG["warnflags"].gsub!("-Wdeclaration-after-statement", "")
+  CONFIG["warnflags"].gsub!("-Wimplicit-function-declaration", "")
 end
 
-CONFIG['LDSHARED'] = '$(CXX) -shared' unless IS_DARWIN
-if CONFIG['warnflags']
-  CONFIG['warnflags'].gsub!('-Wdeclaration-after-statement', '')
-  CONFIG['warnflags'].gsub!('-Wimplicit-function-declaration', '')
+if enable_config("debug") || enable_config("asan")
+  CONFIG["debugflags"] << " -ggdb3 -O0"
 end
 
-if enable_config('debug') || enable_config('asan')
-  CONFIG['debugflags'] << ' -ggdb3 -O0'
-end
+#$CXXFLAGS += " -fno-stack-protector"
 
-Libv8::Node.configure_makefile
+vendor_path = File.expand_path("../../../vendor/v8", __FILE__)
+
+$CXXFLAGS += " -I#{vendor_path}/include"
+$LDFLAGS += " #{vendor_path}/lib/libv8_monolith.a"
 
 # --exclude-libs is only for i386 PE and ELF targeted ports
 append_ldflags("-Wl,--exclude-libs=ALL ")
 
-if enable_config('asan')
+if enable_config("asan")
   $CXXFLAGS.insert(0, " -fsanitize=address ")
   $LDFLAGS.insert(0, " -fsanitize=address ")
 end
 
 # there doesn't seem to be a CPP macro for this in Ruby 2.6:
-if RUBY_ENGINE == 'ruby'
-  $CPPFLAGS += ' -DENGINE_IS_CRUBY '
-end
+$CPPFLAGS += " -DENGINE_IS_CRUBY " if RUBY_ENGINE == "ruby"
 
-create_makefile 'mini_racer_extension'
+create_makefile "mini_racer_extension"
