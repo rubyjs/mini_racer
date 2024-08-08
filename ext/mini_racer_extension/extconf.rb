@@ -18,8 +18,7 @@ $CXXFLAGS += " -fPIC" unless $CXXFLAGS.split.include? "-rdynamic" or IS_DARWIN
 $CXXFLAGS += " -std=c++20"
 $CXXFLAGS += " -fpermissive"
 #$CXXFLAGS += " -DV8_COMPRESS_POINTERS"
-$CXXFLAGS += " -latomic"
-# $CXXFLAGS += " -fvisibility=hidden "
+$CXXFLAGS += " -fvisibility=hidden "
 
 # __declspec gets used by clang via ruby 3.x headers...
 $CXXFLAGS += " -fms-extensions"
