@@ -30,10 +30,11 @@ RUN gn gen ${target} -vv --fail-on-unused-args \
             is_asan=false \
             is_debug=false \
             treat_warnings_as_errors=false \
-            v8_enable_i18n_support=false\
+            v8_enable_i18n_support=true \
             v8_use_external_startup_data=false \
             use_custom_libcxx=false \
             v8_enable_pointer_compression=false \
+            icu_use_data_file=false \
             use_sysroot=false'
 
 RUN ninja -C ${target} "v8_monolith"
