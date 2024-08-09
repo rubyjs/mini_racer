@@ -1,6 +1,7 @@
 FROM ubuntu:noble AS build
 
-ARG v8_version=12.4.254.21
+#ARG v8_version 12.4.254.21
+ARG v8_version 12.7.224.16
 ENV version $v8_version
 
 ENV target x86.static
