@@ -1,3 +1,6 @@
+- 0.14.1 - 14-08-2024
+
+  - No longer use mini_racer_loader if LD_PRELOAD is defined and adds a malloc provider. This resolves segfaults when people LD_PRELOAD jemalloc or tcmalloc.
 
 - 0.14.0 - 06-08-2024
 
