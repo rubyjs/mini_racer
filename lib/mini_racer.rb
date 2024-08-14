@@ -4,14 +4,23 @@ require "pathname"
 if RUBY_ENGINE == "truffleruby"
   require "mini_racer/truffleruby"
 else
-  require "mini_racer_loader" 
-  ext_filename = "mini_racer_extension.#{RbConfig::CONFIG['DLEXT']}"
-  ext_path = Gem.loaded_specs['mini_racer'].require_paths
-    .map { |p| (p = Pathname.new(p)).absolute? ? p : Pathname.new(__dir__).parent + p }
-  ext_found = ext_path.map { |p| p + ext_filename }.find { |p| p.file? }
+  if ENV["LD_PRELOAD"].to_s.include?("malloc")
+    require "mini_racer_extension"
+  else
+    require "mini_racer_loader"
+    ext_filename = "mini_racer_extension.#{RbConfig::CONFIG["DLEXT"]}"
+    ext_path =
+      Gem.loaded_specs["mini_racer"].require_paths.map do |p|
+        (p = Pathname.new(p)).absolute? ? p : Pathname.new(__dir__).parent + p
+      end
+    ext_found = ext_path.map { |p| p + ext_filename }.find { |p| p.file? }
 
-  raise LoadError, "Could not find #{ext_filename} in #{ext_path.map(&:to_s)}" unless ext_found
-  MiniRacer::Loader.load(ext_found.to_s)
+    unless ext_found
+      raise LoadError,
+            "Could not find #{ext_filename} in #{ext_path.map(&:to_s)}"
+    end
+    MiniRacer::Loader.load(ext_found.to_s)
+  end
 end
 
 require "thread"
