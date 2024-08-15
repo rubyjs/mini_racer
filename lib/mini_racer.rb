@@ -316,6 +316,7 @@ module MiniRacer
       @last_eval = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       @ensure_gc_mutex.synchronize do
         @ensure_gc_thread = nil if !@ensure_gc_thread&.alive?
+        return if !Thread.main.alive? # avoid "can't alloc thread" exception
         @ensure_gc_thread ||= Thread.new do
           ensure_gc_after_idle_seconds = @ensure_gc_after_idle / 1000.0
           done = false
