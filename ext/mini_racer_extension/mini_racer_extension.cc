@@ -3,9 +3,14 @@
 #include <ruby/thread.h>
 #include <ruby/io.h>
 #include <ruby/version.h>
+// v8::Platform has a number of protected abstract virtual methods that
+// implementers must implement. We want to delegate to DefaultPlatform
+// as much as possible, ergo, we must have access to said methods.
+#define protected public
+#include <libplatform/libplatform.h>
+#undef protected
 #include <v8.h>
 #include <v8-profiler.h>
-#include <libplatform/libplatform.h>
 #include <ruby/encoding.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -23,6 +28,132 @@
 #endif
 
 using namespace v8;
+
+// Delegate everything to DefaultPlatform with the exception of
+// ThreadIsolatedAllocator, to work around a V8 bug.
+class MiniRacerPlatform : public Platform {
+public:
+    explicit MiniRacerPlatform(bool single_threaded) {
+        if (single_threaded) {
+            platform = platform::NewSingleThreadedDefaultPlatform();
+        } else {
+            platform = platform::NewDefaultPlatform();
+        }
+    }
+
+    PageAllocator* GetPageAllocator() final {
+        return platform->GetPageAllocator();
+    }
+
+    // V8's default thread-isolated allocator has a bug on x64 Linux.
+    //
+    // It uses memory protection keys (see `man 7 pkeys`) to
+    // write-protect JIT code memory but in a way that is currently
+    // incompatible with how we use threads.
+    //
+    // Specifically, pkey permissions are inherited by child threads.
+    // Threads that are not descendants of the thread that allocates
+    // the pkey default to "no permissions" for that pkey.
+    //
+    // Concretely, if thread A creates the v8::Platform (and the pkey)
+    // and write-protects memory, then later thread B tries to access
+    // that memory, it segfaults due to the lack of permissions.
+    //
+    // The fix on V8's side is conceptually easy - call
+    // pkey_set(PKEY_DISABLE_WRITE) before accessing the memory,
+    // to flip the permissions from "none" to "can read" - but
+    // until it's actually fixed, disable thread-isolation.
+    //
+    // See https://issues.chromium.org/issues/360909072
+    ThreadIsolatedAllocator* GetThreadIsolatedAllocator() final {
+        return nullptr;
+    }
+
+    ZoneBackingAllocator* GetZoneBackingAllocator() final {
+        return platform->GetZoneBackingAllocator();
+    }
+
+    void OnCriticalMemoryPressure() final {
+        return platform->OnCriticalMemoryPressure();
+    }
+
+    int NumberOfWorkerThreads() final {
+        return platform->NumberOfWorkerThreads();
+    }
+
+    std::shared_ptr<v8::TaskRunner> GetForegroundTaskRunner(Isolate* isolate) {
+        return platform->GetForegroundTaskRunner(isolate);
+    }
+
+    std::shared_ptr<v8::TaskRunner> GetForegroundTaskRunner(
+            Isolate* isolate, TaskPriority priority) final {
+        return platform->GetForegroundTaskRunner(isolate, priority);
+    }
+
+    bool IdleTasksEnabled(Isolate* isolate) final {
+        return platform->IdleTasksEnabled(isolate);
+    }
+
+    std::unique_ptr<ScopedBlockingCall> CreateBlockingScope(
+            BlockingType blocking_type) final {
+        return platform->CreateBlockingScope(blocking_type);
+    }
+
+    double MonotonicallyIncreasingTime() final {
+        return platform->MonotonicallyIncreasingTime();
+    }
+
+    int64_t CurrentClockTimeMilliseconds() final {
+        return platform->CurrentClockTimeMilliseconds();
+    }
+
+    double CurrentClockTimeMillis() final {
+        return platform->CurrentClockTimeMillis();
+    }
+
+    double CurrentClockTimeMillisecondsHighResolution() final {
+        return platform->CurrentClockTimeMillisecondsHighResolution();
+    }
+
+    StackTracePrinter GetStackTracePrinter() final {
+        return platform->GetStackTracePrinter();
+    }
+
+    TracingController* GetTracingController() final {
+        return platform->GetTracingController();
+    }
+
+    void DumpWithoutCrashing() final {
+        return platform->DumpWithoutCrashing();
+    }
+
+    HighAllocationThroughputObserver* GetHighAllocationThroughputObserver()
+            final {
+        return platform->GetHighAllocationThroughputObserver();
+    }
+
+    std::unique_ptr<JobHandle> CreateJobImpl(
+            TaskPriority priority, std::unique_ptr<JobTask> job_task,
+            const SourceLocation& location) final {
+        return platform->CreateJobImpl(priority, std::move(job_task), location);
+    }
+
+    void PostTaskOnWorkerThreadImpl(
+            TaskPriority priority, std::unique_ptr<Task> task,
+            const SourceLocation& location) final {
+        return platform->PostTaskOnWorkerThreadImpl(
+                priority, std::move(task), location);
+    }
+
+    void PostDelayedTaskOnWorkerThreadImpl(
+            TaskPriority priority, std::unique_ptr<Task> task,
+            double delay_in_seconds, const SourceLocation& location) final {
+        return platform->PostDelayedTaskOnWorkerThreadImpl(
+                priority, std::move(task), delay_in_seconds, location);
+    }
+
+    std::unique_ptr<v8::Platform> platform;
+};
 
 typedef struct {
     const char* data;
@@ -365,11 +496,7 @@ static void init_v8() {
 
     if (current_platform == NULL) {
         V8::InitializeICU();
-	if (single_threaded) {
-	    current_platform = platform::NewSingleThreadedDefaultPlatform();
-	} else {
-	    current_platform = platform::NewDefaultPlatform();
-	}
+        current_platform.reset(new MiniRacerPlatform(single_threaded));
         V8::InitializePlatform(current_platform.get());
         V8::Initialize();
     }
