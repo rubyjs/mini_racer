@@ -1164,4 +1164,16 @@ class MiniRacerTest < Minitest::Test
     Thread.new { MiniRacer::Context.new.eval("100") }.join
     GC.start
   end
+
+
+  if RUBY_ENGINE == "truffleruby"
+    skip "TruffleRuby forking is not supported"
+  else
+    def test_forking
+      `bundle exec ruby test/test_forking.rb`
+      if $?.exitstatus != 0
+        assert false, "forking test failed"
+      end
+    end
+  end
 end

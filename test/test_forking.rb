@@ -1,4 +1,5 @@
 # use bundle exec to run this script
+#
 require 'mini_racer'
 
 MiniRacer::Platform.set_flags! :single_threaded
@@ -25,4 +26,5 @@ MiniRacer::Context.new.dispose
 
 if Process.respond_to?(:fork)
   Process.wait fork { puts @ctx.eval("a"); @ctx.dispose; puts Process.pid; trigger_gc; puts "done #{Process.pid}" }
+  exit $?.exitstatus || 1
 end
