@@ -115,7 +115,7 @@ failed:
     rb_raise(rb_eLoadError, "%s", error);
 }
 
-__attribute__((visibility("default"))) void Init_mini_racer_loader()
+__attribute__((visibility("default"))) void Init_mini_racer_loader(void)
 {
     VALUE mMiniRacer = rb_define_module("MiniRacer");
     VALUE mLoader = rb_define_module_under(mMiniRacer, "Loader");
