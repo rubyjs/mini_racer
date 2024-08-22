@@ -1165,11 +1165,10 @@ class MiniRacerTest < Minitest::Test
     GC.start
   end
 
-
-  if RUBY_ENGINE == "truffleruby"
-    skip "TruffleRuby forking is not supported"
-  else
-    def test_forking
+  def test_forking
+    if RUBY_ENGINE == "truffleruby"
+      skip "TruffleRuby forking is not supported"
+    else
       `bundle exec ruby test/test_forking.rb`
       if $?.exitstatus != 0
         assert false, "forking test failed"
