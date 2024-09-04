@@ -711,7 +711,7 @@ class MiniRacerTest < Minitest::Test
 
   def test_timeout_in_ruby_land
     context = MiniRacer::Context.new(timeout: 50)
-    context.attach("sleep", proc { sleep 0.5 })
+    context.attach("sleep", proc { sleep 10 })
     assert_raises(MiniRacer::ScriptTerminatedError) do
       context.eval('sleep(); "hi";')
     end
@@ -786,12 +786,12 @@ class MiniRacerTest < Minitest::Test
       skip "TruffleRuby does not yet implement heap_stats"
     end
     context = MiniRacer::Context.new(timeout: 500)
-    context.eval(<<-JS)
-    let a='testing';
-    let f=function(foo) { foo + 42 };
+    context.eval(<<~JS)
+      let a='testing';
+      let f=function(foo) { foo + 42 };
 
-    // call `f` a lot to have things JIT'd so that total_heap_size_executable becomes > 0
-    for (let i = 0; i < 1000000; i++) { f(10); }
+      // call `f` a lot to have things JIT'd so that total_heap_size_executable becomes > 0
+      for (let i = 0; i < 1000000; i++) { f(10); }
     JS
 
     stats = context.heap_stats
@@ -809,7 +809,7 @@ class MiniRacerTest < Minitest::Test
 
     assert(
       stats.values.all? { |v| v > 0 },
-      "expecting the isolate to have values for all the vals"
+      "expecting the isolate to have values for all the vals: actual stats #{stats}"
     )
   end
 
