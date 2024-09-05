@@ -1,3 +1,7 @@
+- 0.15.0 - 05-09-2024
+
+  - Use libv8-node 22.7.0 - this corrects issues with multithreaded behavior and forking in single threaded mode.
+
 - 0.14.1 - 14-08-2024
 
   - No longer use mini_racer_loader if LD_PRELOAD is defined and adds a malloc provider. This resolves segfaults when people LD_PRELOAD jemalloc or tcmalloc.
