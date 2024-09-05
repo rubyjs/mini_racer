@@ -1,3 +1,7 @@
+- 0.16.0 - 05-09-2024
+
+  - Sadly still seeing segfaults, reverted back 18.19.0.0
+
 - 0.15.0 - 05-09-2024
 
   - Use libv8-node 22.7.0 - this corrects issues with multithreaded behavior and forking in single threaded mode.
