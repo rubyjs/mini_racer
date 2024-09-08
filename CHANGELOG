@@ -1,3 +1,7 @@
+- 0.17.0.pre2 - 09-09-2024
+
+  - Test build to see if disabling Maglev optimisations resolves segfault issues
+
 - 0.17.0.pre - 05-09-2024
 
   - Test build to see if disabling concurrent GC marking resolves segfault
