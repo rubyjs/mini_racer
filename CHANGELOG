@@ -1,3 +1,7 @@
+- 0.17.0.pre4 - 18-09-2024
+
+  - Attempt to change compilation flags to disable strict aliasing to see if it resolves stability issues
+
 - 0.17.0.pre3 - 15-09-2024
 
   - Text clang based Linux v8 build, in case there is an edge case with GCC compilation
