@@ -19,6 +19,9 @@ $CXXFLAGS += " -rdynamic" unless $CXXFLAGS.split.include? "-rdynamic"
 $CXXFLAGS += " -fPIC" unless $CXXFLAGS.split.include? "-rdynamic" or IS_DARWIN
 $CXXFLAGS += " -std=c++17"
 $CXXFLAGS += " -fpermissive"
+$CXXFLAGS += " -fno-rtti"
+$CXXFLAGS += " -fno-exceptions"
+$CXXFLAGS += " -fno-strict-aliasing"
 #$CXXFLAGS += " -DV8_COMPRESS_POINTERS"
 $CXXFLAGS += " -fvisibility=hidden "
 
