@@ -12,9 +12,12 @@ MiniRacer has an adapter for [execjs](https://github.com/rails/execjs) so it can
 
 ## Supported Ruby Versions & Troubleshooting
 
-MiniRacer only supports non-EOL versions of Ruby. See [Ruby Maintenance Branches](https://www.ruby-lang.org/en/downloads/branches/) for the list of non-EOL Rubies. If you require support for older versions of Ruby install an older version of the gem.
+MiniRacer only supports non-EOL versions of Ruby. See [Ruby Maintenance Branches](https://www.ruby-lang.org/en/downloads/branches/) for the list of non-EOL Rubies. If you require support for older versions of Ruby install an older version of the gem. [TruffleRuby](https://github.com/oracle/truffleruby) is also supported.
 
-MiniRacer **does not support** [Ruby built on MinGW](https://github.com/rubyjs/mini_racer/issues/252#issuecomment-1201172236), "pure windows" no Cygwin, no WSL2 (see https://github.com/rubyjs/libv8-node/issues/9).
+MiniRacer **does not support**
+
+* [Ruby built on MinGW](https://github.com/rubyjs/mini_racer/issues/252#issuecomment-1201172236), "pure windows" no Cygwin, no WSL2 (see https://github.com/rubyjs/libv8-node/issues/9)
+* [JRuby](https://www.jruby.org)
 
 If you have a problem installing MiniRacer, please consider the following steps:
 
