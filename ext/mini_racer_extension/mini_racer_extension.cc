@@ -429,14 +429,17 @@ static void prepare_result(MaybeLocal<Value> v8res,
                 Local<Object> object = local_value->ToObject(context).ToLocalChecked();
                 const unsigned argc = 1;
                 Local<Value> argv[argc] = { object };
-                MaybeLocal<Value> json = stringify->Call(context, JSON, argc, argv);
+                MaybeLocal<Value> maybe_json = stringify->Call(context, JSON, argc, argv);
+                Local<Value> json;
 
-                if (json.IsEmpty()) {
+                if (!maybe_json.ToLocal(&json)) {
                     evalRes.executed = false;
                 } else {
-                    evalRes.json = true;
+                    // JSON.stringify() returns undefined for inputs that
+                    // are exotic objects, like WASM function or string refs
+                    evalRes.json = !json->IsUndefined();
                     Persistent<Value>* persistent = new Persistent<Value>();
-                    persistent->Reset(isolate, json.ToLocalChecked());
+                    persistent->Reset(isolate, json);
                     evalRes.value = persistent;
                 }
             }
