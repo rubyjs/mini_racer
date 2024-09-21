@@ -975,6 +975,7 @@ class MiniRacerTest < Minitest::Test
   def test_symbol_support
     context = MiniRacer::Context.new()
     assert_equal :foo, context.eval("Symbol('foo')")
+    assert_equal :undefined, context.eval("Symbol()") # should not crash
   end
 
   def test_cyclical_object_js
