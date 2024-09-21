@@ -252,6 +252,16 @@ class MiniRacerTest < Minitest::Test
     )
   end
 
+  def test_date_nan
+    # NoMethodError: undefined method `source_location' for "<internal:core>
+    # core/float.rb:114:in `to_i'":Thread::Backtrace::Location
+    if RUBY_ENGINE == "truffleruby"
+      skip "TruffleRuby bug"
+    end
+    context = MiniRacer::Context.new
+    context.eval("new Date(NaN)") # should not crash process
+  end
+
   def test_return_date
     context = MiniRacer::Context.new
     test_time = Time.new

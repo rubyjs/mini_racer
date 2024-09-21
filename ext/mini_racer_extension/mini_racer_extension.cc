@@ -586,10 +586,6 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
         return INT2FIX(value->Int32Value(context).ToChecked());
     }
 
-    if (value->IsNumber()) {
-        return rb_float_new(value->NumberValue(context).ToChecked());
-    }
-
     if (value->IsTrue()) {
         return Qtrue;
     }
@@ -598,81 +594,107 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
         return Qfalse;
     }
 
-    if (value->IsArray()) {
-      VALUE rb_array = rb_ary_new();
-      Local<Array> arr = Local<Array>::Cast(value);
-      for(uint32_t i=0; i < arr->Length(); i++) {
-          MaybeLocal<Value> element = arr->Get(context, i);
-          if (element.IsEmpty()) {
-              continue;
-          }
-          VALUE rb_elem = convert_v8_to_ruby(isolate, context, element.ToLocalChecked());
-          if (rb_funcall(rb_elem, rb_intern("class"), 0) == rb_cFailedV8Conversion) {
-            return rb_elem;
-          }
-          rb_ary_push(rb_array, rb_elem);
-      }
-      return rb_array;
-    }
+    struct State {
+        Isolate* isolate;
+        Local<Value> value;
+        Local<Context> context;
+    } state = {isolate, value, context};
 
-    if (value->IsFunction()){
-        return rb_funcall(rb_cJavaScriptFunction, rb_intern("new"), 0);
-    }
+    // calls to rb_*() functions can raise exceptions and longjmp,
+    // and therefore must be inside this protected block
+    auto can_raise = [](VALUE arg) -> VALUE {
+        State* state =
+            reinterpret_cast<State*>(static_cast<uintptr_t>(RB_NUM2ULL(arg)));
+        Isolate* isolate = state->isolate;
+        Local<Value> value = state->value;
+        Local<Context> context = state->context;
 
-    if (value->IsDate()){
-        double ts = Local<Date>::Cast(value)->ValueOf();
-        double secs = ts/1000;
-        long nanos = round((secs - floor(secs)) * 1000000);
-
-        return rb_time_new(secs, nanos);
-    }
-
-    if (value->IsObject()) {
-        VALUE rb_hash = rb_hash_new();
-        TryCatch trycatch(isolate);
-
-        Local<Object> object = value->ToObject(context).ToLocalChecked();
-        auto maybe_props = object->GetOwnPropertyNames(context);
-        if (!maybe_props.IsEmpty()) {
-            Local<Array> props = maybe_props.ToLocalChecked();
-            for(uint32_t i=0; i < props->Length(); i++) {
-             MaybeLocal<Value> key = props->Get(context, i);
-             if (key.IsEmpty()) {
-                return rb_funcall(rb_cFailedV8Conversion, rb_intern("new"), 1, rb_str_new2(""));
-             }
-             VALUE rb_key = convert_v8_to_ruby(isolate, context, key.ToLocalChecked());
-
-             MaybeLocal<Value> prop_value = object->Get(context, key.ToLocalChecked());
-             // this may have failed due to Get raising
-             if (prop_value.IsEmpty() || trycatch.HasCaught()) {
-                 return new_empty_failed_conv_obj();
-             }
-
-             VALUE rb_value = convert_v8_to_ruby(
-                         isolate, context, prop_value.ToLocalChecked());
-             rb_hash_aset(rb_hash, rb_key, rb_value);
-            }
+        if (value->IsNumber()) {
+            return rb_float_new(value->NumberValue(context).ToChecked());
         }
-        return rb_hash;
-    }
 
-    if (value->IsSymbol()) {
-	v8::String::Utf8Value symbol_name(isolate,
-	    Local<Symbol>::Cast(value)->Description(isolate));
+        if (value->IsArray()) {
+            VALUE rb_array = rb_ary_new();
+            Local<Array> arr = Local<Array>::Cast(value);
+            for(uint32_t i = 0; i < arr->Length(); i++) {
+                MaybeLocal<Value> element = arr->Get(context, i);
+                if (element.IsEmpty()) {
+                    continue;
+                }
+                VALUE rb_elem = convert_v8_to_ruby(isolate, context, element.ToLocalChecked());
+                if (rb_funcall(rb_elem, rb_intern("class"), 0) == rb_cFailedV8Conversion) {
+                    return rb_elem;
+                }
+                rb_ary_push(rb_array, rb_elem);
+            }
+            return rb_array;
+        }
 
-	VALUE str_symbol = rb_utf8_str_new(*symbol_name, symbol_name.length());
+        if (value->IsFunction()){
+            return rb_funcall(rb_cJavaScriptFunction, rb_intern("new"), 0);
+        }
 
-	return rb_str_intern(str_symbol);
-    }
+        if (value->IsDate()){
+            double ts = Local<Date>::Cast(value)->ValueOf();
+            double secs = ts/1000;
+            long nanos = round((secs - floor(secs)) * 1000000);
 
-    MaybeLocal<String> rstr_maybe = value->ToString(context);
+            return rb_time_new(secs, nanos);
+        }
 
-    if (rstr_maybe.IsEmpty()) {
-	return Qnil;
-    } else {
-	Local<String> rstr = rstr_maybe.ToLocalChecked();
-	return rb_utf8_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate));
-    }
+        if (value->IsObject()) {
+            VALUE rb_hash = rb_hash_new();
+            TryCatch trycatch(isolate);
+
+            Local<Object> object = value->ToObject(context).ToLocalChecked();
+            auto maybe_props = object->GetOwnPropertyNames(context);
+            if (!maybe_props.IsEmpty()) {
+                Local<Array> props = maybe_props.ToLocalChecked();
+                for (uint32_t i = 0; i < props->Length(); i++) {
+                    MaybeLocal<Value> key = props->Get(context, i);
+                    if (key.IsEmpty()) {
+                        return rb_funcall(rb_cFailedV8Conversion, rb_intern("new"), 1, rb_str_new2(""));
+                    }
+                    VALUE rb_key = convert_v8_to_ruby(isolate, context, key.ToLocalChecked());
+
+                    MaybeLocal<Value> prop_value = object->Get(context, key.ToLocalChecked());
+                    // this may have failed due to Get raising
+                    if (prop_value.IsEmpty() || trycatch.HasCaught()) {
+                        return new_empty_failed_conv_obj();
+                    }
+
+                    VALUE rb_value = convert_v8_to_ruby(
+                             isolate, context, prop_value.ToLocalChecked());
+                    rb_hash_aset(rb_hash, rb_key, rb_value);
+                }
+            }
+            return rb_hash;
+        }
+
+        if (value->IsSymbol()) {
+            v8::String::Utf8Value symbol_name(isolate,
+            Local<Symbol>::Cast(value)->Description(isolate));
+
+            VALUE str_symbol = rb_utf8_str_new(*symbol_name, symbol_name.length());
+
+            return rb_str_intern(str_symbol);
+        }
+
+        MaybeLocal<String> rstr_maybe = value->ToString(context);
+
+        if (rstr_maybe.IsEmpty()) {
+            return Qnil;
+        } else {
+            Local<String> rstr = rstr_maybe.ToLocalChecked();
+            return rb_utf8_str_new(*String::Utf8Value(isolate, rstr), rstr->Utf8Length(isolate));
+        }
+    };
+
+    // this is kind of slow because RB_ULL2NUM allocs when the pointer
+    // doesn't fit in a fixnum but yolo'ing and reinterpret_casting the
+    // pointer to a VALUE is probably not very sound
+    VALUE arg = RB_ULL2NUM(reinterpret_cast<uintptr_t>(&state));
+    return rb_protect(can_raise, arg, nullptr);
 }
 
 static VALUE convert_v8_to_ruby(Isolate* isolate,
