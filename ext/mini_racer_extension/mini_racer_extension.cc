@@ -565,6 +565,7 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
 
     Isolate::Scope isolate_scope(isolate);
     HandleScope scope(isolate);
+    Context::Scope context_scope(context);
 
     StackCounter stackCounter(isolate);
 
@@ -672,8 +673,9 @@ static VALUE convert_v8_to_ruby(Isolate* isolate, Local<Context> context,
         }
 
         if (value->IsSymbol()) {
-            v8::String::Utf8Value symbol_name(isolate,
-            Local<Symbol>::Cast(value)->Description(isolate));
+            Local<Symbol> symbol = Local<Symbol>::Cast(value);
+            Local<Value> description = symbol->Description(isolate);
+            v8::String::Utf8Value symbol_name(isolate, description);
 
             VALUE str_symbol = rb_utf8_str_new(*symbol_name, symbol_name.length());
 
