@@ -1,3 +1,10 @@
+- 0.17.0.pre5 - 30-09-2024
+
+  - Handle segfault from JSON.stringify
+  - Fix segfaults around symbol conversion
+  - Fix crash on invalid date object
+
+
 - 0.17.0.pre4 - 18-09-2024
 
   - Attempt to change compilation flags to disable strict aliasing to see if it resolves stability issues
