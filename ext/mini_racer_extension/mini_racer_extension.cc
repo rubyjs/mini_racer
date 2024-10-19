@@ -301,7 +301,10 @@ static VALUE rb_mJSON;
 static VALUE rb_cFailedV8Conversion;
 static VALUE rb_cDateTime = Qnil;
 
-static std::unique_ptr<Platform> current_platform = NULL;
+// note: |current_platform| is deliberately leaked on program exit
+// because it's not safe to destroy it after main() has exited;
+// abnormal termination may have left V8 in an undefined state
+static Platform *current_platform;
 static std::mutex platform_lock;
 
 static pthread_attr_t *thread_attr_p;
@@ -366,11 +369,11 @@ static void init_v8() {
     if (current_platform == NULL) {
         V8::InitializeICU();
 	if (single_threaded) {
-	    current_platform = platform::NewSingleThreadedDefaultPlatform();
+	    current_platform = platform::NewSingleThreadedDefaultPlatform().release();
 	} else {
-	    current_platform = platform::NewDefaultPlatform();
+	    current_platform = platform::NewDefaultPlatform().release();
 	}
-        V8::InitializePlatform(current_platform.get());
+        V8::InitializePlatform(current_platform);
         V8::Initialize();
     }
 
@@ -1006,7 +1009,7 @@ static VALUE rb_isolate_pump_message_loop(VALUE self) {
 
     Locker guard { isolate_info->isolate };
 
-    if (platform::PumpMessageLoop(current_platform.get(), isolate_info->isolate)){
+    if (platform::PumpMessageLoop(current_platform, isolate_info->isolate)){
 	return Qtrue;
     } else {
 	return Qfalse;
