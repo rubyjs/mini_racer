@@ -15,7 +15,7 @@ def trigger_gc
   puts "c"
   ctx.eval("a = undefined")
   puts "d"
-  ctx.isolate.low_memory_notification
+  ctx.low_memory_notification
   puts "f"
   puts "done triggering"
 end

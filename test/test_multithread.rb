@@ -11,7 +11,7 @@ require 'securerandom'
     end.join
 
     Thread.new do
-      context.isolate.low_memory_notification
+      context.low_memory_notification
 
       start_heap = context.heap_stats[:used_heap_size]
 
@@ -25,7 +25,7 @@ require 'securerandom'
 
     Thread.new do
       10.times do
-        context.isolate.low_memory_notification
+        context.low_memory_notification
       end
       end_heap = context.heap_stats[:used_heap_size]
       p end_heap
