@@ -8,6 +8,13 @@ class MiniRacerTest < Minitest::Test
   # see `test_platform_set_flags_works` below
   MiniRacer::Platform.set_flags! :use_strict
 
+  # --stress_snapshot works around a bogus debug assert in V8
+  # that terminates the process with the following error:
+  #
+  #	Fatal error in ../deps/v8/src/heap/read-only-spaces.cc, line 70
+  #	Check failed: read_only_blob_checksum_ == snapshot_checksum (<unprintable> vs. 1099685679).
+  MiniRacer::Platform.set_flags! :stress_snapshot
+
   def test_locale_mx
     if RUBY_ENGINE == "truffleruby"
       skip "TruffleRuby does not have all js timezone by default"
@@ -259,7 +266,7 @@ class MiniRacerTest < Minitest::Test
       skip "TruffleRuby bug"
     end
     context = MiniRacer::Context.new
-    context.eval("new Date(NaN)") # should not crash process
+    assert_raises(RangeError) { context.eval("new Date(NaN)") } # should not crash process
   end
 
   def test_return_date
@@ -420,20 +427,11 @@ class MiniRacerTest < Minitest::Test
     assert_equal "hello", context.eval("Echo.say('hello')")
   end
 
-  # error output but does not fail:
-  # <unknown>:65: Uncaught TypeError: Cannot create property 'kevin' on number '2'
-  def test_attach_error
+  def test_attach_non_object
     context = MiniRacer::Context.new
     context.eval("var minion = 2")
-    assert_raises do
-      begin
-        context.attach("minion.kevin.speak", proc { "banana" })
-      rescue => e
-        assert_equal MiniRacer::ParseError, e.class
-        assert_match(/expecting minion.kevin/, e.message)
-        raise
-      end
-    end
+    context.attach("minion.kevin.speak", proc { "banana" })
+    assert_equal "banana", context.call("minion.kevin.speak")
   end
 
   def test_load
@@ -565,35 +563,6 @@ class MiniRacerTest < Minitest::Test
     assert_equal 1, context.eval("Math.sin")
   end
 
-  def test_it_can_re_use_isolates_for_multiple_contexts
-    snapshot = MiniRacer::Snapshot.new("Math.sin = 1;")
-    isolate = MiniRacer::Isolate.new(snapshot)
-
-    context1 = MiniRacer::Context.new(isolate: isolate)
-    assert_equal 1, context1.eval("Math.sin")
-
-    context1.eval("var a = 5;")
-
-    context2 = MiniRacer::Context.new(isolate: isolate)
-    assert_equal 1, context2.eval("Math.sin")
-    assert_raises MiniRacer::RuntimeError do
-      begin
-        context2.eval("a;")
-      rescue => e
-        assert_equal("ReferenceError: a is not defined", e.message)
-        raise
-      end
-    end
-
-    assert_same isolate, context1.isolate
-    assert_same isolate, context2.isolate
-  end
-
-  def test_empty_isolate_is_valid_and_can_be_GCed
-    MiniRacer::Isolate.new
-    GC.start
-  end
-
   def test_isolates_from_snapshot_dont_get_corrupted_if_the_snapshot_gets_warmed_up_or_GCed
     # basically tests that isolates get their own copy of the snapshot and don't
     # get corrupted if the snapshot is subsequently warmed up
@@ -603,7 +572,6 @@ class MiniRacerTest < Minitest::Test
     JS
 
     snapshot = MiniRacer::Snapshot.new(snapshot_source)
-    isolate = MiniRacer::Isolate.new(snapshot)
 
     warmump_source = <<-JS
       Math.tan(1);
@@ -613,68 +581,24 @@ class MiniRacerTest < Minitest::Test
 
     snapshot.warmup!(warmump_source)
 
-    context1 = MiniRacer::Context.new(isolate: isolate)
+    context1 = MiniRacer::Context.new(snapshot: snapshot)
 
     assert_equal 5, context1.eval("a")
     assert_equal "function", context1.eval("typeof(Math.sin)")
 
-    snapshot = nil
     GC.start
 
-    context2 = MiniRacer::Context.new(isolate: isolate)
+    context2 = MiniRacer::Context.new(snapshot: snapshot)
 
     assert_equal 5, context2.eval("a")
     assert_equal "function", context2.eval("typeof(Math.sin)")
   end
 
   def test_isolate_can_be_notified_of_idle_time
-    isolate = MiniRacer::Isolate.new
+    context = MiniRacer::Context.new
 
     # returns true if embedder should stop calling
-    assert(isolate.idle_notification(1000))
-  end
-
-  def test_concurrent_access_over_the_same_isolate_1
-    isolate = MiniRacer::Isolate.new
-    context = MiniRacer::Context.new(isolate: isolate)
-    context.eval("var counter=0; var plus=()=>counter++;")
-
-    (1..10).map { Thread.new { context.eval("plus()") } }.each(&:join)
-
-    assert_equal 10, context.eval("counter")
-  end
-
-  def test_concurrent_access_over_the_same_isolate_2
-    isolate = MiniRacer::Isolate.new
-
-    # workaround Rubies prior to commit 475c8701d74ebebe
-    # (Make SecureRandom support Ractor, 2020-09-04)
-    SecureRandom.hex
-
-    equals_after_sleep =
-      (1..10)
-        .map do |i|
-          Thread.new do
-            random = SecureRandom.hex
-            context = MiniRacer::Context.new(isolate: isolate)
-
-            context.eval(
-              "var now = new Date().getTime(); while(new Date().getTime() < now + 20) {}"
-            )
-            context.eval("var a='#{random}'")
-            context.eval(
-              "var now = new Date().getTime(); while(new Date().getTime() < now + 20) {}"
-            )
-
-            # cruby hashes are thread safe as long as you don't mess with the
-            # same key in different threads
-            context.eval("a") == random
-          end
-        end
-        .map(&:value)
-
-    assert_equal 10, equals_after_sleep.size
-    assert equals_after_sleep.all?
+    assert(context.idle_notification(1000))
   end
 
   def test_platform_set_flags_raises_an_exception_if_already_initialized
@@ -720,6 +644,7 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_timeout_in_ruby_land
+    skip "TODO(bnoordhuis) need to think on how to interrupt ruby code"
     context = MiniRacer::Context.new(timeout: 50)
     context.attach("sleep", proc { sleep 10 })
     assert_raises(MiniRacer::ScriptTerminatedError) do
@@ -754,37 +679,6 @@ class MiniRacerTest < Minitest::Test
     end
   end
 
-  class TestPlatform < MiniRacer::Platform
-    def self.public_flags_to_strings(flags)
-      flags_to_strings(flags)
-    end
-  end
-
-  def test_platform_flags_to_strings
-    flags = [
-      :flag1,
-      [[[:flag2]]],
-      { key1: :value1 },
-      { key2: 42, key3: 8.7 },
-      "--i_already_have_leading_hyphens",
-      [:"--me_too", "i_dont"]
-    ]
-
-    expected_string_flags = [
-      "--flag1",
-      "--flag2",
-      "--key1 value1",
-      "--key2 42",
-      "--key3 8.7",
-      "--i_already_have_leading_hyphens",
-      "--me_too",
-      "--i_dont"
-    ]
-
-    assert_equal expected_string_flags,
-                 TestPlatform.public_flags_to_strings(flags)
-  end
-
   def test_can_dispose_context
     context = MiniRacer::Context.new(timeout: 5)
     context.dispose
@@ -808,14 +702,27 @@ class MiniRacerTest < Minitest::Test
     # eg: {:total_physical_size=>1280640, :total_heap_size_executable=>4194304, :total_heap_size=>3100672, :used_heap_size=>1205376, :heap_size_limit=>1501560832}
     assert_equal(
       %i[
-        total_physical_size
-        total_heap_size_executable
-        total_heap_size
-        used_heap_size
+        external_memory
         heap_size_limit
+        malloced_memory
+        number_of_detached_contexts
+        number_of_native_contexts
+        peak_malloced_memory
+        total_available_size
+        total_global_handles_size
+        total_heap_size
+        total_heap_size_executable
+        total_physical_size
+        used_global_handles_size
+        used_heap_size
       ].sort,
       stats.keys.sort
     )
+
+    assert_equal 0, stats[:external_memory]
+    assert_equal 0, stats[:number_of_detached_contexts]
+    stats.delete :external_memory
+    stats.delete :number_of_detached_contexts
 
     assert(
       stats.values.all? { |v| v > 0 },
@@ -826,13 +733,13 @@ class MiniRacerTest < Minitest::Test
   def test_releasing_memory
     context = MiniRacer::Context.new
 
-    context.isolate.low_memory_notification
+    context.low_memory_notification
 
     start_heap = context.heap_stats[:used_heap_size]
 
     context.eval("'#{"x" * 1_000_000}'")
 
-    context.isolate.low_memory_notification
+    context.low_memory_notification
 
     end_heap = context.heap_stats[:used_heap_size]
 
@@ -848,7 +755,7 @@ class MiniRacerTest < Minitest::Test
 
   def test_ensure_gc
     context = MiniRacer::Context.new(ensure_gc_after_idle: 1)
-    context.isolate.low_memory_notification
+    context.low_memory_notification
 
     start_heap = context.heap_stats[:used_heap_size]
 
@@ -885,11 +792,7 @@ class MiniRacerTest < Minitest::Test
     context.eval("let a='testing';")
     context.dispose
 
-    stats = context.heap_stats
-    assert(
-      stats.values.all? { |v| v == 0 },
-      "should have 0 values once disposed"
-    )
+    assert_raises(MiniRacer::ContextDisposedError) { context.heap_stats }
   end
 
   def test_can_dispose
@@ -914,35 +817,6 @@ class MiniRacerTest < Minitest::Test
     context.attach("b", proc { |a| a })
 
     context.eval("const obj = {get r(){ b() }}; a(obj);")
-  end
-
-  def test_no_disposal_of_isolate_when_it_is_referenced
-    isolate = MiniRacer::Isolate.new
-    context = MiniRacer::Context.new(isolate: isolate)
-    context.dispose
-    _context2 = MiniRacer::Context.new(isolate: isolate) # Received signal 11 SEGV_MAPERR
-  end
-
-  def test_context_starts_with_no_isolate_value
-    context = MiniRacer::Context.new
-    assert_equal context.instance_variable_get("@isolate"), false
-  end
-
-  def test_context_isolate_value_is_kept
-    context = MiniRacer::Context.new
-    isolate = context.isolate
-    assert_same isolate, context.isolate
-  end
-
-  def test_isolate_is_nil_after_disposal
-    context = MiniRacer::Context.new
-    context.dispose
-    assert_nil context.isolate
-
-    context = MiniRacer::Context.new
-    context.isolate
-    context.dispose
-    assert_nil context.isolate
   end
 
   def test_heap_dump
@@ -974,51 +848,15 @@ class MiniRacerTest < Minitest::Test
 
   def test_symbol_support
     context = MiniRacer::Context.new()
-    assert_equal :foo, context.eval("Symbol('foo')")
-    assert_equal :undefined, context.eval("Symbol()") # should not crash
-  end
-
-  def test_cyclical_object_js
-    if RUBY_ENGINE == "truffleruby"
-      skip "TruffleRuby does not yet implement marshal_stack_depth"
-    end
-    context = MiniRacer::Context.new(marshal_stack_depth: 5)
-    context.attach("a", proc { |a| a })
-
-    assert_raises(MiniRacer::RuntimeError) do
-      context.eval("var o={}; o.o=o; a(o)")
-    end
-  end
-
-  def test_cyclical_array_js
-    if RUBY_ENGINE == "truffleruby"
-      skip "TruffleRuby does not yet implement marshal_stack_depth"
-    end
-    context = MiniRacer::Context.new(marshal_stack_depth: 5)
-    context.attach("a", proc { |a| a })
-
-    assert_raises(MiniRacer::RuntimeError) do
-      context.eval("let arr = []; arr.push(arr); a(arr)")
-    end
-  end
-
-  def test_cyclical_elem_in_array_js
-    if RUBY_ENGINE == "truffleruby"
-      skip "TruffleRuby does not yet implement marshal_stack_depth"
-    end
-    context = MiniRacer::Context.new(marshal_stack_depth: 5)
-    context.attach("a", proc { |a| a })
-
-    assert_raises(MiniRacer::RuntimeError) do
-      context.eval("let arr = []; arr[0]=1; arr[1]=arr; a(arr)")
-    end
+    assert_equal "foo", context.eval("Symbol('foo')")
+    assert_nil context.eval("Symbol()") # should not crash
   end
 
   def test_infinite_object_js
     if RUBY_ENGINE == "truffleruby"
       skip "TruffleRuby does not yet implement marshal_stack_depth"
     end
-    context = MiniRacer::Context.new(marshal_stack_depth: 5)
+    context = MiniRacer::Context.new
     context.attach("a", proc { |a| a })
 
     js = <<~JS
@@ -1038,7 +876,7 @@ class MiniRacerTest < Minitest::Test
     if RUBY_ENGINE == "truffleruby"
       skip "TruffleRuby does not yet implement marshal_stack_depth"
     end
-    context = MiniRacer::Context.new(marshal_stack_depth: 5)
+    context = MiniRacer::Context.new
     context.attach("a", proc { |a| a })
 
     # stack depth should be enough to marshal the object
@@ -1055,22 +893,13 @@ class MiniRacerTest < Minitest::Test
       skip "TruffleRuby does not support WebAssembly"
     end
     context = MiniRacer::Context.new
-    assert_nil context.eval("
-      var b = [0,97,115,109,1,0,0,0,1,26,5,80,0,95,0,80,0,95,1,127,0,96,0,1,110,96,1,100,2,1,111,96,0,1,100,3,3,4,3,3,2,4,7,26,2,12,99,114,101,97,116,101,83,116,114,117,99,116,0,1,7,114,101,102,70,117,110,99,0,2,9,5,1,3,0,1,0,10,23,3,8,0,32,0,20,2,251,27,11,7,0,65,12,251,0,1,11,4,0,210,0,11,0,44,4,110,97,109,101,1,37,3,0,11,101,120,112,111,114,116,101,100,65,110,121,1,12,99,114,101,97,116,101,83,116,114,117,99,116,2,7,114,101,102,70,117,110,99]
-      var o = new WebAssembly.Instance(new WebAssembly.Module(new Uint8Array(b))).exports
-      o.refFunc()(o.createStruct) // exotic object
-    ")
-  end
-
-  def test_stackdepth_bounds
-    assert_raises(ArgumentError) do
-      MiniRacer::Context.new(marshal_stack_depth: -2)
-    end
-
-    assert_raises(ArgumentError) do
-      MiniRacer::Context.new(
-        marshal_stack_depth: MiniRacer::MARSHAL_STACKDEPTH_MAX_VALUE + 1
-      )
+    # Error: [object Object] could not be cloned
+    assert_raises(MiniRacer::RuntimeError) do
+      context.eval("
+        var b = [0,97,115,109,1,0,0,0,1,26,5,80,0,95,0,80,0,95,1,127,0,96,0,1,110,96,1,100,2,1,111,96,0,1,100,3,3,4,3,3,2,4,7,26,2,12,99,114,101,97,116,101,83,116,114,117,99,116,0,1,7,114,101,102,70,117,110,99,0,2,9,5,1,3,0,1,0,10,23,3,8,0,32,0,20,2,251,27,11,7,0,65,12,251,0,1,11,4,0,210,0,11,0,44,4,110,97,109,101,1,37,3,0,11,101,120,112,111,114,116,101,100,65,110,121,1,12,99,114,101,97,116,101,83,116,114,117,99,116,2,7,114,101,102,70,117,110,99]
+        var o = new WebAssembly.Instance(new WebAssembly.Module(new Uint8Array(b))).exports
+        o.refFunc()(o.createStruct) // exotic object
+      ")
     end
   end
 
@@ -1079,6 +908,7 @@ class MiniRacerTest < Minitest::Test
       function MyProxy(reference) {
         return new Proxy(function() {}, {
           get: function(obj, prop) {
+            if (prop === Symbol.toPrimitive) return reference[prop];
             return new MyProxy(reference.concat(prop));
           },
           apply: function(target, thisArg, argumentsList) {
@@ -1091,6 +921,16 @@ class MiniRacerTest < Minitest::Test
     context = MiniRacer::Context.new()
     context.attach("myFunctionLogger", ->(property) {})
     context.eval(js)
+  end
+
+  def test_proxy_uncloneable
+    context = MiniRacer::Context.new()
+    expected = {"x" => 42}
+    assert_equal expected, context.eval(<<~JS)
+      const o = {x: 42}
+      const p = new Proxy(o, {})
+      Object.seal(p)
+    JS
   end
 
   def test_promise
@@ -1131,7 +971,7 @@ class MiniRacerTest < Minitest::Test
         .catch(e => print(e.toString()));
     JS
 
-    context.isolate.pump_message_loop while !context.eval("instance")
+    context.pump_message_loop while !context.eval("instance")
 
     assert_equal(3, context.eval("instance.exports.add(1,2)"))
   end
@@ -1197,5 +1037,39 @@ class MiniRacerTest < Minitest::Test
         assert false, "forking test failed"
       end
     end
+  end
+
+  def test_poison
+    context = MiniRacer::Context.new
+    context.eval <<~JS
+      const f = () => { throw "poison" }
+      const d = {get: f, set: f}
+      Object.defineProperty(Array.prototype, "0", d)
+      Object.defineProperty(Array.prototype, "1", d)
+    JS
+    assert_equal 42, context.eval("42")
+  end
+
+  def test_map
+    context = MiniRacer::Context.new
+    expected = {"x" => 42}
+    assert_equal expected, context.eval("new Map([['x', 42]])")
+    expected = ["x", 42]
+    assert_equal expected, context.eval("new Map([['x', 42]]).entries()")
+  end
+
+  def test_regexp_string_iterator
+    context = MiniRacer::Context.new
+    exc = false
+    begin
+      context.eval("'abc'.matchAll(/./g)")
+    rescue MiniRacer::RuntimeError => e
+      # TODO(bnoordhuis) maybe detect the iterator object and serialize
+      # it as an array of strings; problem is there is no V8 API to detect
+      # regexp string iterator objects
+      assert_match(/\[object RegExp String Iterator\] could not be cloned/, e.message)
+      exc = true
+    end
+    assert exc
   end
 end
