@@ -249,7 +249,7 @@ module MiniRacer
         elsif map?(value)
           js_map_to_hash(value)
         elsif map_iterator?(value)
-          value.flat_map { |e| convert_js_to_ruby(e) }
+          value.map { |e| convert_js_to_ruby(e) }
         else
           object = value
           h = {}

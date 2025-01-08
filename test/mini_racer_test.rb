@@ -1063,8 +1063,17 @@ class MiniRacerTest < Minitest::Test
     context = MiniRacer::Context.new
     expected = {"x" => 42, "y" => 43}
     assert_equal expected, context.eval("new Map([['x', 42], ['y', 43]])")
-    expected = ["x", 42, "y", 43]
+    if RUBY_ENGINE == "truffleruby"
+      # See https://github.com/rubyjs/mini_racer/pull/325#discussion_r1907187166
+      expected = [["x", 42], ["y", 43]]
+    else
+      expected = ["x", 42, "y", 43]
+    end
     assert_equal expected, context.eval("new Map([['x', 42], ['y', 43]]).entries()")
+    expected = ["x", "y"]
+    assert_equal expected, context.eval("new Map([['x', 42], ['y', 43]]).keys()")
+    expected = [[42], [43]]
+    assert_equal expected, context.eval("new Map([['x', [42]], ['y', [43]]]).values()")
   end
 
   def test_regexp_string_iterator
