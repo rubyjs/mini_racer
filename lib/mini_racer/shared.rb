@@ -86,7 +86,7 @@ module MiniRacer
           parent_object.split(".").each do |obj|
             prev << obj
             if first
-              @parent_object_eval << "if (typeof #{prev} === 'undefined') { #{prev} = {} };\n"
+              @parent_object_eval << "if (typeof #{prev} !== 'object' || typeof #{prev} !== 'function') { #{prev} = {} };\n"
             else
               @parent_object_eval << "#{prev} = #{prev} || {};\n"
             end
