@@ -848,8 +848,14 @@ class MiniRacerTest < Minitest::Test
 
   def test_symbol_support
     context = MiniRacer::Context.new()
-    assert_equal "foo", context.eval("Symbol('foo')")
-    assert_nil context.eval("Symbol()") # should not crash
+    if RUBY_ENGINE == "truffleruby"
+      # This seems the correct behavior, but it was changed in https://github.com/rubyjs/mini_racer/pull/325#discussion_r1907113432
+      assert_equal :foo, context.eval("Symbol('foo')")
+      assert_equal :undefined, context.eval("Symbol()") # should not crash
+    else
+      assert_equal "foo", context.eval("Symbol('foo')")
+      assert_nil context.eval("Symbol()") # should not crash
+    end
   end
 
   def test_infinite_object_js
