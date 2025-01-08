@@ -1062,6 +1062,9 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_regexp_string_iterator
+    if RUBY_ENGINE == "truffleruby"
+      skip "TruffleRuby supports passing any object between JS and Ruby"
+    end
     context = MiniRacer::Context.new
     exc = false
     begin
