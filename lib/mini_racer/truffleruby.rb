@@ -62,6 +62,14 @@ module MiniRacer
       end
     end
 
+    def low_memory_notification
+      GC.start
+    end
+
+    def idle_notification(idle_time)
+      true
+    end
+
     private
 
     @context_initialized = false
@@ -321,14 +329,6 @@ module MiniRacer
       # TruffleRuby does not have a 1-1 concept with isolate.
       # However, isolate can hold a snapshot, and code and ASTs are shared between contexts.
       @snapshot = snapshot
-    end
-
-    def low_memory_notification
-      GC.start
-    end
-
-    def idle_notification(idle_time)
-      true
     end
   end
 

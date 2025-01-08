@@ -247,7 +247,7 @@ module MiniRacer
               @ensure_gc_mutex.synchronize do
                 isolate_mutex.synchronize do
                   if !@eval_thread
-                    isolate.low_memory_notification if !@disposed
+                    low_memory_notification if !@disposed
                     @ensure_gc_thread = nil
                     done = true
                   end
