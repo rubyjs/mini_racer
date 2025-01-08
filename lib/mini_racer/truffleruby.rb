@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative 'shared'
+
 module MiniRacer
 
   class Context
