@@ -106,9 +106,11 @@ module MiniRacer
       else
         @snapshot = nil
       end
-      @is_object_or_array_func, @is_time_func, @js_date_to_time_func, @is_symbol_func, @js_symbol_to_symbol_func, @js_new_date_func, @js_new_array_func = eval_in_context <<-CODE
+      @is_object_or_array_func, @is_map_func, @is_map_iterator_func, @is_time_func, @js_date_to_time_func, @is_symbol_func, @js_symbol_to_symbol_func, @js_new_date_func, @js_new_array_func = eval_in_context <<-CODE
         [
           (x) => { return (x instanceof Object || x instanceof Array) && !(x instanceof Date) && !(x instanceof Function) },
+          (x) => { return x instanceof Map },
+          (x) => { return x[Symbol.toStringTag] === 'Map Iterator' },
           (x) => { return x instanceof Date },
           (x) => { return x.getTime(x) },
           (x) => { return typeof x === 'symbol' },
@@ -244,6 +246,10 @@ module MiniRacer
           js_date_to_time(value)
         elsif symbol?(value)
           js_symbol_to_symbol(value)
+        elsif map?(value)
+          js_map_to_hash(value)
+        elsif map_iterator?(value)
+          value.flat_map { |e| convert_js_to_ruby(e) }
         else
           object = value
           h = {}
@@ -262,6 +268,14 @@ module MiniRacer
       @is_object_or_array_func.call(val)
     end
 
+    def map?(value)
+      @is_map_func.call(value)
+    end
+
+    def map_iterator?(value)
+      @is_map_iterator_func.call(value)
+    end
+
     def time?(value)
       @is_time_func.call(value)
     end
@@ -277,6 +291,12 @@ module MiniRacer
 
     def js_symbol_to_symbol(value)
       @js_symbol_to_symbol_func.call(value).to_s.to_sym
+    end
+
+    def js_map_to_hash(map)
+      map.to_a.to_h do |key, value|
+        [convert_js_to_ruby(key), convert_js_to_ruby(value)]
+      end
     end
 
     def js_new_date(value)

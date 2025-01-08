@@ -1055,10 +1055,10 @@ class MiniRacerTest < Minitest::Test
 
   def test_map
     context = MiniRacer::Context.new
-    expected = {"x" => 42}
-    assert_equal expected, context.eval("new Map([['x', 42]])")
-    expected = ["x", 42]
-    assert_equal expected, context.eval("new Map([['x', 42]]).entries()")
+    expected = {"x" => 42, "y" => 43}
+    assert_equal expected, context.eval("new Map([['x', 42], ['y', 43]])")
+    expected = ["x", 42, "y", 43]
+    assert_equal expected, context.eval("new Map([['x', 42], ['y', 43]]).entries()")
   end
 
   def test_regexp_string_iterator
