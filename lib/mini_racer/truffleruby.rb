@@ -333,37 +333,10 @@ module MiniRacer
   end
 
   class Platform
-    class << self
-      def set_flags!(*args, **kwargs)
-        flags_to_strings([args, kwargs]).each do |flag|
-          set_flag_as_str!(flag)
-        end
-      end
-
-    private
-
-      def flags_to_strings(flags)
-        flags.flatten.map { |flag| flag_to_string(flag) }.flatten
-      end
-
-      # normalize flags to strings, and adds leading dashes if needed
-      def flag_to_string(flag)
-        if flag.is_a?(Hash)
-          flag.map do |key, value|
-            "#{flag_to_string(key)} #{value}"
-          end
-        else
-          str = flag.to_s
-          str = "--#{str}" unless str.start_with?('--')
-          str
-        end
-      end
-
-      def set_flag_as_str!(flag)
-        raise TypeError, "wrong type argument #{flag.class} (should be a string)" unless flag.is_a?(String)
-        raise MiniRacer::PlatformAlreadyInitialized, "The platform is already initialized." if Context.instance_variable_get(:@context_initialized)
-        Context.instance_variable_set(:@use_strict, true) if "--use_strict" == flag
-      end
+    def self.set_flag_as_str!(flag)
+      raise TypeError, "wrong type argument #{flag.class} (should be a string)" unless flag.is_a?(String)
+      raise MiniRacer::PlatformAlreadyInitialized, "The platform is already initialized." if Context.instance_variable_get(:@context_initialized)
+      Context.instance_variable_set(:@use_strict, true) if "--use_strict" == flag
     end
   end
 
