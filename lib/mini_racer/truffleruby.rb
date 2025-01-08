@@ -45,6 +45,7 @@ module MiniRacer
     end
 
     def heap_stats
+      raise ContextDisposedError if @disposed
       {
         total_physical_size: 0,
         total_heap_size_executable: 0,
