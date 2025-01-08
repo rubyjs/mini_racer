@@ -75,14 +75,12 @@ module MiniRacer
 
       if String === file_or_io
         f = File.open(file_or_io, "w")
-	implicit = true
+        implicit = true
       else
         f = file_or_io
       end
 
-      if !(File === f)
-        raise ArgumentError, "file_or_io"
-      end
+      raise ArgumentError, "file_or_io" unless File === f
 
       f.write(heap_snapshot())
     ensure

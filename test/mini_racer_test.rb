@@ -11,8 +11,8 @@ class MiniRacerTest < Minitest::Test
   # --stress_snapshot works around a bogus debug assert in V8
   # that terminates the process with the following error:
   #
-  #	Fatal error in ../deps/v8/src/heap/read-only-spaces.cc, line 70
-  #	Check failed: read_only_blob_checksum_ == snapshot_checksum (<unprintable> vs. 1099685679).
+  # Fatal error in ../deps/v8/src/heap/read-only-spaces.cc, line 70
+  # Check failed: read_only_blob_checksum_ == snapshot_checksum (<unprintable> vs. 1099685679).
   MiniRacer::Platform.set_flags! :stress_snapshot
 
   def test_locale_mx
