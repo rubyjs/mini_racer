@@ -1077,15 +1077,14 @@ class MiniRacerTest < Minitest::Test
   def test_function_cloning
     message = nil
     context = MiniRacer::Context.new
-    context.attach("rails.logger.warn", proc { |msg| message = msg })
+    context.attach("log", proc { |msg| message = msg })
     context.eval <<~JS
-               console = {
-                 prefix: "[PrettyText] ",
-                 log: function(...args){ rails.logger.info(console.prefix + args.join(" ")); },
-               }
-             JS
+       console = {
+         log: function(...args){ log(args.join(" ")); },
+       }
+    JS
 
     context.eval("console.log('Hello', 'World!')")
-    assert_equal "[PrettyText] Hello World!", message
+    assert_equal "Hello World!", message
   end
 end
