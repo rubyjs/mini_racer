@@ -1,3 +1,8 @@
+- 0.17.0.pre7 - 10-01-2025
+
+  - Objects containing non serializable properties will return an Error object vs raising an exception. Ben Noordhuis
+  - Truffle support was added back Eregon
+
 - 0.17.0.pre6 - 08-01-2025
 
   - Moved all mini_racer interaction with v8 to a dedicated native thread to avoid cross VM stack contamination. Ben Noordhuis
