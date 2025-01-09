@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative 'shared'
+
 module MiniRacer
 
   class Context
@@ -43,6 +45,7 @@ module MiniRacer
     end
 
     def heap_stats
+      raise ContextDisposedError if @disposed
       {
         total_physical_size: 0,
         total_heap_size_executable: 0,
@@ -58,6 +61,14 @@ module MiniRacer
         @stopped = true
         stop_attached
       end
+    end
+
+    def low_memory_notification
+      GC.start
+    end
+
+    def idle_notification(idle_time)
+      true
     end
 
     private
@@ -95,9 +106,11 @@ module MiniRacer
       else
         @snapshot = nil
       end
-      @is_object_or_array_func, @is_time_func, @js_date_to_time_func, @is_symbol_func, @js_symbol_to_symbol_func, @js_new_date_func, @js_new_array_func = eval_in_context <<-CODE
+      @is_object_or_array_func, @is_map_func, @is_map_iterator_func, @is_time_func, @js_date_to_time_func, @is_symbol_func, @js_symbol_to_symbol_func, @js_new_date_func, @js_new_array_func = eval_in_context <<-CODE
         [
           (x) => { return (x instanceof Object || x instanceof Array) && !(x instanceof Date) && !(x instanceof Function) },
+          (x) => { return x instanceof Map },
+          (x) => { return x[Symbol.toStringTag] === 'Map Iterator' },
           (x) => { return x instanceof Date },
           (x) => { return x.getTime(x) },
           (x) => { return typeof x === 'symbol' },
@@ -233,6 +246,10 @@ module MiniRacer
           js_date_to_time(value)
         elsif symbol?(value)
           js_symbol_to_symbol(value)
+        elsif map?(value)
+          js_map_to_hash(value)
+        elsif map_iterator?(value)
+          value.map { |e| convert_js_to_ruby(e) }
         else
           object = value
           h = {}
@@ -251,6 +268,14 @@ module MiniRacer
       @is_object_or_array_func.call(val)
     end
 
+    def map?(value)
+      @is_map_func.call(value)
+    end
+
+    def map_iterator?(value)
+      @is_map_iterator_func.call(value)
+    end
+
     def time?(value)
       @is_time_func.call(value)
     end
@@ -266,6 +291,12 @@ module MiniRacer
 
     def js_symbol_to_symbol(value)
       @js_symbol_to_symbol_func.call(value).to_s.to_sym
+    end
+
+    def js_map_to_hash(map)
+      map.to_a.to_h do |key, value|
+        [convert_js_to_ruby(key), convert_js_to_ruby(value)]
+      end
     end
 
     def js_new_date(value)
@@ -320,48 +351,13 @@ module MiniRacer
       # However, isolate can hold a snapshot, and code and ASTs are shared between contexts.
       @snapshot = snapshot
     end
-
-    def low_memory_notification
-      GC.start
-    end
-
-    def idle_notification(idle_time)
-      true
-    end
   end
 
   class Platform
-    class << self
-      def set_flags!(*args, **kwargs)
-        flags_to_strings([args, kwargs]).each do |flag|
-          set_flag_as_str!(flag)
-        end
-      end
-
-    private
-
-      def flags_to_strings(flags)
-        flags.flatten.map { |flag| flag_to_string(flag) }.flatten
-      end
-
-      # normalize flags to strings, and adds leading dashes if needed
-      def flag_to_string(flag)
-        if flag.is_a?(Hash)
-          flag.map do |key, value|
-            "#{flag_to_string(key)} #{value}"
-          end
-        else
-          str = flag.to_s
-          str = "--#{str}" unless str.start_with?('--')
-          str
-        end
-      end
-
-      def set_flag_as_str!(flag)
-        raise TypeError, "wrong type argument #{flag.class} (should be a string)" unless flag.is_a?(String)
-        raise MiniRacer::PlatformAlreadyInitialized, "The platform is already initialized." if Context.instance_variable_get(:@context_initialized)
-        Context.instance_variable_set(:@use_strict, true) if "--use_strict" == flag
-      end
+    def self.set_flag_as_str!(flag)
+      raise TypeError, "wrong type argument #{flag.class} (should be a string)" unless flag.is_a?(String)
+      raise MiniRacer::PlatformAlreadyInitialized, "The platform is already initialized." if Context.instance_variable_get(:@context_initialized)
+      Context.instance_variable_set(:@use_strict, true) if "--use_strict" == flag
     end
   end
 

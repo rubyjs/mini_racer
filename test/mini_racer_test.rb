@@ -11,8 +11,8 @@ class MiniRacerTest < Minitest::Test
   # --stress_snapshot works around a bogus debug assert in V8
   # that terminates the process with the following error:
   #
-  #	Fatal error in ../deps/v8/src/heap/read-only-spaces.cc, line 70
-  #	Check failed: read_only_blob_checksum_ == snapshot_checksum (<unprintable> vs. 1099685679).
+  # Fatal error in ../deps/v8/src/heap/read-only-spaces.cc, line 70
+  # Check failed: read_only_blob_checksum_ == snapshot_checksum (<unprintable> vs. 1099685679).
   MiniRacer::Platform.set_flags! :stress_snapshot
 
   def test_locale_mx
@@ -848,8 +848,14 @@ class MiniRacerTest < Minitest::Test
 
   def test_symbol_support
     context = MiniRacer::Context.new()
-    assert_equal "foo", context.eval("Symbol('foo')")
-    assert_nil context.eval("Symbol()") # should not crash
+    if RUBY_ENGINE == "truffleruby"
+      # This seems the correct behavior, but it was changed in https://github.com/rubyjs/mini_racer/pull/325#discussion_r1907113432
+      assert_equal :foo, context.eval("Symbol('foo')")
+      assert_equal :undefined, context.eval("Symbol()") # should not crash
+    else
+      assert_equal "foo", context.eval("Symbol('foo')")
+      assert_nil context.eval("Symbol()") # should not crash
+    end
   end
 
   def test_infinite_object_js
@@ -1039,6 +1045,9 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_poison
+    if RUBY_ENGINE == "truffleruby"
+      skip "TruffleRuby uses some extra JS code when creating/using a Context which seems to trigger the poison"
+    end
     context = MiniRacer::Context.new
     context.eval <<~JS
       const f = () => { throw "poison" }
@@ -1051,13 +1060,25 @@ class MiniRacerTest < Minitest::Test
 
   def test_map
     context = MiniRacer::Context.new
-    expected = {"x" => 42}
-    assert_equal expected, context.eval("new Map([['x', 42]])")
-    expected = ["x", 42]
-    assert_equal expected, context.eval("new Map([['x', 42]]).entries()")
+    expected = {"x" => 42, "y" => 43}
+    assert_equal expected, context.eval("new Map([['x', 42], ['y', 43]])")
+    if RUBY_ENGINE == "truffleruby"
+      # See https://github.com/rubyjs/mini_racer/pull/325#discussion_r1907187166
+      expected = [["x", 42], ["y", 43]]
+    else
+      expected = ["x", 42, "y", 43]
+    end
+    assert_equal expected, context.eval("new Map([['x', 42], ['y', 43]]).entries()")
+    expected = ["x", "y"]
+    assert_equal expected, context.eval("new Map([['x', 42], ['y', 43]]).keys()")
+    expected = [[42], [43]]
+    assert_equal expected, context.eval("new Map([['x', [42]], ['y', [43]]]).values()")
   end
 
   def test_regexp_string_iterator
+    if RUBY_ENGINE == "truffleruby"
+      skip "TruffleRuby supports passing any object between JS and Ruby"
+    end
     context = MiniRacer::Context.new
     # TODO(bnoordhuis) maybe detect the iterator object and serialize
     # it as a string or array of strings; problem is there is no V8 API
