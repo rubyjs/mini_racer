@@ -262,9 +262,7 @@ class MiniRacerTest < Minitest::Test
   def test_date_nan
     # NoMethodError: undefined method `source_location' for "<internal:core>
     # core/float.rb:114:in `to_i'":Thread::Backtrace::Location
-    if RUBY_ENGINE == "truffleruby"
-      skip "TruffleRuby bug"
-    end
+    skip "TruffleRuby bug" if RUBY_ENGINE == "truffleruby"
     context = MiniRacer::Context.new
     assert_raises(RangeError) { context.eval("new Date(NaN)") } # should not crash process
   end
@@ -895,11 +893,13 @@ class MiniRacerTest < Minitest::Test
     context = MiniRacer::Context.new
     # Error: [object Object] could not be cloned
     assert_raises(MiniRacer::RuntimeError) do
-      context.eval("
+      context.eval(
+        "
         var b = [0,97,115,109,1,0,0,0,1,26,5,80,0,95,0,80,0,95,1,127,0,96,0,1,110,96,1,100,2,1,111,96,0,1,100,3,3,4,3,3,2,4,7,26,2,12,99,114,101,97,116,101,83,116,114,117,99,116,0,1,7,114,101,102,70,117,110,99,0,2,9,5,1,3,0,1,0,10,23,3,8,0,32,0,20,2,251,27,11,7,0,65,12,251,0,1,11,4,0,210,0,11,0,44,4,110,97,109,101,1,37,3,0,11,101,120,112,111,114,116,101,100,65,110,121,1,12,99,114,101,97,116,101,83,116,114,117,99,116,2,7,114,101,102,70,117,110,99]
         var o = new WebAssembly.Instance(new WebAssembly.Module(new Uint8Array(b))).exports
         o.refFunc()(o.createStruct) // exotic object
-      ")
+      "
+      )
     end
   end
 
@@ -925,7 +925,7 @@ class MiniRacerTest < Minitest::Test
 
   def test_proxy_uncloneable
     context = MiniRacer::Context.new()
-    expected = {"x" => 42}
+    expected = { "x" => 42 }
     assert_equal expected, context.eval(<<~JS)
       const o = {x: 42}
       const p = new Proxy(o, {})
@@ -1033,9 +1033,7 @@ class MiniRacerTest < Minitest::Test
       skip "TruffleRuby forking is not supported"
     else
       `bundle exec ruby test/test_forking.rb`
-      if $?.exitstatus != 0
-        assert false, "forking test failed"
-      end
+      assert false, "forking test failed" if $?.exitstatus != 0
     end
   end
 
@@ -1052,7 +1050,7 @@ class MiniRacerTest < Minitest::Test
 
   def test_map
     context = MiniRacer::Context.new
-    expected = {"x" => 42}
+    expected = { "x" => 42 }
     assert_equal expected, context.eval("new Map([['x', 42]])")
     expected = ["x", 42]
     assert_equal expected, context.eval("new Map([['x', 42]]).entries()")
@@ -1067,9 +1065,27 @@ class MiniRacerTest < Minitest::Test
       # TODO(bnoordhuis) maybe detect the iterator object and serialize
       # it as an array of strings; problem is there is no V8 API to detect
       # regexp string iterator objects
-      assert_match(/\[object RegExp String Iterator\] could not be cloned/, e.message)
+      assert_match(
+        /\[object RegExp String Iterator\] could not be cloned/,
+        e.message
+      )
       exc = true
     end
     assert exc
+  end
+
+  def test_function_cloning
+    message = nil
+    context = MiniRacer::Context.new
+    context.attach("rails.logger.warn", proc { |msg| message = msg })
+    context.eval <<~JS
+               console = {
+                 prefix: "[PrettyText] ",
+                 log: function(...args){ rails.logger.info(console.prefix + args.join(" ")); },
+               }
+             JS
+
+    context.eval("console.log('Hello', 'World!')")
+    assert_equal "[PrettyText] Hello World!", message
   end
 end
