@@ -1047,7 +1047,7 @@ class MiniRacerTest < Minitest::Test
 
   def test_poison
     if RUBY_ENGINE == "truffleruby"
-      skip "TruffleRuby uses some extra JS code when creating/using a Contex which seems to trigger the poison"
+      skip "TruffleRuby uses some extra JS code when creating/using a Context which seems to trigger the poison"
     end
     context = MiniRacer::Context.new
     context.eval <<~JS
