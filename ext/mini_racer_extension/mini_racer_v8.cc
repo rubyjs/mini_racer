@@ -34,8 +34,6 @@ struct State
     v8::Local<v8::Context> safe_context;
     v8::Persistent<v8::Context> persistent_context;      // single-thread mode only
     v8::Persistent<v8::Context> persistent_safe_context; // single-thread mode only
-    v8::Persistent<v8::Object> persistent_webassembly_instance;
-    v8::Local<v8::Object> webassembly_instance;
     Context *ruby_context;
     int64_t max_memory;
     int err_reason;
@@ -81,21 +79,54 @@ bool reply(State& st, v8::Local<v8::Value> v)
     return serialized.data != nullptr; // exception pending if false
 }
 
+bool reply(State& st, v8::Local<v8::Value> result, v8::Local<v8::Value> err)
+{
+    v8::TryCatch try_catch(st.isolate);
+    try_catch.SetVerbose(st.verbose_exceptions);
+    v8::Local<v8::Array> response;
+    {
+        v8::Context::Scope context_scope(st.safe_context);
+        response = v8::Array::New(st.isolate, 2);
+    }
+    response->Set(st.context, 0, result).Check();
+    response->Set(st.context, 1, err).Check();
+    if (reply(st, response)) return true;
+    if (!try_catch.CanContinue()) { // termination exception?
+        try_catch.ReThrow();
+        return false;
+    }
+    v8::String::Utf8Value s(st.isolate, try_catch.Exception());
+    const char *message = *s ? *s : "unexpected failure";
+    // most serialization errors will be DataCloneErrors but not always
+    // DataCloneErrors are not directly detectable so use a heuristic
+    if (!strstr(message, "could not be cloned")) {
+        try_catch.ReThrow();
+        return false;
+    }
+    // return an {"error": "foo could not be cloned"} object
+    v8::Local<v8::Object> error;
+    {
+        v8::Context::Scope context_scope(st.safe_context);
+        error = v8::Object::New(st.isolate);
+    }
+    auto key = v8::String::NewFromUtf8Literal(st.isolate, "error");
+    v8::Local<v8::String> val;
+    if (!v8::String::NewFromUtf8(st.isolate, message).ToLocal(&val)) {
+        val = v8::String::NewFromUtf8Literal(st.isolate, "unexpected error");
+    }
+    error->Set(st.context, key, val).Check();
+    response->Set(st.context, 0, error).Check();
+    if (!reply(st, response)) {
+        try_catch.ReThrow();
+        return false;
+    }
+    return true;
+}
+
 v8::Local<v8::Value> sanitize(State& st, v8::Local<v8::Value> v)
 {
     // punch through proxies
     while (v->IsProxy()) v = v8::Proxy::Cast(*v)->GetTarget();
-    // things that cannot be serialized
-    if (v->IsArgumentsObject() ||
-        v->IsPromise() ||
-        v->IsModule() ||
-        v->IsModuleNamespaceObject() ||
-        v->IsWasmMemoryObject() ||
-        v->IsWasmModuleObject() ||
-        v->IsWasmNull() ||
-        v->IsWeakRef()) {
-        return v8::Object::New(st.isolate);
-    }
     // V8's serializer doesn't accept symbols
     if (v->IsSymbol()) return v8::Symbol::Cast(*v)->Description(st.isolate);
     // TODO(bnoordhuis) replace this hack with something more principled
@@ -111,17 +142,10 @@ v8::Local<v8::Value> sanitize(State& st, v8::Local<v8::Value> v)
             return array;
         }
     }
-    // WebAssembly.Instance objects are not serializable but there
-    // is no direct way to detect them through the V8 C++ API
-    if (!st.webassembly_instance.IsEmpty() &&
-        v->IsObject() &&
-        v->InstanceOf(st.context, st.webassembly_instance).FromMaybe(false)) {
-        return v8::Object::New(st.isolate);
-    }
     return v;
 }
 
-v8::Local<v8::Value> to_error(State& st, v8::TryCatch *try_catch, int cause)
+v8::Local<v8::String> to_error(State& st, v8::TryCatch *try_catch, int cause)
 {
     v8::Local<v8::Value> t;
     char buf[1024];
@@ -216,18 +240,7 @@ extern "C" State *v8_thread_init(Context *c, const uint8_t *snapshot_buf,
         st.safe_context = v8::Context::New(st.isolate);
         st.context = v8::Context::New(st.isolate);
         v8::Context::Scope context_scope(st.context);
-        auto global = st.context->Global();
-        // globalThis.WebAssembly is missing in --jitless mode
-        auto key = v8::String::NewFromUtf8Literal(st.isolate, "WebAssembly");
-        v8::Local<v8::Value> wasm_v;
-        if (global->Get(st.context, key).ToLocal(&wasm_v) && wasm_v->IsObject()) {
-            auto key = v8::String::NewFromUtf8Literal(st.isolate, "Instance");
-            st.webassembly_instance =
-                wasm_v.As<v8::Object>()
-                ->Get(st.context, key).ToLocalChecked().As<v8::Object>();
-        }
         if (single_threaded) {
-            st.persistent_webassembly_instance.Reset(st.isolate, st.webassembly_instance);
             st.persistent_safe_context.Reset(st.isolate, st.safe_context);
             st.persistent_context.Reset(st.isolate, st.context);
             return pst; // intentionally returning early and keeping alive
@@ -246,7 +259,7 @@ void v8_api_callback(const v8::FunctionCallbackInfo<v8::Value>& info)
     v8::Local<v8::Array> request;
     {
         v8::Context::Scope context_scope(st.safe_context);
-        request = v8::Array::New(st.isolate, 2);
+        request = v8::Array::New(st.isolate, 1 + info.Length());
     }
     for (int i = 0, n = info.Length(); i < n; i++) {
         request->Set(st.context, i, sanitize(st, info[i])).Check();
@@ -354,11 +367,6 @@ extern "C" void v8_call(State *pst, const uint8_t *p, size_t n)
     v8::ValueDeserializer des(st.isolate, p, n);
     std::vector<v8::Local<v8::Value>> args;
     des.ReadHeader(st.context).Check();
-    v8::Local<v8::Array> response;
-    {
-        v8::Context::Scope context_scope(st.safe_context);
-        response = v8::Array::New(st.isolate, 2);
-    }
     v8::Local<v8::Value> result;
     int cause = INTERNAL_ERROR;
     {
@@ -420,9 +428,7 @@ fail:
     if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
     if (cause) result = v8::Undefined(st.isolate);
     auto err = to_error(st, &try_catch, cause);
-    response->Set(st.context, 0, result).Check();
-    response->Set(st.context, 1, err).Check();
-    if (!reply(st, response)) {
+    if (!reply(st, result, err)) {
         assert(try_catch.HasCaught());
         goto fail; // retry; can be termination exception
     }
@@ -437,11 +443,6 @@ extern "C" void v8_eval(State *pst, const uint8_t *p, size_t n)
     v8::HandleScope handle_scope(st.isolate);
     v8::ValueDeserializer des(st.isolate, p, n);
     des.ReadHeader(st.context).Check();
-    v8::Local<v8::Array> response;
-    {
-        v8::Context::Scope context_scope(st.safe_context);
-        response = v8::Array::New(st.isolate, 2);
-    }
     v8::Local<v8::Value> result;
     int cause = INTERNAL_ERROR;
     {
@@ -475,9 +476,7 @@ fail:
     if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
     if (cause) result = v8::Undefined(st.isolate);
     auto err = to_error(st, &try_catch, cause);
-    response->Set(st.context, 0, result).Check();
-    response->Set(st.context, 1, err).Check();
-    if (!reply(st, response)) {
+    if (!reply(st, result, err)) {
         assert(try_catch.HasCaught());
         goto fail; // retry; can be termination exception
     }
@@ -638,11 +637,6 @@ extern "C" void v8_snapshot(State *pst, const uint8_t *p, size_t n)
     v8::HandleScope handle_scope(st.isolate);
     v8::ValueDeserializer des(st.isolate, p, n);
     des.ReadHeader(st.context).Check();
-    v8::Local<v8::Array> response;
-    {
-        v8::Context::Scope context_scope(st.safe_context);
-        response = v8::Array::New(st.isolate, 2);
-    }
     v8::Local<v8::Value> result;
     v8::StartupData blob{nullptr, 0};
     int cause = INTERNAL_ERROR;
@@ -682,9 +676,7 @@ fail:
     } else {
         err = to_error(st, &try_catch, cause);
     }
-    response->Set(st.context, 0, result).Check();
-    response->Set(st.context, 1, err).Check();
-    if (!reply(st, response)) {
+    if (!reply(st, result, err)) {
         assert(try_catch.HasCaught());
         goto fail; // retry; can be termination exception
     }
@@ -699,11 +691,6 @@ extern "C" void v8_warmup(State *pst, const uint8_t *p, size_t n)
     std::vector<uint8_t> storage;
     v8::ValueDeserializer des(st.isolate, p, n);
     des.ReadHeader(st.context).Check();
-    v8::Local<v8::Array> response;
-    {
-        v8::Context::Scope context_scope(st.safe_context);
-        response = v8::Array::New(st.isolate, 2);
-    }
     v8::Local<v8::Value> result;
     v8::StartupData blob{nullptr, 0};
     int cause = INTERNAL_ERROR;
@@ -761,9 +748,7 @@ fail:
     } else {
         err = to_error(st, &try_catch, cause);
     }
-    response->Set(st.context, 0, result).Check();
-    response->Set(st.context, 1, err).Check();
-    if (!reply(st, response)) {
+    if (!reply(st, result, err)) {
         assert(try_catch.HasCaught());
         goto fail; // retry; can be termination exception
     }
@@ -807,14 +792,12 @@ extern "C" void v8_single_threaded_enter(State *pst, Context *c, void (*f)(Conte
     v8::Isolate::Scope isolate_scope(st.isolate);
     v8::HandleScope handle_scope(st.isolate);
     {
-        st.webassembly_instance = v8::Local<v8::Object>::New(st.isolate, st.persistent_webassembly_instance);
         st.safe_context = v8::Local<v8::Context>::New(st.isolate, st.persistent_safe_context);
         st.context = v8::Local<v8::Context>::New(st.isolate, st.persistent_context);
         v8::Context::Scope context_scope(st.context);
         f(c);
         st.context = v8::Local<v8::Context>();
         st.safe_context = v8::Local<v8::Context>();
-        st.webassembly_instance = v8::Local<v8::Object>();
     }
 }
 
@@ -830,7 +813,6 @@ State::~State()
     {
         v8::Locker locker(isolate);
         v8::Isolate::Scope isolate_scope(isolate);
-        persistent_webassembly_instance.Reset();
         persistent_safe_context.Reset();
         persistent_context.Reset();
     }
