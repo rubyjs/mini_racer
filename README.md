@@ -206,58 +206,27 @@ context.eval("counter")
 # => 1
 ```
 
-### Shared isolates
+### Garbage collection
 
-By default, MiniRacer's contexts each have their own isolate (V8 runtime). For efficiency, it is possible to re-use an isolate across contexts:
-
-```ruby
-isolate = MiniRacer::Isolate.new
-
-context1 = MiniRacer::Context.new(isolate: isolate)
-context2 = MiniRacer::Context.new(isolate: isolate)
-
-context1.isolate == context2.isolate
-# => true
-```
-
-The main benefit of this is avoiding creating/destroying isolates when not needed (for example if you use a lot of contexts).
-
-The caveat with this is that a given isolate can only execute one context at a time, so don't share isolates across contexts that you want to run concurrently.
-
-Also, note that if you want to use shared isolates together with snapshots, you need to first create an isolate with that snapshot, and then create contexts from that isolate:
+Re-using the same context over and over again means V8's garbage collector will have to run to clean it up every now and then; it's possible to trigger a _blocking_ V8 GC run inside your context by running the `idle_notification` method on it, which takes a single argument: the amount of time (in milliseconds) that V8 should use at most for garbage collecting:
 
 ```ruby
-snapshot = MiniRacer::Snapshot.new("function hello() { return 'world!'; }")
-
-isolate = MiniRacer::Isolate.new(snapshot)
-
-context = MiniRacer::Context.new(isolate: isolate)
-
-context.eval("hello()")
-# => "world!"
-```
-
-Re-using the same isolate over and over again means V8's garbage collector will have to run to clean it up every now and then; it's possible to trigger a _blocking_ V8 GC run inside your isolate by running the `idle_notification` method on it, which takes a single argument: the amount of time (in milliseconds) that V8 should use at most for garbage collecting:
-
-```ruby
-isolate = MiniRacer::Isolate.new
-
-context = MiniRacer::Context.new(isolate: isolate)
+context = MiniRacer::Context.new
 
 # do stuff with that context...
 
 # give up to 100ms for V8 garbage collection
-isolate.idle_notification(100)
+context.idle_notification(100)
 
 # force V8 to perform a full GC
-isolate.low_memory_notification
+context.low_memory_notification
 ```
 
 This can come in handy to force V8 GC runs for example in between requests if you use MiniRacer on a web application.
 
 Note that this method maps directly to [`v8::Isolate::IdleNotification`](http://bespin.cz/~ondras/html/classv8_1_1Isolate.html#aea16cbb2e351de9a3ae7be2b7cb48297), and that in particular its return value is the same (true if there is no further garbage to collect, false otherwise) and the same caveats apply, in particular that `there is no guarantee that the [call will return] within the time limit.`
 
-Additionally you may automate this process on a context by defining it with `MiniRacer::Content.new(ensure_gc_after_idle: 1000)`. Using this will ensure V8 will run a full GC using `context.isolate.low_memory_notification` 1 second after the last eval on the context. Low memory notification is both slower and more aggressive than an idle_notification and will ensure long living isolates use minimal amounts of memory.
+Additionally you may automate this process on a context by defining it with `MiniRacer::Context.new(ensure_gc_after_idle: 1000)`. Using this will ensure V8 will run a full GC using `context.low_memory_notification` 1 second after the last eval on the context. Low memory notification is both slower and more aggressive than an idle_notification and will ensure long living contexts use minimal amounts of memory.
 
 ### V8 Runtime flags
 
@@ -301,7 +270,7 @@ Please refer to http://node.green/ as a reference on other harmony features.
 
 A list of all V8 runtime flags can be found using `node --v8-options`, or else by perusing [the V8 source code for flags (make sure to use the right version of V8)](https://github.com/v8/v8/blob/master/src/flags/flag-definitions.h).
 
-Note that runtime flags must be set before any other operation (e.g. creating a context, a snapshot or an isolate), otherwise an exception will be thrown.
+Note that runtime flags must be set before any other operation (e.g. creating a context or a snapshot), otherwise an exception will be thrown.
 
 Flags:
 
