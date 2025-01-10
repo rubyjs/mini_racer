@@ -370,6 +370,7 @@ static int des1(char (*err)[64], const uint8_t **p, const uint8_t *pe,
 
     if (depth < 0)
         return bail(err, "too much recursion");
+again:
     if (*p >= pe)
         goto too_short;
     switch ((c = *(*p)++)) {
@@ -380,7 +381,9 @@ static int des1(char (*err)[64], const uint8_t **p, const uint8_t *pe,
             snprintf(*err, sizeof(*err), "bad tag: %02x", c);
         }
         return -1;
-    case '\0': // padding
+    case '\0': // skip alignment padding for two-byte strings
+        if (*p < pe)
+            goto again;
         break;
     case '^':
         if (r_varint(p, pe, &u))
