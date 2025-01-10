@@ -303,6 +303,14 @@ static void ser_string8(Ser *s, const uint8_t *p, size_t n)
     w(s, p, n);
 }
 
+// string must be utf16le; |n| is in bytes, not code points
+static void ser_string16(Ser *s, const void *p, size_t n)
+{
+    w_byte(s, 'c');
+    w_varint(s, n);
+    w(s, p, n);
+}
+
 static void ser_object_begin(Ser *s)
 {
     w_byte(s, 'o');
