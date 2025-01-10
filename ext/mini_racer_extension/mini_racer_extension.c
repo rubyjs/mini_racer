@@ -422,6 +422,25 @@ static int collect(VALUE k, VALUE v, VALUE a)
     return ST_CONTINUE;
 }
 
+static void add_string(Ser *s, VALUE v)
+{
+    rb_encoding *e;
+    const void *p;
+    size_t n;
+
+    Check_Type(v, T_STRING);
+    e = rb_enc_get(v);
+    p = RSTRING_PTR(v);
+    n = RSTRING_LEN(v);
+    if (e) {
+        if (!strcmp(e->name, "ISO-8859-1"))
+            return ser_string8(s, p, n);
+        if (!strcmp(e->name, "UTF-16LE"))
+            return ser_string16(s, p, n);
+    }
+    return ser_string(s, p, n);
+}
+
 static int serialize1(Ser *s, VALUE refs, VALUE v)
 {
     unsigned long limbs[64];
@@ -525,7 +544,7 @@ static int serialize1(Ser *s, VALUE refs, VALUE v)
         v = rb_sym2str(v);
         // fallthru
     case T_STRING:
-        ser_string(s, RSTRING_PTR(v), RSTRING_LENINT(v));
+        add_string(s, v);
         break;
     default:
         snprintf(s->err, sizeof(s->err), "unsupported type %x", TYPE(v));
@@ -1062,7 +1081,7 @@ static VALUE context_attach(VALUE self, VALUE name, VALUE proc)
     // request is (A)ttach, [name, id] array
     ser_init1(&s, 'A');
     ser_array_begin(&s, 2);
-    ser_string(&s, RSTRING_PTR(name), RSTRING_LENINT(name));
+    add_string(&s, name);
     ser_int(&s, RARRAY_LENINT(c->procs));
     ser_array_end(&s, 2);
     rb_ary_push(c->procs, proc);
@@ -1159,8 +1178,8 @@ static VALUE context_eval(int argc, VALUE *argv, VALUE self)
     // request is (E)val, [filename, source] array
     ser_init1(&s, 'E');
     ser_array_begin(&s, 2);
-    ser_string(&s, RSTRING_PTR(filename), RSTRING_LENINT(filename));
-    ser_string(&s, RSTRING_PTR(source), RSTRING_LENINT(source));
+    add_string(&s, filename);
+    add_string(&s, source);
     ser_array_end(&s, 2);
     // response is [result, errname] array
     a = rendezvous(c, &s.b); // takes ownership of |s.b|
@@ -1462,7 +1481,7 @@ static VALUE snapshot_initialize(int argc, VALUE *argv, VALUE self)
     TypedData_Get_Struct(cv, Context, &context_type, c);
     // request is snapsho(T), "code"
     ser_init1(&s, 'T');
-    ser_string(&s, RSTRING_PTR(code), RSTRING_LENINT(code));
+    add_string(&s, code);
     // response is [arraybuffer, error]
     a = rendezvous(c, &s.b);
     e = rb_ary_pop(a);
@@ -1489,7 +1508,7 @@ static VALUE snapshot_warmup(VALUE self, VALUE arg)
     ser_init1(&s, 'W');
     ser_array_begin(&s, 2);
     ser_string8(&s, (const uint8_t *)RSTRING_PTR(ss->blob), RSTRING_LENINT(ss->blob));
-    ser_string(&s, RSTRING_PTR(arg), RSTRING_LENINT(arg));
+    add_string(&s, arg);
     ser_array_end(&s, 2);
     // response is [arraybuffer, error]
     a = rendezvous(c, &s.b);

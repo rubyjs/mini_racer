@@ -1093,4 +1093,11 @@ class MiniRacerTest < Minitest::Test
     expected = {"error" => "Error: f() {} could not be cloned."}
     assert_equal expected, context.eval("({ x: 42, f() {} })")
   end
+
+  def test_string_encoding
+    context = MiniRacer::Context.new
+    assert_equal "ok", context.eval("'ok'".encode("ISO-8859-1"))
+    assert_equal "ok", context.eval("'ok'".encode("ISO8859-1"))
+    assert_equal "ok", context.eval("'ok'".encode("UTF-16LE"))
+  end
 end
