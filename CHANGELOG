@@ -1,3 +1,7 @@
+- 0.17.0.pre8 - 11-01-2025
+  - Fix handling of UTF 32 LE and Ascii encoding strings - Ben Noordhuis
+  - Handle rare edge case in V8 serialization - Ben Noordhuis
+
 - 0.17.0.pre7 - 10-01-2025
 
   - Objects containing non serializable properties will return an Error object vs raising an exception. Ben Noordhuis
