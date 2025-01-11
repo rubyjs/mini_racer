@@ -1089,8 +1089,12 @@ class MiniRacerTest < Minitest::Test
 
   def test_function_property
     context = MiniRacer::Context.new
-    # regrettably loses the non-function properties
-    expected = {"error" => "Error: f() {} could not be cloned."}
+    if RUBY_ENGINE == "truffleruby"
+      expected = {"x" => 42}
+    else
+      # regrettably loses the non-function properties
+      expected = {"error" => "Error: f() {} could not be cloned."}
+    end
     assert_equal expected, context.eval("({ x: 42, f() {} })")
   end
 
