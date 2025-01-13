@@ -1,3 +1,6 @@
+- 0.17.0.pre9 - 13-01-2025
+  - For backwards compatibility convert v8 return values to UTF-8 (invalidly encoded string still get returned using V8 encoding)
+
 - 0.17.0.pre8 - 11-01-2025
   - Fix handling of UTF 32 LE and Ascii encoding strings - Ben Noordhuis
   - Handle rare edge case in V8 serialization - Ben Noordhuis
