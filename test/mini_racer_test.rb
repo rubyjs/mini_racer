@@ -1103,5 +1103,11 @@ class MiniRacerTest < Minitest::Test
     assert_equal "ok", context.eval("'ok'".encode("ISO-8859-1"))
     assert_equal "ok", context.eval("'ok'".encode("ISO8859-1"))
     assert_equal "ok", context.eval("'ok'".encode("UTF-16LE"))
+    assert_equal Encoding::UTF_8, context.eval("'ok'").encoding
+    assert_equal Encoding::UTF_8, context.eval("'ok\\uD800\\uDC00'").encoding
+    if RUBY_ENGINE != "truffleruby"
+      # unmatched surrogate pair, cannot be converted by ruby
+      assert_equal Encoding::UTF_16LE, context.eval("'ok\\uD800'").encoding
+    end
   end
 end

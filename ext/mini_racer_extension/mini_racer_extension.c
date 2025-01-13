@@ -164,12 +164,6 @@ static VALUE js_function_class;
 static pthread_mutex_t flags_mtx = PTHREAD_MUTEX_INITIALIZER;
 static Buf flags; // protected by |flags_mtx|
 
-struct rendezvous_nogvl
-{
-    Context *context;
-    Buf *req, *res;
-};
-
 // arg == &(struct rendezvous_nogvl){...}
 static void *rendezvous_callback(void *arg);
 
@@ -184,9 +178,22 @@ typedef struct DesCtx
 {
     State   *tos;
     VALUE   refs; // array
+    uint8_t transcode_latin1:1;
     char    err[64];
     State   stack[512];
 } DesCtx;
+
+struct rendezvous_nogvl
+{
+    Context *context;
+    Buf *req, *res;
+};
+
+struct rendezvous_des
+{
+    DesCtx *d;
+    Buf *res;
+};
 
 static void DesCtx_init(DesCtx *c)
 {
@@ -194,6 +201,7 @@ static void DesCtx_init(DesCtx *c)
     c->refs = rb_ary_new();
     *c->tos = (State){Qundef, Qundef};
     *c->err = '\0';
+    c->transcode_latin1 = 1; // convert to utf8
 }
 
 static void put(DesCtx *c, VALUE v)
@@ -321,9 +329,22 @@ static void des_string(void *arg, const char *s, size_t n)
     put(arg, rb_utf8_str_new(s, n));
 }
 
+static VALUE str_encode_bang(VALUE v)
+{
+    // TODO cache these? this function can get called often
+    return rb_funcall(v, rb_intern("encode!"), 1, rb_str_new_cstr("UTF-8"));
+}
+
 static void des_string8(void *arg, const uint8_t *s, size_t n)
 {
-    put(arg, rb_enc_str_new((char *)s, n, rb_ascii8bit_encoding()));
+    DesCtx *c;
+    VALUE v;
+
+    c = arg;
+    v = rb_enc_str_new((char *)s, n, rb_ascii8bit_encoding());
+    if (c->transcode_latin1)
+        v = str_encode_bang(v); // cannot fail
+    put(c, v);
 }
 
 // des_string16: |s| is not word aligned
@@ -331,7 +352,9 @@ static void des_string8(void *arg, const uint8_t *s, size_t n)
 static void des_string16(void *arg, const void *s, size_t n)
 {
     rb_encoding *e;
+    VALUE v, r;
     DesCtx *c;
+    int exc;
 
     c = arg;
     if (*c->err)
@@ -344,7 +367,15 @@ static void des_string16(void *arg, const void *s, size_t n)
         snprintf(c->err, sizeof(c->err), "no UTF16-LE encoding");
         return;
     }
-    put(c, rb_enc_str_new((char *)s, n, e));
+    v = rb_enc_str_new((char *)s, n, e);
+    // JS strings can contain unmatched or illegal surrogate pairs
+    // that Ruby won't decode; return the string as-is in that case
+    r = rb_protect(str_encode_bang, v, &exc);
+    if (exc) {
+        rb_set_errinfo(Qnil);
+        r = v;
+    }
+    put(c, r);
 }
 
 // ruby doesn't really have a concept of a byte array so store it as
@@ -740,25 +771,25 @@ static void *v8_thread_start(void *arg)
     return NULL;
 }
 
-static VALUE deserialize1(const uint8_t *p, size_t n)
+static VALUE deserialize1(DesCtx *d, const uint8_t *p, size_t n)
 {
     char err[64];
-    DesCtx d;
 
-    DesCtx_init(&d);
-    if (des(&err, p, n, &d))
+    if (des(&err, p, n, d))
         rb_raise(runtime_error, "%s", err);
-    if (d.tos != d.stack) // should not happen
+    if (d->tos != d->stack) // should not happen
         rb_raise(runtime_error, "parse stack not empty");
-    return d.tos->a;
+    return d->tos->a;
 }
 
 static VALUE deserialize(VALUE arg)
 {
+    struct rendezvous_des *a;
     Buf *b;
 
-    b = (void *)arg;
-    return deserialize1(b->buf, b->len);
+    a = (void *)arg;
+    b = a->res;
+    return deserialize1(a->d, b->buf, b->len);
 }
 
 // called with |rr_mtx| and GVL held; can raise exception
@@ -767,6 +798,7 @@ static VALUE rendezvous_callback_do(VALUE arg)
     struct rendezvous_nogvl *a;
     VALUE func, args;
     Context *c;
+    DesCtx d;
     Buf *b;
 
     a = (void *)arg;
@@ -774,7 +806,8 @@ static VALUE rendezvous_callback_do(VALUE arg)
     c = a->context;
     assert(b->len > 0);
     assert(*b->buf == 'c');
-    args = deserialize1(b->buf+1, b->len-1); // skip 'c' marker
+    DesCtx_init(&d);
+    args = deserialize1(&d, b->buf+1, b->len-1); // skip 'c' marker
     func = rb_ary_pop(args); // callback id
     func = rb_ary_entry(c->procs, FIX2LONG(func));
     return rb_funcall2(func, rb_intern("call"), RARRAY_LENINT(args), RARRAY_PTR(args));
@@ -866,14 +899,14 @@ static void rendezvous_no_des(Context *c, Buf *req, Buf *res)
 
 // send request to & receive reply from v8 thread; takes ownership of |req|
 // can raise exceptions and longjmp away but won't leak |req|
-static VALUE rendezvous(Context *c, Buf *req)
+static VALUE rendezvous1(Context *c, Buf *req, DesCtx *d)
 {
     VALUE r;
     Buf res;
     int exc;
 
     rendezvous_no_des(c, req, &res); // takes ownership of |req|
-    r = rb_protect(deserialize, (VALUE)&res, &exc);
+    r = rb_protect(deserialize, (VALUE)&(struct rendezvous_des){d, &res}, &exc);
     buf_reset(&res);
     if (exc) {
         r = rb_errinfo();
@@ -886,6 +919,14 @@ static VALUE rendezvous(Context *c, Buf *req)
         rb_exc_raise(r);
     }
     return r;
+}
+
+static VALUE rendezvous(Context *c, Buf *req)
+{
+    DesCtx d;
+
+    DesCtx_init(&d);
+    return rendezvous1(c, req, &d);
 }
 
 static void handle_exception(VALUE e)
@@ -1469,6 +1510,7 @@ static VALUE snapshot_initialize(int argc, VALUE *argv, VALUE self)
     VALUE a, e, code, cv;
     Snapshot *ss;
     Context *c;
+    DesCtx d;
     Ser s;
 
     TypedData_Get_Struct(self, Snapshot, &snapshot_type, ss);
@@ -1483,7 +1525,9 @@ static VALUE snapshot_initialize(int argc, VALUE *argv, VALUE self)
     ser_init1(&s, 'T');
     add_string(&s, code);
     // response is [arraybuffer, error]
-    a = rendezvous(c, &s.b);
+    DesCtx_init(&d);
+    d.transcode_latin1 = 0; // don't mangle snapshot binary data
+    a = rendezvous1(c, &s.b, &d);
     e = rb_ary_pop(a);
     context_dispose(cv);
     if (*RSTRING_PTR(e))
@@ -1497,6 +1541,7 @@ static VALUE snapshot_warmup(VALUE self, VALUE arg)
     VALUE a, e, cv;
     Snapshot *ss;
     Context *c;
+    DesCtx d;
     Ser s;
 
     TypedData_Get_Struct(self, Snapshot, &snapshot_type, ss);
@@ -1511,7 +1556,9 @@ static VALUE snapshot_warmup(VALUE self, VALUE arg)
     add_string(&s, arg);
     ser_array_end(&s, 2);
     // response is [arraybuffer, error]
-    a = rendezvous(c, &s.b);
+    DesCtx_init(&d);
+    d.transcode_latin1 = 0; // don't mangle snapshot binary data
+    a = rendezvous1(c, &s.b, &d);
     e = rb_ary_pop(a);
     context_dispose(cv);
     if (*RSTRING_PTR(e))
