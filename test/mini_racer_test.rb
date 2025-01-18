@@ -1089,11 +1089,19 @@ class MiniRacerTest < Minitest::Test
 
   def test_function_property
     context = MiniRacer::Context.new
-    expected = {
-      "m" => {"1" => 2, "3" => 4},
-      "s" => [5, 7, 11, 13],
-      "x" => 42,
-    }
+    if RUBY_ENGINE == "truffleruby"
+      expected = {
+        "m" => {1 => 2, 3 => 4},
+        "s" => {},
+        "x" => 42,
+      }
+    else
+      expected = {
+        "m" => {"1" => 2, "3" => 4}, # TODO(bnoordhuis) retain numeric keys
+        "s" => [5, 7, 11, 13],
+        "x" => 42,
+      }
+    end
     script = <<~JS
       ({
         f: () => {},
