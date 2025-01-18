@@ -11,6 +11,56 @@
 #include <cstring>
 #include <vector>
 
+// note: the filter function gets called inside the safe context,
+// i.e., the context that has not been tampered with by user JS
+// convention: $-prefixed identifiers signify objects from the
+// user JS context and should be handled with special care
+static const char safe_context_script_source[] = R"js(
+;(function($globalThis) {
+    const {Map: $Map, Set: $Set} = $globalThis
+    const sentinel = {}
+    return function filter(v) {
+        if (typeof v === "function")
+            return sentinel
+        if (typeof v !== "object" || v === null)
+            return v
+        if (v instanceof $Map) {
+            const m = new Map()
+            for (let [k, t] of Map.prototype.entries.call(v)) {
+                t = filter(t)
+                if (t !== sentinel)
+                    m.set(k, t)
+            }
+            return m
+        } else if (v instanceof $Set) {
+            const s = new Set()
+            for (let t of Set.prototype.values.call(v)) {
+                t = filter(t)
+                if (t !== sentinel)
+                    s.add(t)
+            }
+            return s
+        } else {
+            const o = Array.isArray(v) ? [] : {}
+            const pds = Object.getOwnPropertyDescriptors(v)
+            for (const [k, d] of Object.entries(pds)) {
+                if (!d.enumerable)
+                    continue
+                let t = d.value
+                if (d.get) {
+                    // *not* d.get.call(...), may have been tampered with
+                    t = Function.prototype.call.call(d.get, v, k)
+                }
+                t = filter(t)
+                if (t !== sentinel)
+                    Object.defineProperty(o, k, {value: t, enumerable: true})
+            }
+            return o
+        }
+    }
+})
+)js";
+
 struct Callback
 {
     struct State *st;
@@ -32,8 +82,10 @@ struct State
     // extra context for when we need access to built-ins like Array
     // and want to be sure they haven't been tampered with by JS code
     v8::Local<v8::Context> safe_context;
-    v8::Persistent<v8::Context> persistent_context;      // single-thread mode only
-    v8::Persistent<v8::Context> persistent_safe_context; // single-thread mode only
+    v8::Local<v8::Function> safe_context_function;
+    v8::Persistent<v8::Context> persistent_context;         // single-thread mode only
+    v8::Persistent<v8::Context> persistent_safe_context;    // single-thread mode only
+    v8::Persistent<v8::Function> persistent_safe_context_function;  // single-thread mode only
     Context *ruby_context;
     int64_t max_memory;
     int err_reason;
@@ -73,6 +125,23 @@ struct Serialized
 // throws JS exception on serialization error
 bool reply(State& st, v8::Local<v8::Value> v)
 {
+    v8::TryCatch try_catch(st.isolate);
+    {
+        Serialized serialized(st, v);
+        if (serialized.data) {
+            v8_reply(st.ruby_context, serialized.data, serialized.size);
+            return true;
+        }
+    }
+    if (!try_catch.CanContinue()) {
+        try_catch.ReThrow();
+        return false;
+    }
+    auto recv = v8::Undefined(st.isolate);
+    if (!st.safe_context_function->Call(st.safe_context, recv, 1, &v).ToLocal(&v)) {
+        try_catch.ReThrow();
+        return false;
+    }
     Serialized serialized(st, v);
     if (serialized.data)
         v8_reply(st.ruby_context, serialized.data, serialized.size);
@@ -240,7 +309,29 @@ extern "C" State *v8_thread_init(Context *c, const uint8_t *snapshot_buf,
         st.safe_context = v8::Context::New(st.isolate);
         st.context = v8::Context::New(st.isolate);
         v8::Context::Scope context_scope(st.context);
+        {
+            v8::Context::Scope context_scope(st.safe_context);
+            auto source = v8::String::NewFromUtf8Literal(st.isolate, safe_context_script_source);
+            auto filename = v8::String::NewFromUtf8Literal(st.isolate, "safe_context_script.js");
+            v8::ScriptOrigin origin(filename);
+            auto script =
+                v8::Script::Compile(st.safe_context, source, &origin)
+                .ToLocalChecked();
+            auto function_v = script->Run(st.safe_context).ToLocalChecked();
+            auto function = v8::Function::Cast(*function_v);
+            auto recv = v8::Undefined(st.isolate);
+            v8::Local<v8::Value> arg = st.context->Global();
+            // grant the safe context access to the user context's globalThis
+            st.safe_context->SetSecurityToken(st.context->GetSecurityToken());
+            function_v =
+                function->Call(st.safe_context, recv, 1, &arg)
+                .ToLocalChecked();
+            // revoke access again now that the script did its one-time setup
+            st.safe_context->UseDefaultSecurityToken();
+            st.safe_context_function = v8::Local<v8::Function>::Cast(function_v);
+        }
         if (single_threaded) {
+            st.persistent_safe_context_function.Reset(st.isolate, st.safe_context_function);
             st.persistent_safe_context.Reset(st.isolate, st.safe_context);
             st.persistent_context.Reset(st.isolate, st.context);
             return pst; // intentionally returning early and keeping alive
@@ -792,12 +883,14 @@ extern "C" void v8_single_threaded_enter(State *pst, Context *c, void (*f)(Conte
     v8::Isolate::Scope isolate_scope(st.isolate);
     v8::HandleScope handle_scope(st.isolate);
     {
+        st.safe_context_function = v8::Local<v8::Function>::New(st.isolate, st.persistent_safe_context_function);
         st.safe_context = v8::Local<v8::Context>::New(st.isolate, st.persistent_safe_context);
         st.context = v8::Local<v8::Context>::New(st.isolate, st.persistent_context);
         v8::Context::Scope context_scope(st.context);
         f(c);
         st.context = v8::Local<v8::Context>();
         st.safe_context = v8::Local<v8::Context>();
+        st.safe_context_function = v8::Local<v8::Function>();
     }
 }
 
