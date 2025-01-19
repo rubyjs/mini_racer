@@ -1,3 +1,6 @@
+- 0.17.0.pr10 - 20-01-2025
+  - Added back support for partially deserialized objects (objects that do not translate across boundaries are returned as Error properties) - Ben Noordhuis
+
 - 0.17.0.pre9 - 13-01-2025
   - For backwards compatibility convert v8 return values to UTF-8 (invalidly encoded string still get returned using V8 encoding)
 
