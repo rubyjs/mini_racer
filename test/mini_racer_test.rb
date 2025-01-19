@@ -899,7 +899,7 @@ class MiniRacerTest < Minitest::Test
       skip "TruffleRuby does not support WebAssembly"
     end
     context = MiniRacer::Context.new
-    expected = {"error" => "Error: [object Object] could not be cloned."}
+    expected = {}
     actual = context.eval("
       var b = [0,97,115,109,1,0,0,0,1,26,5,80,0,95,0,80,0,95,1,127,0,96,0,1,110,96,1,100,2,1,111,96,0,1,100,3,3,4,3,3,2,4,7,26,2,12,99,114,101,97,116,101,83,116,114,117,99,116,0,1,7,114,101,102,70,117,110,99,0,2,9,5,1,3,0,1,0,10,23,3,8,0,32,0,20,2,251,27,11,7,0,65,12,251,0,1,11,4,0,210,0,11,0,44,4,110,97,109,101,1,37,3,0,11,101,120,112,111,114,116,101,100,65,110,121,1,12,99,114,101,97,116,101,83,116,114,117,99,116,2,7,114,101,102,70,117,110,99]
       var o = new WebAssembly.Instance(new WebAssembly.Module(new Uint8Array(b))).exports
@@ -1083,19 +1083,34 @@ class MiniRacerTest < Minitest::Test
     # TODO(bnoordhuis) maybe detect the iterator object and serialize
     # it as a string or array of strings; problem is there is no V8 API
     # to detect regexp string iterator objects
-    expected = {"error" => "Error: [object RegExp String Iterator] could not be cloned."}
+    expected = {}
     assert_equal expected, context.eval("'abc'.matchAll(/./g)")
   end
 
   def test_function_property
     context = MiniRacer::Context.new
     if RUBY_ENGINE == "truffleruby"
-      expected = {"x" => 42}
+      expected = {
+        "m" => {1 => 2, 3 => 4},
+        "s" => {},
+        "x" => 42,
+      }
     else
-      # regrettably loses the non-function properties
-      expected = {"error" => "Error: f() {} could not be cloned."}
+      expected = {
+        "m" => {"1" => 2, "3" => 4}, # TODO(bnoordhuis) retain numeric keys
+        "s" => [5, 7, 11, 13],
+        "x" => 42,
+      }
     end
-    assert_equal expected, context.eval("({ x: 42, f() {} })")
+    script = <<~JS
+      ({
+        f: () => {},
+        m: new Map([[1,2],[3,4]]),
+        s: new Set([5,7,11,13]),
+        x: 42,
+      })
+    JS
+    assert_equal expected, context.eval(script)
   end
 
   def test_string_encoding
