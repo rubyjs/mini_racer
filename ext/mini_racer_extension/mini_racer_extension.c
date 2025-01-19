@@ -171,13 +171,14 @@ static void *rendezvous_callback(void *arg);
 typedef struct State
 {
     VALUE   a, b;
+    uint8_t verbatim_keys:1;
 } State;
 
 // note: must be stack-allocated or VALUEs won't be visible to ruby's GC
 typedef struct DesCtx
 {
     State   *tos;
-    VALUE   refs; // array
+    VALUE   refs; // object refs array
     uint8_t transcode_latin1:1;
     char    err[64];
     State   stack[512];
@@ -199,7 +200,7 @@ static void DesCtx_init(DesCtx *c)
 {
     c->tos  = c->stack;
     c->refs = rb_ary_new();
-    *c->tos = (State){Qundef, Qundef};
+    *c->tos = (State){Qundef, Qundef, /*verbatim_keys*/0};
     *c->err = '\0';
     c->transcode_latin1 = 1; // convert to utf8
 }
@@ -220,7 +221,8 @@ static void put(DesCtx *c, VALUE v)
         if (*b == Qundef) {
             *b = v;
         } else {
-            *b = rb_funcall(*b, rb_intern("to_s"), 0);
+            if (!c->tos->verbatim_keys)
+                *b = rb_funcall(*b, rb_intern("to_s"), 0);
             rb_hash_aset(*a, *b, v);
             *b = Qundef;
         }
@@ -242,7 +244,7 @@ static void push(DesCtx *c, VALUE v)
         snprintf(c->err, sizeof(c->err), "stack overflow");
         return;
     }
-    *++c->tos = (State){v, Qundef};
+    *++c->tos = (State){v, Qundef, /*verbatim_keys*/0};
     rb_ary_push(c->refs, v);
 }
 
@@ -422,6 +424,20 @@ static void des_object_begin(void *arg)
 }
 
 static void des_object_end(void *arg)
+{
+    pop(arg);
+}
+
+static void des_map_begin(void *arg)
+{
+    DesCtx *c;
+
+    c = arg;
+    push(c, rb_hash_new());
+    c->tos->verbatim_keys = 1; // don't stringify or intern keys
+}
+
+static void des_map_end(void *arg)
 {
     pop(arg);
 }

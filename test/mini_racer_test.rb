@@ -1097,7 +1097,7 @@ class MiniRacerTest < Minitest::Test
       }
     else
       expected = {
-        "m" => {"1" => 2, "3" => 4}, # TODO(bnoordhuis) retain numeric keys
+        "m" => {1 => 2, 3 => 4},
         "s" => [5, 7, 11, 13],
         "x" => 42,
       }

@@ -31,6 +31,8 @@ static void des_named_props_begin(void *arg);
 static void des_named_props_end(void *arg);
 static void des_object_begin(void *arg);
 static void des_object_end(void *arg);
+static void des_map_begin(void *arg);
+static void des_map_end(void *arg);
 static void des_object_ref(void *arg, uint32_t id);
 // des_error_begin: followed by des_object_begin + des_object_end calls
 static void des_error_begin(void *arg);
@@ -642,7 +644,7 @@ again:
         des_object_end(arg);
         break;
     case ';': // Map
-        des_object_begin(arg);
+        des_map_begin(arg);
         for (u = 0; /*empty*/; u++) {
             if (*p >= pe)
                 goto too_short;
@@ -658,7 +660,7 @@ again:
             goto bad_varint;
         if (t != 2*u)
             return bail(err, "map element count mismatch");
-        des_object_end(arg);
+        des_map_end(arg);
         break;
     case '\'': // Set
         des_array_begin(arg);
