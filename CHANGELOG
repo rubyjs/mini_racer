@@ -1,4 +1,7 @@
-- 0.17.0.pr10 - 20-01-2025
+- 0.17.0.pre11 - 21-01-2025
+  - Corrected encoding bug with deserialization of strings - Ben Noordhuis
+
+- 0.17.0.pre10 - 20-01-2025
   - Added back support for partially deserialized objects (objects that do not translate across boundaries are returned as Error properties) - Ben Noordhuis
 
 - 0.17.0.pre9 - 13-01-2025
