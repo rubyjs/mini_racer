@@ -1115,6 +1115,7 @@ class MiniRacerTest < Minitest::Test
 
   def test_string_encoding
     context = MiniRacer::Context.new
+    assert_equal "ä", context.eval("'ä'")
     assert_equal "ok", context.eval("'ok'".encode("ISO-8859-1"))
     assert_equal "ok", context.eval("'ok'".encode("ISO8859-1"))
     assert_equal "ok", context.eval("'ok'".encode("UTF-16LE"))

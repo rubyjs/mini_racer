@@ -339,13 +339,24 @@ static VALUE str_encode_bang(VALUE v)
 
 static void des_string8(void *arg, const uint8_t *s, size_t n)
 {
+    rb_encoding *e;
     DesCtx *c;
     VALUE v;
 
     c = arg;
-    v = rb_enc_str_new((char *)s, n, rb_ascii8bit_encoding());
-    if (c->transcode_latin1)
+    if (*c->err)
+        return;
+    if (c->transcode_latin1) {
+        e = rb_enc_find("ISO-8859-1"); // TODO cache?
+        if (!e) {
+            snprintf(c->err, sizeof(c->err), "no ISO-8859-1 encoding");
+            return;
+        }
+        v = rb_enc_str_new((char *)s, n, e);
         v = str_encode_bang(v); // cannot fail
+    } else {
+        v = rb_enc_str_new((char *)s, n, rb_ascii8bit_encoding());
+    }
     put(c, v);
 }
 
