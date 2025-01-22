@@ -90,22 +90,17 @@ jobs:
           - "3.2"
           - "3.3"
           - "3.4"
-        platform:
-          - "amd64"
-          - "arm64"
+        runner:
+          - "ubuntu-24.04"
+          - "ubuntu-24.04-arm"
         libc:
           - "gnu"
           - "musl"
 
-    name: linux-${{ matrix.platform }} - ruby-${{ matrix.ruby }} - ${{ matrix.libc }}
-    runs-on: ubuntu-20.04
+    name: linux-${{ matrix.runner }} - ruby-${{ matrix.ruby }} - ${{ matrix.libc }}
+    runs-on: ${{ matrix.runner }}
 
     steps:
-      - name: Enable ${{ matrix.platform }} platform
-        id: qemu
-        if: ${{ matrix.platform != 'amd64' }}
-        run: |
-          docker run --privileged --rm tonistiigi/binfmt:latest --install ${{ matrix.platform }} | tee platforms.json
       - name: Start container
         id: container
         run: |
@@ -118,7 +113,7 @@ jobs:
               ;;
           esac > container_image
           echo "image=$(cat container_image)" >> $GITHUB_OUTPUT
-          docker run --rm -d -v "${PWD}":"${PWD}" -w "${PWD}" --platform linux/${{ matrix.platform }} $(cat container_image) /bin/sleep 64d | tee container_id
+          docker run --rm -d -v "${PWD}":"${PWD}" -w "${PWD}" $(cat container_image) /bin/sleep 64d | tee container_id
           docker exec -w "${PWD}" $(cat container_id) uname -a
           echo "container_id=$(cat container_id)" >> $GITHUB_OUTPUT
       - name: Install Alpine system dependencies
