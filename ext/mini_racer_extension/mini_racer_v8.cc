@@ -378,18 +378,7 @@ void v8_api_callback(const v8::FunctionCallbackInfo<v8::Value>& info)
     des.ReadHeader(st.context).Check();
     v8::Local<v8::Value> result;
     if (!des.ReadValue(st.context).ToLocal(&result)) return; // exception pending
-    v8::Local<v8::Object> response; // [result, err]
-    if (!result->ToObject(st.context).ToLocal(&response)) return;
-    v8::Local<v8::Value> err;
-    if (!response->Get(st.context, 1).ToLocal(&err)) return;
-    if (err->IsUndefined()) {
-        if (!response->Get(st.context, 0).ToLocal(&result)) return;
-        info.GetReturnValue().Set(result);
-    } else {
-        v8::Local<v8::String> message;
-        if (!err->ToString(st.context).ToLocal(&message)) return;
-        st.isolate->ThrowException(v8::Exception::Error(message));
-    }
+    info.GetReturnValue().Set(result);
 }
 
 // response is err or empty string

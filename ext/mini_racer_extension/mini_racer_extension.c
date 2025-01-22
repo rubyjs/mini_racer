@@ -611,6 +611,13 @@ static int serialize1(Ser *s, VALUE refs, VALUE v)
     return 0;
 }
 
+// don't mix with ser_array_begin/ser_object_begin because
+// that will throw off the object reference count
+static int serialize(Ser *s, VALUE v)
+{
+    return serialize1(s, rb_hash_new(), v);
+}
+
 static struct timespec deadline_ms(int ms)
 {
     static const int64_t ns_per_sec = 1000*1000*1000;
@@ -859,18 +866,11 @@ static void *rendezvous_callback(void *arg)
         goto fail;
     }
     ser_init1(&s, 'c'); // callback reply
-    ser_array_begin(&s, 2);
-    // either [result, undefined] or [undefined, err]
-    if (exc)
-        ser_undefined(&s);
-    if (serialize1(&s, rb_hash_new(), r)) { // should not happen
+    if (serialize(&s, r)) { // should not happen
         c->exception = rb_exc_new_cstr(internal_error, s.err);
         ser_reset(&s);
         goto fail;
     }
-    if (!exc)
-        ser_undefined(&s);
-    ser_array_end(&s, 2);
 out:
     buf_move(&s.b, a->req);
     return NULL;
@@ -1202,25 +1202,21 @@ static VALUE context_stop(VALUE self)
 
 static VALUE context_call(int argc, VALUE *argv, VALUE self)
 {
-    VALUE a, e, h;
+    VALUE name, args;
+    VALUE a, e;
     Context *c;
-    int i;
     Ser s;
 
     TypedData_Get_Struct(self, Context, &context_type, c);
-    rb_scan_args(argc, argv, "1*", &a, &e);
-    Check_Type(a, T_STRING);
+    rb_scan_args(argc, argv, "1*", &name, &args);
+    Check_Type(name, T_STRING);
+    rb_ary_unshift(args, name);
     // request is (C)all, [name, args...] array
     ser_init1(&s, 'C');
-    ser_array_begin(&s, argc);
-    h = rb_hash_new();
-    for (i = 0; i < argc; i++) {
-        if (serialize1(&s, h, argv[i])) {
-            ser_reset(&s);
-            rb_raise(runtime_error, "Context.call: %s", s.err);
-        }
+    if (serialize(&s, args)) {
+        ser_reset(&s);
+        rb_raise(runtime_error, "Context.call: %s", s.err);
     }
-    ser_array_end(&s, argc);
     // response is [result, err] array
     a = rendezvous(c, &s.b); // takes ownership of |s.b|
     e = rb_ary_pop(a);
