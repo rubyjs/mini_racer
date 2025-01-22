@@ -1,3 +1,6 @@
+- 0.17.0.pre12 - 23-07-2025
+  - Corrected off-by-one error with object serialization - Ben Noordhuis
+
 - 0.17.0.pre11 - 21-01-2025
   - Corrected encoding bug with deserialization of strings - Ben Noordhuis
 
