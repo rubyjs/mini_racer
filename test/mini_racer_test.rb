@@ -1126,4 +1126,13 @@ class MiniRacerTest < Minitest::Test
       assert_equal Encoding::UTF_16LE, context.eval("'ok\\uD800'").encoding
     end
   end
+
+  def test_object_ref
+    context = MiniRacer::Context.new
+    context.eval("function f(o) { return o }")
+    expected = {}
+    expected["a"] = expected["b"] = {"x" => 42}
+    actual = context.call("f", expected)
+    assert_equal actual, expected
+  end
 end
