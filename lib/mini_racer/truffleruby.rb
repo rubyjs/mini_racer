@@ -67,10 +67,6 @@ module MiniRacer
       GC.start
     end
 
-    def idle_notification(idle_time)
-      true
-    end
-
     private
 
     @context_initialized = false

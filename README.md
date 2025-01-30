@@ -97,19 +97,6 @@ context.eval("var a = new Array(10000); while(true) {a = a.concat(new Array(1000
 # => V8OutOfMemoryError is raised
 ```
 
-### Object marshal max Stack Ddepth Support
-
-Contexts can specify a stack depth limit for object marshalling. Max depth is unbounded by default.
-
-```ruby
-# terminates script if stack depth exceeds max during marshal
-context = MiniRacer::Context.new(marshal_stack_depth: 500)
-context.attach("a", proc{|a| a})
-
-context.eval("let arr = []; arr.push(arr); a(arr)")
-# => RuntimeError is raised
-```
-
 ### Rich Debugging with File Name in Stack Trace Support
 
 You can provide `filename:` to `#eval` which will be used in stack traces produced by V8:
@@ -208,25 +195,7 @@ context.eval("counter")
 
 ### Garbage collection
 
-Re-using the same context over and over again means V8's garbage collector will have to run to clean it up every now and then; it's possible to trigger a _blocking_ V8 GC run inside your context by running the `idle_notification` method on it, which takes a single argument: the amount of time (in milliseconds) that V8 should use at most for garbage collecting:
-
-```ruby
-context = MiniRacer::Context.new
-
-# do stuff with that context...
-
-# give up to 100ms for V8 garbage collection
-context.idle_notification(100)
-
-# force V8 to perform a full GC
-context.low_memory_notification
-```
-
-This can come in handy to force V8 GC runs for example in between requests if you use MiniRacer on a web application.
-
-Note that this method maps directly to [`v8::Isolate::IdleNotification`](http://bespin.cz/~ondras/html/classv8_1_1Isolate.html#aea16cbb2e351de9a3ae7be2b7cb48297), and that in particular its return value is the same (true if there is no further garbage to collect, false otherwise) and the same caveats apply, in particular that `there is no guarantee that the [call will return] within the time limit.`
-
-Additionally you may automate this process on a context by defining it with `MiniRacer::Context.new(ensure_gc_after_idle: 1000)`. Using this will ensure V8 will run a full GC using `context.low_memory_notification` 1 second after the last eval on the context. Low memory notification is both slower and more aggressive than an idle_notification and will ensure long living contexts use minimal amounts of memory.
+You can make the garbage collector more aggressive by defining the context with `MiniRacer::Context.new(ensure_gc_after_idle: 1000)`. Using this will ensure V8 will run a full GC using `context.low_memory_notification` 1 second after the last eval on the context. Low memory notifications ensure long living contexts use minimal amounts of memory.
 
 ### V8 Runtime flags
 

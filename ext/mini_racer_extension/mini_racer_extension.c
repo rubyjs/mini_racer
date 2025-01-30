@@ -703,7 +703,6 @@ static void dispatch1(Context *c, const uint8_t *p, size_t n)
     case 'C': return v8_timedwait(c, p+1, n-1, v8_call);
     case 'E': return v8_timedwait(c, p+1, n-1, v8_eval);
     case 'H': return v8_heap_snapshot(c->pst);
-    case 'I': return v8_idle_notification(c->pst, p+1, n-1);
     case 'P': return v8_pump_message_loop(c->pst);
     case 'S': return v8_heap_stats(c->pst);
     case 'T': return v8_snapshot(c->pst, p+1, n-1);
@@ -1301,20 +1300,6 @@ static VALUE context_pump_message_loop(VALUE self)
     return rendezvous(c, &b); // takes ownership of |b|
 }
 
-static VALUE context_idle_notification(VALUE self, VALUE arg)
-{
-    Context *c;
-    Ser s;
-
-    Check_Type(arg, T_FIXNUM);
-    TypedData_Get_Struct(self, Context, &context_type, c);
-    // request is (I)dle notification, idle_time_in_seconds
-    ser_init1(&s, 'I');
-    ser_num(&s, LONG2FIX(arg) / 1e3);
-    // response is |undefined|
-    return rendezvous(c, &s.b); // takes ownership of |s.b|
-}
-
 static VALUE context_low_memory_notification(VALUE self)
 {
     Buf req, res;
@@ -1638,7 +1623,6 @@ void Init_mini_racer_extension(void)
     rb_define_method(c, "heap_stats", context_heap_stats, 0);
     rb_define_method(c, "heap_snapshot", context_heap_snapshot, 0);
     rb_define_method(c, "pump_message_loop", context_pump_message_loop, 0);
-    rb_define_method(c, "idle_notification", context_idle_notification, 1);
     rb_define_method(c, "low_memory_notification", context_low_memory_notification, 0);
     rb_define_alloc_func(c, context_alloc);
 
