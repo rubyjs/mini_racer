@@ -728,6 +728,7 @@ static void dispatch(Context *c)
 void v8_thread_main(Context *c, struct State *pst)
 {
     struct timespec deadline;
+    bool issued_idle_gc = true;
 
     c->pst = pst;
     barrier_wait(&c->late_init);
@@ -737,8 +738,10 @@ void v8_thread_main(Context *c, struct State *pst)
             if (c->idle_gc > 0) {
                 deadline = deadline_ms(c->idle_gc);
                 pthread_cond_timedwait(&c->cv, &c->mtx, &deadline);
-                if (deadline_exceeded(deadline))
+                if (deadline_exceeded(deadline) && !issued_idle_gc) {
                     v8_low_memory_notification(c->pst);
+                    issued_idle_gc = true;
+                }
             } else {
                 pthread_cond_wait(&c->cv, &c->mtx);
             }
@@ -746,6 +749,7 @@ void v8_thread_main(Context *c, struct State *pst)
         if (!c->req.len)
             continue; // spurious wakeup or quit signal from other thread
         dispatch(c);
+        issued_idle_gc = false;
         pthread_cond_signal(&c->cv);
     }
 }

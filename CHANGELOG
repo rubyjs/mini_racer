@@ -1,4 +1,7 @@
-- 0.17.0.pre12 - 23-07-2025
+- 0.17.0.pre13 - 04-02-2025
+  - Only issue idle GC once post dispatch - reduces CPU usage for auto cleanup - Sam Saffron
+
+- 0.17.0.pre12 - 23-01-2025
   - Corrected off-by-one error with object serialization - Ben Noordhuis
 
 - 0.17.0.pre11 - 21-01-2025
