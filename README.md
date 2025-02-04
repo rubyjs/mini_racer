@@ -364,7 +364,8 @@ Or install it yourself as:
 $ gem install mini_racer
 ```
 
-**Note** using v8.h and compiling MiniRacer requires a C++11 standard compiler, more specifically clang 3.5 (or later) or GCC 6.3 (or later).
+**Note** using v8.h and compiling MiniRacer requires a C++20 capable compiler.
+gcc >= 12.2 and Xcode >= 13 are, at the time of writing, known to work.
 
 ## Similar Projects
 
