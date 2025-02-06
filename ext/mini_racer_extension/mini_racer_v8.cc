@@ -834,26 +834,6 @@ fail:
     }
 }
 
-extern "C" void v8_idle_notification(State *pst, const uint8_t *p, size_t n)
-{
-    State& st = *pst;
-    v8::TryCatch try_catch(st.isolate);
-    v8::HandleScope handle_scope(st.isolate);
-    v8::ValueDeserializer des(st.isolate, p, n);
-    des.ReadHeader(st.context).Check();
-    double idle_time_in_seconds = .01;
-    {
-        v8::Local<v8::Value> idle_time_in_seconds_v;
-        if (!des.ReadValue(st.context).ToLocal(&idle_time_in_seconds_v)) goto fail;
-        if (!idle_time_in_seconds_v->NumberValue(st.context).To(&idle_time_in_seconds)) goto fail;
-    }
-fail:
-    double now = platform->MonotonicallyIncreasingTime();
-    bool stop = st.isolate->IdleNotificationDeadline(now + idle_time_in_seconds);
-    auto result = v8::Boolean::New(st.isolate, stop);
-    if (!reply(st, result)) abort();
-}
-
 extern "C" void v8_low_memory_notification(State *pst)
 {
     pst->isolate->LowMemoryNotification();

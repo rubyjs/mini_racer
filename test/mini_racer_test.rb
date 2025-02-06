@@ -594,13 +594,6 @@ class MiniRacerTest < Minitest::Test
     assert_equal "function", context2.eval("typeof(Math.sin)")
   end
 
-  def test_isolate_can_be_notified_of_idle_time
-    context = MiniRacer::Context.new
-
-    # returns true if embedder should stop calling
-    assert(context.idle_notification(1000))
-  end
-
   def test_platform_set_flags_raises_an_exception_if_already_initialized
     # makes sure it's initialized
     MiniRacer::Snapshot.new
