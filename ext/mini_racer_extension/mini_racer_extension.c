@@ -604,6 +604,20 @@ static int serialize1(Ser *s, VALUE refs, VALUE v)
     case T_STRING:
         add_string(s, v);
         break;
+    case T_OBJECT:
+        // this is somewhat wide, but we have active support which creates
+        // entirely new objects
+        if (rb_respond_to(v, rb_intern("to_time"))) {
+            v = rb_funcall(v, rb_intern("to_time"), 0);
+        }
+        if (rb_obj_is_kind_of(v, rb_cTime)) {
+            struct timeval tv = rb_time_timeval(v);
+            ser_date(s, tv.tv_sec*1e3 + tv.tv_usec/1e3);
+        } else {
+	    snprintf(s->err, sizeof(s->err), "unsupported type %s", rb_class2name(CLASS_OF(v)));
+	    return -1;
+        }
+        break;
     default:
         snprintf(s->err, sizeof(s->err), "unsupported type %x", TYPE(v));
         return -1;

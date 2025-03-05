@@ -39,6 +39,7 @@ Gem::Specification.new do |spec|
   spec.add_development_dependency "rake", ">= 12.3.3"
   spec.add_development_dependency "minitest", "~> 5.0"
   spec.add_development_dependency "rake-compiler"
+  spec.add_development_dependency "activesupport", "> 6"
   spec.add_development_dependency "m"
 
   spec.add_dependency "libv8-node", MiniRacer::LIBV8_NODE_VERSION
