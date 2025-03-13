@@ -302,6 +302,9 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_datetime_missing
+    # NoMethodError: undefined method `source_location' for
+    # #<Thread::Backtrace::Location:0x4e88>
+    skip "TruffleRuby bug" if RUBY_ENGINE == "truffleruby"
     date_time_backup = Object.send(:remove_const, :DateTime)
 
     begin
