@@ -1132,4 +1132,13 @@ class MiniRacerTest < Minitest::Test
     actual = context.call("f", expected)
     assert_equal actual, expected
   end
+
+  def test_termination_exception
+    context = MiniRacer::Context.new
+    a = Thread.new { context.stop while true }
+    b = Thread.new { context.heap_stats while true } # should not crash/abort
+    sleep 1.5
+    a.kill
+    b.kill
+  end
 end

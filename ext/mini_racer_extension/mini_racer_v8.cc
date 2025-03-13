@@ -192,6 +192,24 @@ bool reply(State& st, v8::Local<v8::Value> result, v8::Local<v8::Value> err)
     return true;
 }
 
+// for when a reply is not expected to fail because of serialization
+// errors but can still fail when preempted by isolate termination;
+// temporarily cancels the termination exception so it can send the reply
+void reply_retry(State& st, v8::Local<v8::Value> response)
+{
+    v8::TryCatch try_catch(st.isolate);
+    try_catch.SetVerbose(st.verbose_exceptions);
+    bool ok = reply(st, response);
+    while (!ok) {
+        assert(try_catch.HasCaught());
+        assert(try_catch.HasTerminated());
+        if (!try_catch.HasTerminated()) abort();
+        st.isolate->CancelTerminateExecution();
+        ok = reply(st, response);
+        st.isolate->TerminateExecution();
+    }
+}
+
 v8::Local<v8::Value> sanitize(State& st, v8::Local<v8::Value> v)
 {
     // punch through proxies
@@ -434,7 +452,7 @@ extern "C" void v8_attach(State *pst, const uint8_t *p, size_t n)
 fail:
     if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
     auto err = to_error(st, &try_catch, cause);
-    if (!reply(st, err)) abort();
+    reply_retry(st, err);
 }
 
 // response is errback [result, err] array
@@ -590,7 +608,7 @@ extern "C" void v8_heap_stats(State *pst)
     PROP(number_of_native_contexts);
     PROP(number_of_detached_contexts);
 #undef PROP
-    if (!reply(st, response)) abort();
+    reply_retry(st, response);
 }
 
 struct OutputStream : public v8::OutputStream
@@ -641,7 +659,7 @@ fail:
         st.err_reason = NO_ERROR;
     }
     auto result = v8::Boolean::New(st.isolate, ran_task);
-    if (!reply(st, result)) abort();
+    reply_retry(st, result);
 }
 
 int snapshot(bool is_warmup, bool verbose_exceptions,
