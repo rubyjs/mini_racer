@@ -302,6 +302,9 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_datetime_missing
+    # NoMethodError: undefined method `source_location' for
+    # #<Thread::Backtrace::Location:0x4e88>
+    skip "TruffleRuby bug" if RUBY_ENGINE == "truffleruby"
     date_time_backup = Object.send(:remove_const, :DateTime)
 
     begin
@@ -1131,5 +1134,14 @@ class MiniRacerTest < Minitest::Test
     expected["a"] = expected["b"] = { "x" => 42 }
     actual = context.call("f", expected)
     assert_equal actual, expected
+  end
+
+  def test_termination_exception
+    context = MiniRacer::Context.new
+    a = Thread.new { context.stop while true }
+    b = Thread.new { context.heap_stats while true } # should not crash/abort
+    sleep 1.5
+    a.kill
+    b.kill
   end
 end
