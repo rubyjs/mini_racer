@@ -1144,4 +1144,13 @@ class MiniRacerTest < Minitest::Test
     a.kill
     b.kill
   end
+
+  def test_large_integer
+    big_int = 10_000_000_001
+    context = MiniRacer::Context.new
+    context.attach("test", proc { big_int })
+    result = context.eval("test()")
+    assert_equal(result.class, big_int.class)
+    assert_equal(result, big_int)
+  end
 end
