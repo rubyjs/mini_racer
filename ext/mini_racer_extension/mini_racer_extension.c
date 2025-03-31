@@ -1,4 +1,5 @@
 #include <stdatomic.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -283,7 +284,7 @@ static void des_int(void *arg, int64_t v)
 
 static void des_num(void *arg, double v)
 {
-    if (v == trunc(v)) {
+    if (isfinite(v) && v == trunc(v) && v >= INT64_MIN && v <= INT64_MAX) {
         put(arg, LONG2FIX(v));
     } else {
         put(arg, DBL2NUM(v));

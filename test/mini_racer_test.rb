@@ -1146,11 +1146,12 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_large_integer
-    big_int = 10_000_000_001
-    context = MiniRacer::Context.new
-    context.attach("test", proc { big_int })
-    result = context.eval("test()")
-    assert_equal(result.class, big_int.class)
-    assert_equal(result, big_int)
+    [10_000_000_001, -2**63, 2**63-1].each { |big_int|
+      context = MiniRacer::Context.new
+      context.attach("test", proc { big_int })
+      result = context.eval("test()")
+      assert_equal(result.class, big_int.class)
+      assert_equal(result, big_int)
+    }
   end
 end
