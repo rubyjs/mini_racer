@@ -1,3 +1,6 @@
+- 0.18.1 - 03-04-2025
+  - Convert round doubles to fixnum for very big floats - this has better parity with JavaScript - Ben Noorhuis
+
 - 0.18.0 - 05-03-2025
   - Time for a major release
   - Handle ActiveSupport TimeWithZone objects during serialization - Sam Saffron
