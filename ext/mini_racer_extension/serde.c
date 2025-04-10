@@ -239,32 +239,6 @@ static void ser_num(Ser *s, double v)
     }
 }
 
-static void ser_int(Ser *s, int64_t v)
-{
-    if (*s->err)
-        return;
-    if (v < INT32_MIN || v > INT32_MAX) {
-        if (v > INT64_MIN/1024)
-            if (v <= INT64_MAX/1024)
-                return ser_num(s, v);
-        snprintf(s->err, sizeof(s->err), "out of range: %lld", (long long)v);
-    } else {
-        w_byte(s, 'I');
-        w_zigzag(s, v);
-    }
-}
-
-// |v| is the timestamp in milliseconds since the UNIX epoch
-static void ser_date(Ser *s, double v)
-{
-    w_byte(s, 'D');
-    if (isfinite(v)) {
-        w(s, &v, sizeof(v));
-    } else {
-        w(s, the_nan, sizeof(the_nan));
-    }
-}
-
 // ser_bigint: |n| is in bytes, not quadwords
 static void ser_bigint(Ser *s, const uint64_t *p, size_t n, int sign)
 {
@@ -286,6 +260,37 @@ static void ser_bigint(Ser *s, const uint64_t *p, size_t n, int sign)
         n = 8*n + 8;
         w_varint(s, 2*n + (sign < 0));
         w(s, p, n);
+    }
+}
+
+static void ser_int(Ser *s, int64_t v)
+{
+    uint64_t t;
+    int sign;
+
+    if (*s->err)
+        return;
+    if (v < INT32_MIN || v > INT32_MAX) {
+        if (v > INT64_MIN/1024)
+            if (v <= INT64_MAX/1024)
+                return ser_num(s, v);
+        t = v < 0 ? -v : v;
+        sign = v < 0 ? -1 : 1;
+        ser_bigint(s, &t, sizeof(t), sign);
+    } else {
+        w_byte(s, 'I');
+        w_zigzag(s, v);
+    }
+}
+
+// |v| is the timestamp in milliseconds since the UNIX epoch
+static void ser_date(Ser *s, double v)
+{
+    w_byte(s, 'D');
+    if (isfinite(v)) {
+        w(s, &v, sizeof(v));
+    } else {
+        w(s, the_nan, sizeof(the_nan));
     }
 }
 

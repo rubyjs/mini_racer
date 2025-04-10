@@ -327,8 +327,19 @@ static void des_bigint(void *arg, const void *p, size_t n, int sign)
     if (t >> 63)
         *a++ = 0; // suppress sign extension
     v = rb_big_unpack(limbs, a-limbs);
-    if (sign < 0)
-        v = rb_big_mul(v, LONG2FIX(-1));
+    if (sign < 0) {
+        // rb_big_unpack returns T_FIXNUM for smallish bignums
+        switch (TYPE(v)) {
+        case T_BIGNUM:
+            v = rb_big_mul(v, LONG2FIX(-1));
+            break;
+        case T_FIXNUM:
+            v = LONG2FIX(-1 * FIX2LONG(v));
+            break;
+        default:
+            abort();
+        }
+    }
     put(c, v);
 }
 
@@ -620,14 +631,16 @@ static int serialize1(Ser *s, VALUE refs, VALUE v)
             struct timeval tv = rb_time_timeval(v);
             ser_date(s, tv.tv_sec*1e3 + tv.tv_usec/1e3);
         } else {
-	    snprintf(s->err, sizeof(s->err), "unsupported type %s", rb_class2name(CLASS_OF(v)));
-	    return -1;
+            snprintf(s->err, sizeof(s->err), "unsupported type %s", rb_class2name(CLASS_OF(v)));
+            return -1;
         }
         break;
     default:
         snprintf(s->err, sizeof(s->err), "unsupported type %x", TYPE(v));
         return -1;
     }
+    if (*s->err)
+        return -1;
     return 0;
 }
 

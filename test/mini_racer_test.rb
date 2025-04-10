@@ -1153,5 +1153,19 @@ class MiniRacerTest < Minitest::Test
       assert_equal(result.class, big_int.class)
       assert_equal(result, big_int)
     }
+    types = []
+    [2**63/1024-1, 2**63/1024, -2**63/1024+1, -2**63/1024].each { |big_int|
+      context = MiniRacer::Context.new
+      context.attach("test", proc { big_int })
+      context.attach("type", proc { |arg| types.push(arg) })
+      result = context.eval("const t = test(); type(typeof t); t")
+      assert_equal(result.class, big_int.class)
+      assert_equal(result, big_int)
+    }
+    if RUBY_ENGINE == "truffleruby"
+      assert_equal(types, %w[number number number number])
+    else
+      assert_equal(types, %w[number bigint number bigint])
+    end
   end
 end
