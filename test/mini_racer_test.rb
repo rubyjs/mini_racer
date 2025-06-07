@@ -1106,9 +1106,13 @@ class MiniRacerTest < Minitest::Test
   def test_dates_from_active_support
     require "active_support"
     require "active_support/time"
-    context = MiniRacer::Context.new
-    Time.zone = "UTC"
+    begin
+      Time.zone = "UTC"
+    rescue TZInfo::DataSourceNotFound
+      skip "no timezone data" # happens on the musl buildbots
+    end
     time = Time.current
+    context = MiniRacer::Context.new
     context.attach("f", proc { time })
     assert_in_delta time.to_f, context.call("f").to_f, 0.001
   end
