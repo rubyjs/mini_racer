@@ -1,3 +1,6 @@
+- 0.19.0 - 24-06-2025
+  - upgrade to node 24.1.0 
+
 - 0.18.1 - 03-04-2025
   - Convert round doubles to fixnum for very big floats - this has better parity with JavaScript - Ben Noorhuis
 
