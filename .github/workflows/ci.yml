@@ -118,7 +118,7 @@ jobs:
           echo "container_id=$(cat container_id)" >> $GITHUB_OUTPUT
       - name: Install Alpine system dependencies
         if: ${{ matrix.libc == 'musl' }}
-        run: docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} apk add --no-cache build-base bash git
+        run: docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} apk add --no-cache build-base bash git tzdata
       - name: Checkout
         uses: actions/checkout@v4
       - name: Update Rubygems
