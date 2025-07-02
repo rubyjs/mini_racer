@@ -8,6 +8,7 @@ Minitest::TestTask.create(:test) do |t|
   t.libs << "test"
   t.libs << "lib"
   t.test_globs = FileList['test/**/*_test.rb']
+  t.extra_args += ["--verbose"] if ENV["VERBOSE_MINITEST"]
 end
 
 task :default => [:compile, :test]
