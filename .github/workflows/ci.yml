@@ -28,8 +28,10 @@ jobs:
       TRUFFLERUBYOPT: "--jvm --polyglot"
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@a4effe49ee8ee5b8b5091268c473a4628afb5651 # v1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler: latest # to get this fix: https://github.com/rubygems/rubygems/issues/6165
@@ -66,8 +68,10 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@a4effe49ee8ee5b8b5091268c473a4628afb5651 # v1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
@@ -122,7 +126,9 @@ jobs:
         if: ${{ matrix.libc == 'musl' }}
         run: docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} apk add --no-cache build-base bash git
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
       - name: Update Rubygems
         run: docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} gem update --system
       - name: Bundle
