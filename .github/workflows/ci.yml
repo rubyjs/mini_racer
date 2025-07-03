@@ -15,7 +15,7 @@ jobs:
           - "macos-13"
           - "macos-14" # arm64
           - "macos-15" # arm64
-          - "ubuntu-20.04"
+          - "ubuntu-24.04"
         ruby:
           - "truffleruby+graalvm"
 
