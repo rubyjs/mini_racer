@@ -6,6 +6,8 @@ on:
     branches:
       - main
 
+permissions: {}
+
 jobs:
   test-truffleruby:
     strategy:
