@@ -1,4 +1,5 @@
 #include <err.h>
+#include <limits.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -33,7 +34,7 @@ static void des_object_begin(void *arg);
 static void des_object_end(void *arg);
 static void des_map_begin(void *arg);
 static void des_map_end(void *arg);
-static void des_object_ref(void *arg, uint32_t id);
+static void des_object_ref(void *arg, long id);
 // des_error_begin: followed by des_object_begin + des_object_end calls
 static void des_error_begin(void *arg);
 static void des_error_end(void *arg);
@@ -42,7 +43,7 @@ static void des_error_end(void *arg);
 // have to worry about allocation failures for small payloads
 typedef struct Buf {
     uint8_t *buf;
-    uint32_t len, cap;
+    size_t len, cap;
     uint8_t buf_s[48];
 } Buf;
 
@@ -54,13 +55,18 @@ typedef struct Ser {
 static const uint8_t the_nan[8] = {0,0,0,0,0,0,0xF8,0x7F}; // canonical nan
 
 // note: returns |v| if v in [0,1,2]
-static inline uint32_t next_power_of_two(uint32_t v) {
+static inline size_t next_power_of_two(size_t v) {
   v -= 1;
   v |= v >> 1;
   v |= v >> 2;
   v |= v >> 4;
   v |= v >> 8;
+  #if SIZE_MAX >= 0xFFFFFFFFU
   v |= v >> 16;
+  #endif
+  #if SIZE_MAX >= 0xFFFFFFFFFFFFFFFFULL
+  v |= v >> 32;
+  #endif
   v += 1;
   return v;
 }
@@ -240,24 +246,26 @@ static void ser_num(Ser *s, double v)
 }
 
 // ser_bigint: |n| is in bytes, not quadwords
-static void ser_bigint(Ser *s, const uint64_t *p, size_t n, int sign)
+static void ser_bigint(Ser *s, const void *p, size_t stride, size_t n, int sign)
 {
+    static const uint8_t zero[16] = {0};
+
     if (*s->err)
         return;
-    if (n % 8) {
+    if (n % stride) {
         snprintf(s->err, sizeof(s->err), "bad bigint");
         return;
     }
     w_byte(s, 'Z');
     // chop off high all-zero words
-    n /= 8;
+    n /= stride;
     while (n--)
-        if (p[n])
+        if (memcmp((const uint8_t *)p + n*stride, zero, stride))
             break;
     if (n == (size_t)-1) {
         w_byte(s, 0); // normalized zero
     } else {
-        n = 8*n + 8;
+        n = (n + 1) * stride;
         w_varint(s, 2*n + (sign < 0));
         w(s, p, n);
     }
@@ -276,7 +284,7 @@ static void ser_int(Ser *s, int64_t v)
                 return ser_num(s, v);
         t = v < 0 ? -v : v;
         sign = v < 0 ? -1 : 1;
-        ser_bigint(s, &t, sizeof(t), sign);
+        ser_bigint(s, &t, sizeof(t), sizeof(t), sign);
     } else {
         w_byte(s, 'I');
         w_zigzag(s, v);
@@ -324,26 +332,26 @@ static void ser_object_begin(Ser *s)
 }
 
 // |count| is the property count
-static void ser_object_end(Ser *s, uint32_t count)
+static void ser_object_end(Ser *s, size_t count)
 {
     w_byte(s, '{');
     w_varint(s, count);
 }
 
-static void ser_object_ref(Ser *s, uint32_t id)
+static void ser_object_ref(Ser *s, size_t id)
 {
     w_byte(s, '^');
     w_varint(s, id);
 }
 
-static void ser_array_begin(Ser *s, uint32_t count)
+static void ser_array_begin(Ser *s, size_t count)
 {
     w_byte(s, 'A');     // 'A'=dense, 'a'=sparse
     w_varint(s, count); // element count
 }
 
 // |count| is the element count
-static void ser_array_end(Ser *s, uint32_t count)
+static void ser_array_end(Ser *s, size_t count)
 {
     w_byte(s, '$');
     w_varint(s, 0);     // property count, always zero
@@ -569,7 +577,7 @@ again:
             return bail(err, "negative zero bigint");
         if (pe-*p < (int64_t)u)
             goto too_short;
-        des_bigint(arg, *p, u, 1-2*t);
+        des_bigint(arg, *p, u, (int) (1-2*t));
         *p += u;
         break;
     case 'R': // RegExp, deserialized as string
