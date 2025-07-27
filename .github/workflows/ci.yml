@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           persist-credentials: false
-      - uses: ruby/setup-ruby@a4effe49ee8ee5b8b5091268c473a4628afb5651 # v1
+      - uses: ruby/setup-ruby@472790540115ce5bd69d399a020189a8c87d641f # v1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler: latest # to get this fix: https://github.com/rubygems/rubygems/issues/6165
@@ -71,7 +71,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           persist-credentials: false
-      - uses: ruby/setup-ruby@a4effe49ee8ee5b8b5091268c473a4628afb5651 # v1
+      - uses: ruby/setup-ruby@472790540115ce5bd69d399a020189a8c87d641f # v1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
