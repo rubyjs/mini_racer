@@ -527,52 +527,58 @@ static int serialize1(Ser *s, VALUE refs, VALUE v)
         return -1;
     switch (TYPE(v)) {
     case T_ARRAY:
-        id = rb_hash_lookup(refs, v);
-        if (NIL_P(id)) {
-            n = RARRAY_LENINT(v);
-            i = rb_hash_size_num(refs);
-            rb_hash_aset(refs, v, LONG2FIX(i));
-            ser_array_begin(s, n);
-            for (i = 0; i < n; i++)
-                if (serialize1(s, refs, rb_ary_entry(v, i)))
-                    return -1;
-            ser_array_end(s, n);
-        } else {
-            ser_object_ref(s, FIX2LONG(id));
+        {
+            VALUE obj_id = rb_obj_id(v);
+            id = rb_hash_lookup(refs, obj_id);
+            if (NIL_P(id)) {
+                n = RARRAY_LENINT(v);
+                i = rb_hash_size_num(refs);
+                rb_hash_aset(refs, obj_id, LONG2FIX(i));
+                ser_array_begin(s, n);
+                for (i = 0; i < n; i++)
+                    if (serialize1(s, refs, rb_ary_entry(v, i)))
+                        return -1;
+                ser_array_end(s, n);
+            } else {
+                ser_object_ref(s, FIX2LONG(id));
+            }
         }
         break;
     case T_HASH:
-        id = rb_hash_lookup(refs, v);
-        if (NIL_P(id)) {
-            a = rb_ary_new();
-            i = rb_hash_size_num(refs);
-            n = rb_hash_size_num(v);
-            rb_hash_aset(refs, v, LONG2FIX(i));
-            rb_hash_foreach(v, collect, a);
-            for (i = 0; i < 2*n; i += 2) {
-                t = rb_ary_entry(a, i);
-                switch (TYPE(t)) {
-                case T_FIXNUM:
-                case T_STRING:
-                case T_SYMBOL:
-                    continue;
-                }
-                break;
-            }
-            if (i == 2*n) {
-                ser_object_begin(s);
+        {
+            VALUE obj_id = rb_obj_id(v);
+            id = rb_hash_lookup(refs, obj_id);
+            if (NIL_P(id)) {
+                a = rb_ary_new();
+                i = rb_hash_size_num(refs);
+                n = rb_hash_size_num(v);
+                rb_hash_aset(refs, obj_id, LONG2FIX(i));
+                rb_hash_foreach(v, collect, a);
                 for (i = 0; i < 2*n; i += 2) {
-                    if (serialize1(s, refs, rb_ary_entry(a, i+0)))
-                        return -1;
-                    if (serialize1(s, refs, rb_ary_entry(a, i+1)))
-                        return -1;
+                    t = rb_ary_entry(a, i);
+                    switch (TYPE(t)) {
+                    case T_FIXNUM:
+                    case T_STRING:
+                    case T_SYMBOL:
+                        continue;
+                    }
+                    break;
                 }
-                ser_object_end(s, n);
+                if (i == 2*n) {
+                    ser_object_begin(s);
+                    for (i = 0; i < 2*n; i += 2) {
+                        if (serialize1(s, refs, rb_ary_entry(a, i+0)))
+                            return -1;
+                        if (serialize1(s, refs, rb_ary_entry(a, i+1)))
+                            return -1;
+                    }
+                    ser_object_end(s, n);
+                } else {
+                    return bail(&s->err, "TODO serialize as Map");
+                }
             } else {
-                return bail(&s->err, "TODO serialize as Map");
+                ser_object_ref(s, FIX2LONG(id));
             }
-        } else {
-            ser_object_ref(s, FIX2LONG(id));
         }
         break;
     case T_DATA:
