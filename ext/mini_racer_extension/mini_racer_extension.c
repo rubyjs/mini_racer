@@ -1005,8 +1005,8 @@ static void handle_exception(VALUE e)
 
     if (NIL_P(e))
         return;
-    StringValue(e);
-    s = RSTRING_PTR(e);
+    e = StringValue(e);
+    s = StringValueCStr(e);
     switch (*s) {
     case NO_ERROR:
         return;
@@ -1028,7 +1028,7 @@ static void handle_exception(VALUE e)
     default:
         rb_raise(internal_error, "bad error class %02x", *s);
     }
-    rb_raise(klass, "%s", s+1);
+    rb_enc_raise(rb_enc_get(e), klass, "%s", s+1);
 }
 
 static VALUE context_alloc(VALUE klass)
