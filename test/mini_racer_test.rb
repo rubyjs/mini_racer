@@ -1149,6 +1149,17 @@ class MiniRacerTest < Minitest::Test
     b.kill
   end
 
+  def test_ruby_exception
+    context = MiniRacer::Context.new
+    context.attach("test", proc { raise "boom" })
+    actual = context.eval("try { test() } catch (e) { e }")
+    expected = {
+      "message" => "boom",
+      "stack" => "Error: boom\n    at <eval>:1:7",
+    }
+    assert_equal(actual, expected)
+  end
+
   def test_large_integer
     [10_000_000_001, -2**63, 2**63-1].each { |big_int|
       context = MiniRacer::Context.new
