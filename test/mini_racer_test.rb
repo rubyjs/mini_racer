@@ -1150,6 +1150,9 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_ruby_exception
+    if RUBY_ENGINE == "truffleruby"
+      skip "TruffleRuby doesn't return JS exceptions as dictionaries"
+    end
     context = MiniRacer::Context.new
     context.attach("test", proc { raise "boom" })
     actual = context.eval("try { test() } catch (e) { e }")
