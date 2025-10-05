@@ -1172,4 +1172,15 @@ class MiniRacerTest < Minitest::Test
       assert_equal(types, %w[number bigint number bigint])
     end
   end
+
+  def test_exception_message_encoding
+    e = nil
+    begin
+      MiniRacer::Context.new.eval("throw Error('ä')")
+    rescue MiniRacer::RuntimeError => e_
+      e = e_
+    end
+    assert e
+    assert_equal(e.message.encoding.to_s, "UTF-8")
+  end
 end
