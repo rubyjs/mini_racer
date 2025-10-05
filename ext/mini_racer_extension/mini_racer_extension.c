@@ -482,12 +482,10 @@ static void des_object_ref(void *arg, uint32_t id)
 
 static void des_error_begin(void *arg)
 {
-    push(arg, rb_class_new_instance(0, NULL, rb_eRuntimeError));
 }
 
 static void des_error_end(void *arg)
 {
-    pop(arg);
 }
 
 static int collect(VALUE k, VALUE v, VALUE a)
@@ -894,6 +892,7 @@ static VALUE rendezvous_callback_do(VALUE arg)
 static void *rendezvous_callback(void *arg)
 {
     struct rendezvous_nogvl *a;
+    const char *err;
     Context *c;
     int exc;
     VALUE r;
@@ -917,7 +916,12 @@ out:
     buf_move(&s.b, a->req);
     return NULL;
 fail:
-    ser_init1(&s, 'e'); // exception pending
+    ser_init0(&s);   // ruby exception pending
+    w_byte(&s, 'e'); // send ruby error message to v8 thread
+    r = rb_funcall(c->exception, rb_intern("to_s"), 0);
+    err = StringValueCStr(r);
+    if (err)
+        w(&s, err, strlen(err));
     goto out;
 }
 
@@ -975,16 +979,18 @@ static VALUE rendezvous1(Context *c, Buf *req, DesCtx *d)
     int exc;
 
     rendezvous_no_des(c, req, &res); // takes ownership of |req|
+    r = c->exception;
+    c->exception = Qnil;
+    // if js land didn't handle exception from ruby callback, re-raise it now
+    if (res.len == 1 && *res.buf == 'e') {
+        assert(!NIL_P(r));
+        rb_exc_raise(r);
+    }
     r = rb_protect(deserialize, (VALUE)&(struct rendezvous_des){d, &res}, &exc);
     buf_reset(&res);
     if (exc) {
         r = rb_errinfo();
         rb_set_errinfo(Qnil);
-        rb_exc_raise(r);
-    }
-    if (!NIL_P(c->exception)) {
-        r = c->exception;
-        c->exception = Qnil;
         rb_exc_raise(r);
     }
     return r;

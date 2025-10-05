@@ -194,17 +194,21 @@ static inline int r_zigzag(const uint8_t **p, const uint8_t *pe, int64_t *r)
     return 0;
 }
 
-static inline void ser_init(Ser *s)
+static void ser_init0(Ser *s)
 {
     memset(s, 0, sizeof(*s));
     buf_init(&s->b);
+}
+
+static inline void ser_init(Ser *s)
+{
+    ser_init0(s);
     w(s, "\xFF\x0F", 2);
 }
 
 static void ser_init1(Ser *s, uint8_t c)
 {
-    memset(s, 0, sizeof(*s));
-    buf_init(&s->b);
+    ser_init0(s);
     w_byte(s, c);
     w(s, "\xFF\x0F", 2);
 }
