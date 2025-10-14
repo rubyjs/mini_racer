@@ -246,6 +246,10 @@ module MiniRacer
           js_map_to_hash(value)
         elsif map_iterator?(value)
           value.map { |e| convert_js_to_ruby(e) }
+        elsif Polyglot::ForeignException === value
+          exc = MiniRacer::ScriptError.new(value.message)
+          exc.set_backtrace(value.backtrace)
+          exc
         else
           object = value
           h = {}
