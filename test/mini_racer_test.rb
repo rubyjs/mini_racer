@@ -1150,17 +1150,12 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_ruby_exception
-    if RUBY_ENGINE == "truffleruby"
-      skip "TruffleRuby doesn't return JS exceptions as dictionaries"
-    end
     context = MiniRacer::Context.new
     context.attach("test", proc { raise "boom" })
     actual = context.eval("try { test() } catch (e) { e }")
-    expected = {
-      "message" => "boom",
-      "stack" => "Error: boom\n    at <eval>:1:7",
-    }
-    assert_equal(actual, expected)
+    assert_equal(actual.class, MiniRacer::ScriptError)
+    assert_equal(actual.message, "boom")
+    assert_equal(actual.backtrace, ["JavaScript Error: boom", "JavaScript at <eval>:1:7"])
   end
 
   def test_large_integer

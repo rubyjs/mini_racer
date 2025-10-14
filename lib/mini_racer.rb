@@ -51,6 +51,19 @@ module MiniRacer
     end
   end
 
+  class ScriptError < EvalError
+    def initialize(message)
+      message, *@frames = message.split("\n")
+      @frames.map! { "JavaScript #{_1.strip}" }
+      super(message)
+    end
+
+    def backtrace
+      frames = super || []
+      @frames + frames
+    end
+  end
+
   class SnapshotError < Error
     def initialize(message)
       message, *@frames = message.split("\n")
