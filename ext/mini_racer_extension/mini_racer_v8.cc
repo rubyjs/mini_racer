@@ -86,6 +86,7 @@ struct State
     v8::Persistent<v8::Context> persistent_context;         // single-thread mode only
     v8::Persistent<v8::Context> persistent_safe_context;    // single-thread mode only
     v8::Persistent<v8::Function> persistent_safe_context_function;  // single-thread mode only
+    v8::Persistent<v8::Value> ruby_exception;
     Context *ruby_context;
     int64_t max_memory;
     int err_reason;
@@ -121,6 +122,20 @@ struct Serialized
         free(data);
     }
 };
+
+bool bubble_up_ruby_exception(State& st, v8::TryCatch *try_catch)
+{
+    auto exception = try_catch->Exception();
+    if (exception.IsEmpty()) return false;
+    auto ruby_exception = v8::Local<v8::Value>::New(st.isolate, st.ruby_exception);
+    if (ruby_exception.IsEmpty()) return false;
+    if (!ruby_exception->SameValue(exception)) return false;
+    // signal that the ruby thread should reraise the exception
+    // that it caught earlier when executing a js->ruby callback
+    uint8_t c = 'e';
+    v8_reply(st.ruby_context, &c, 1);
+    return true;
+}
 
 // throws JS exception on serialization error
 bool reply(State& st, v8::Local<v8::Value> v)
@@ -388,8 +403,17 @@ void v8_api_callback(const v8::FunctionCallbackInfo<v8::Value>& info)
         v8_roundtrip(st.ruby_context, &p, &n);
         if (*p == 'c') // callback reply
             break;
-        if (*p == 'e') // ruby exception pending
-            return st.isolate->TerminateExecution();
+        if (*p == 'e') { // ruby exception pending
+            v8::Local<v8::String> message;
+            auto type = v8::NewStringType::kNormal;
+            if (!v8::String::NewFromOneByte(st.isolate, p+1, type, n-1).ToLocal(&message)) {
+                message = v8::String::NewFromUtf8Literal(st.isolate, "Ruby exception");
+            }
+            auto exception = v8::Exception::Error(message);
+            st.ruby_exception.Reset(st.isolate, exception);
+            st.isolate->ThrowException(exception);
+            return;
+        }
         v8_dispatch(st.ruby_context);
     }
     v8::ValueDeserializer des(st.isolate, p+1, n-1);
@@ -523,6 +547,7 @@ fail:
         cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
         st.err_reason = NO_ERROR;
     }
+    if (bubble_up_ruby_exception(st, &try_catch)) return;
     if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
     if (cause) result = v8::Undefined(st.isolate);
     auto err = to_error(st, &try_catch, cause);
@@ -571,6 +596,7 @@ fail:
         cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
         st.err_reason = NO_ERROR;
     }
+    if (bubble_up_ruby_exception(st, &try_catch)) return;
     if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
     if (cause) result = v8::Undefined(st.isolate);
     auto err = to_error(st, &try_catch, cause);
@@ -895,6 +921,7 @@ State::~State()
         v8::Isolate::Scope isolate_scope(isolate);
         persistent_safe_context.Reset();
         persistent_context.Reset();
+        ruby_exception.Reset();
     }
     isolate->Dispose();
     for (Callback *cb : callbacks)

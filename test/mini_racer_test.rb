@@ -1149,6 +1149,21 @@ class MiniRacerTest < Minitest::Test
     b.kill
   end
 
+  def test_ruby_exception
+    context = MiniRacer::Context.new
+    context.attach("test", proc { raise "boom" })
+    line = __LINE__ - 1
+    actual = context.eval("try { test() } catch (e) { e }")
+    assert_equal(actual.class, MiniRacer::ScriptError)
+    assert_equal(actual.message, "boom")
+    if RUBY_ENGINE == "truffleruby"
+      assert_includes(actual.backtrace[0], "#{__FILE__}:#{line}")
+      assert_includes(actual.backtrace[0], "block in MiniRacerTest#test_ruby_exception")
+    else
+      assert_equal(actual.backtrace, ["JavaScript Error: boom", "JavaScript at <eval>:1:7"])
+    end
+  end
+
   def test_large_integer
     [10_000_000_001, -2**63, 2**63-1].each { |big_int|
       context = MiniRacer::Context.new

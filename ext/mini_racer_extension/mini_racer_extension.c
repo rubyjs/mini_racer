@@ -13,6 +13,13 @@
 #include "serde.c"
 #include "mini_racer_v8.h"
 
+// for debugging
+#define RB_PUTS(v)                                          \
+    do {                                                    \
+        fflush(stdout);                                     \
+        rb_funcall(rb_mKernel, rb_intern("puts"), 1, v);    \
+    } while (0)
+
 #if RUBY_API_VERSION_CODE < 3*10000+4*100 // 3.4.0
 static inline void rb_thread_lock_native_thread(void)
 {
@@ -154,6 +161,7 @@ static VALUE platform_init_error;
 static VALUE context_disposed_error;
 static VALUE parse_error;
 static VALUE memory_error;
+static VALUE script_error;
 static VALUE runtime_error;
 static VALUE internal_error;
 static VALUE snapshot_error;
@@ -482,12 +490,36 @@ static void des_object_ref(void *arg, uint32_t id)
 
 static void des_error_begin(void *arg)
 {
-    push(arg, rb_class_new_instance(0, NULL, rb_eRuntimeError));
+    push(arg, rb_ary_new());
 }
 
 static void des_error_end(void *arg)
 {
-    pop(arg);
+    VALUE *a, h, message, stack, cause, newline;
+    DesCtx *c;
+
+    c = arg;
+    if (*c->err)
+        return;
+    if (c->tos == c->stack) {
+        snprintf(c->err, sizeof(c->err), "stack underflow");
+        return;
+    }
+    a = &c->tos->a;
+    h = rb_ary_pop(*a);
+    message = rb_hash_aref(h, rb_str_new_cstr("message"));
+    stack = rb_hash_aref(h, rb_str_new_cstr("stack"));
+    cause = rb_hash_aref(h, rb_str_new_cstr("cause"));
+    if (NIL_P(message))
+        message = rb_str_new_cstr("JS exception");
+    if (!NIL_P(stack)) {
+        newline = rb_str_new_cstr("\n");
+        message = rb_funcall(message, rb_intern("concat"), 2, newline, stack);
+    }
+    *a = rb_class_new_instance(1, &message, script_error);
+    if (!NIL_P(cause))
+        rb_iv_set(*a, "@cause", cause);
+    pop(c);
 }
 
 static int collect(VALUE k, VALUE v, VALUE a)
@@ -894,6 +926,7 @@ static VALUE rendezvous_callback_do(VALUE arg)
 static void *rendezvous_callback(void *arg)
 {
     struct rendezvous_nogvl *a;
+    const char *err;
     Context *c;
     int exc;
     VALUE r;
@@ -917,7 +950,12 @@ out:
     buf_move(&s.b, a->req);
     return NULL;
 fail:
-    ser_init1(&s, 'e'); // exception pending
+    ser_init0(&s);   // ruby exception pending
+    w_byte(&s, 'e'); // send ruby error message to v8 thread
+    r = rb_funcall(c->exception, rb_intern("to_s"), 0);
+    err = StringValueCStr(r);
+    if (err)
+        w(&s, err, strlen(err));
     goto out;
 }
 
@@ -975,16 +1013,18 @@ static VALUE rendezvous1(Context *c, Buf *req, DesCtx *d)
     int exc;
 
     rendezvous_no_des(c, req, &res); // takes ownership of |req|
+    r = c->exception;
+    c->exception = Qnil;
+    // if js land didn't handle exception from ruby callback, re-raise it now
+    if (res.len == 1 && *res.buf == 'e') {
+        assert(!NIL_P(r));
+        rb_exc_raise(r);
+    }
     r = rb_protect(deserialize, (VALUE)&(struct rendezvous_des){d, &res}, &exc);
     buf_reset(&res);
     if (exc) {
         r = rb_errinfo();
         rb_set_errinfo(Qnil);
-        rb_exc_raise(r);
-    }
-    if (!NIL_P(c->exception)) {
-        r = c->exception;
-        c->exception = Qnil;
         rb_exc_raise(r);
     }
     return r;
@@ -1634,6 +1674,11 @@ static VALUE snapshot_size0(VALUE self)
     return LONG2FIX(RSTRING_LENINT(ss->blob));
 }
 
+static VALUE script_error_cause(VALUE self)
+{
+    return rb_iv_get(self, "@cause");
+}
+
 __attribute__((visibility("default")))
 void Init_mini_racer_extension(void)
 {
@@ -1648,9 +1693,12 @@ void Init_mini_racer_extension(void)
     c = rb_define_class_under(m, "EvalError", c);
     parse_error = rb_define_class_under(m, "ParseError", c);
     memory_error = rb_define_class_under(m, "V8OutOfMemoryError", c);
+    script_error = rb_define_class_under(m, "ScriptError", c);
     runtime_error = rb_define_class_under(m, "RuntimeError", c);
     internal_error = rb_define_class_under(m, "InternalError", c);
     terminated_error = rb_define_class_under(m, "ScriptTerminatedError", c);
+
+    rb_define_method(script_error, "cause", script_error_cause, 0);
 
     c = context_class = rb_define_class_under(m, "Context", rb_cObject);
     rb_define_method(c, "initialize", context_initialize, -1);
