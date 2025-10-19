@@ -1,3 +1,8 @@
+- 0.19.1 - 20-10-2025
+  - JS code can now catch ruby exceptions - Ben Noordhuis
+  - Retain string encoding when raising exceptions - Ben Noordhuis
+  - Fix object identity bug with Ruby to JS conversion - Benjamin Wood
+
 - 0.19.0 - 24-06-2025
   - upgrade to node 24.1.0 
 
