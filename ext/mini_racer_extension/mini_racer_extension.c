@@ -478,7 +478,7 @@ static void des_map_end(void *arg)
     pop(arg);
 }
 
-static void des_object_ref(void *arg, uint32_t id)
+static void des_object_ref(void *arg, long id)
 {
     DesCtx *c;
     VALUE v;
@@ -645,7 +645,7 @@ static int serialize1(Ser *s, VALUE refs, VALUE v)
         if (sign < 0)
             v = rb_big_mul(v, LONG2FIX(-1));
         rb_big_pack(v, limbs, countof(limbs));
-        ser_bigint(s, limbs, countof(limbs), sign);
+        ser_bigint(s, limbs, sizeof(limbs[0]), countof(limbs), sign);
         break;
     case T_FIXNUM:
         ser_int(s, FIX2LONG(v));
@@ -689,7 +689,7 @@ static int serialize(Ser *s, VALUE v)
     return serialize1(s, rb_hash_new(), v);
 }
 
-static struct timespec deadline_ms(int ms)
+static struct timespec deadline_ms(int64_t ms)
 {
     static const int64_t ns_per_sec = 1000*1000*1000;
     struct timespec t;
