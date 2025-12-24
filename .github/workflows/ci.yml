@@ -14,7 +14,6 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - "macos-13"
           - "macos-14" # arm64
           - "macos-15" # arm64
           - "ubuntu-24.04"
@@ -55,7 +54,6 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - "macos-13"
           - "macos-14" # arm64
           - "macos-15"
         ruby:
