@@ -11,6 +11,35 @@ require_relative '../../lib/mini_racer/version'
 gem 'libv8-node', MiniRacer::LIBV8_NODE_VERSION
 require 'libv8-node'
 
+# Fix for missing aarch64-linux-musl gem in libv8-node
+# On some platforms (like ARM64 Alpine), the musl-specific gem might be missing.
+# We fallback to the glibc gem's directory if the musl one isn't found.
+if RUBY_PLATFORM.include?('musl')
+  module Libv8::Node::Paths
+    def self.platform
+      @platform ||= begin
+        # Replicate libv8-node's platform detection logic without side effects
+        detected_platform = Gem::Platform.local.dup
+        if detected_platform.version.nil?
+          detected_platform.instance_eval { @version = 'musl' }
+        end
+
+        platform_name = detected_platform.to_s.gsub(/-darwin-?\d+/, '-darwin')
+
+        # If the musl-specific directory is missing, try falling back to glibc
+        unless File.exist?(File.join(vendored_source_path, platform_name))
+          fallback = platform_name.gsub('-musl', '')
+          if File.exist?(File.join(vendored_source_path, fallback))
+            platform_name = fallback
+          end
+        end
+
+        platform_name
+      end
+    end
+  end
+end
+
 IS_DARWIN = RUBY_PLATFORM =~ /darwin/
 
 have_library('pthread')
