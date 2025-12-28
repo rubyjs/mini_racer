@@ -6,6 +6,30 @@
 #include <pthread.h>
 #include <math.h>
 
+#if defined(__linux__) && !defined(__GLIBC__)
+// musl compatibility for glibc-linked libraries (e.g. libv8-node)
+// some versions of libv8-node are accidentally linked against glibc symbols
+// or compiled with a toolchain that emits these C23 compatibility symbols
+unsigned long long __isoc23_strtoull(const char *nptr, char **endptr, int base) {
+    return strtoull(nptr, endptr, base);
+}
+unsigned long __isoc23_strtoul(const char *nptr, char **endptr, int base) {
+    return strtoul(nptr, endptr, base);
+}
+long long __isoc23_strtoll(const char *nptr, char **endptr, int base) {
+    return strtoll(nptr, endptr, base);
+}
+long __isoc23_strtol(const char *nptr, char **endptr, int base) {
+    return strtol(nptr, endptr, base);
+}
+double __isoc23_strtod(const char *nptr, char **endptr) {
+    return strtod(nptr, endptr);
+}
+float __isoc23_strtof(const char *nptr, char **endptr) {
+    return strtof(nptr, endptr);
+}
+#endif
+
 #include "ruby.h"
 #include "ruby/encoding.h"
 #include "ruby/version.h"
