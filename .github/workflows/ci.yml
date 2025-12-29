@@ -61,7 +61,7 @@ jobs:
           - "ruby-3.2"
           - "ruby-3.3"
           - "ruby-3.4"
-          - "ruby-4.0.0-preview2"
+          - "ruby-4.0"
 
     name: ${{ matrix.os }} - ${{ matrix.ruby }}
     runs-on: ${{ matrix.os }}
@@ -95,7 +95,7 @@ jobs:
           - "3.2"
           - "3.3"
           - "3.4"
-          - "4.0.0-preview2"
+          - "4.0"
         runner:
           - "ubuntu-24.04"
           - "ubuntu-24.04-arm"
