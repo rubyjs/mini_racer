@@ -1700,6 +1700,7 @@ static VALUE snapshot_load(VALUE klass, VALUE blob)
     TypedData_Get_Struct(self, Snapshot, &snapshot_type, ss);
     ss->blob = rb_str_dup(blob);
     rb_enc_associate(ss->blob, rb_ascii8bit_encoding());
+    ENC_CODERANGE_SET(ss->blob, ENC_CODERANGE_VALID);
     return self;
 }
 

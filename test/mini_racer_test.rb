@@ -495,9 +495,30 @@ class MiniRacerTest < Minitest::Test
     restored = MiniRacer::Snapshot.load(blob)
 
     assert_equal(snapshot.size, restored.size)
+    assert_equal(Encoding::ASCII_8BIT, restored.dump.encoding)
+    assert(restored.dump.valid_encoding?, "restored snapshot dump should have valid encoding")
     ctx = MiniRacer::Context.new(snapshot: restored)
     assert_equal("bar", ctx.eval("foo"))
     assert_equal("world", ctx.eval("hello()"))
+  end
+
+  def test_snapshot_load_with_non_binary_encoding
+    if RUBY_ENGINE == "truffleruby"
+      skip "TruffleRuby does not yet implement snapshots"
+    end
+    snapshot = MiniRacer::Snapshot.new('var foo = "bar";')
+    # Force non-binary encoding to exercise the coderange fix.
+    # Binary data interpreted as UTF-8 will have broken encoding.
+    blob = snapshot.dump.dup.force_encoding("UTF-8")
+    assert_equal(Encoding::UTF_8, blob.encoding)
+    assert(!blob.valid_encoding?, "test precondition: blob should have broken UTF-8 encoding")
+
+    restored = MiniRacer::Snapshot.load(blob)
+
+    assert_equal(Encoding::ASCII_8BIT, restored.dump.encoding)
+    assert(restored.dump.valid_encoding?, "restored snapshot should have valid binary encoding")
+    ctx = MiniRacer::Context.new(snapshot: restored)
+    assert_equal("bar", ctx.eval("foo"))
   end
 
   def test_invalid_snapshots_throw_an_exception
