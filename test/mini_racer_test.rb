@@ -485,6 +485,21 @@ class MiniRacerTest < Minitest::Test
     assert_equal(snapshot.size, dump.length)
   end
 
+  def test_snapshot_load
+    if RUBY_ENGINE == "truffleruby"
+      skip "TruffleRuby does not yet implement snapshots"
+    end
+    snapshot = MiniRacer::Snapshot.new('var foo = "bar"; function hello() { return "world"; }')
+    blob = snapshot.dump
+
+    restored = MiniRacer::Snapshot.load(blob)
+
+    assert_equal(snapshot.size, restored.size)
+    ctx = MiniRacer::Context.new(snapshot: restored)
+    assert_equal("bar", ctx.eval("foo"))
+    assert_equal("world", ctx.eval("hello()"))
+  end
+
   def test_invalid_snapshots_throw_an_exception
     begin
       MiniRacer::Snapshot.new("var foo = bar;")

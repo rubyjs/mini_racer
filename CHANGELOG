@@ -1,3 +1,6 @@
+- unreleased
+  - Add Snapshot.load to restore snapshots from binary data, enabling disk persistence
+
 - 0.19.2 - 24-12-2025
   - upgrade to node 24.12.0
 
