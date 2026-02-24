@@ -193,6 +193,25 @@ context.eval("counter")
 # => 1
 ```
 
+Snapshots can also be persisted to disk for faster startup:
+
+```ruby
+# Save a snapshot to disk
+snapshot = MiniRacer::Snapshot.new('var foo = "bar";')
+File.binwrite("snapshot.bin", snapshot.dump)
+
+# Load it back in a later process
+blob = File.binread("snapshot.bin")
+snapshot = MiniRacer::Snapshot.load(blob)
+context = MiniRacer::Context.new(snapshot: snapshot)
+context.eval("foo")
+# => "bar"
+```
+
+Note that snapshots are architecture and V8-version specific. A snapshot created on one platform (e.g., ARM64 macOS) cannot be loaded on a different platform (e.g., x86_64 Linux). Snapshots are best used for same-machine caching or homogeneous deployment environments.
+
+**Security note:** Only load snapshots from trusted sources. V8 snapshots are not designed to be safely loaded from untrusted input—malformed or malicious snapshot data may cause crashes or memory corruption.
+
 ### Garbage collection
 
 You can make the garbage collector more aggressive by defining the context with `MiniRacer::Context.new(ensure_gc_after_idle: 1000)`. Using this will ensure V8 will run a full GC using `context.low_memory_notification` 1 second after the last eval on the context. Low memory notifications ensure long living contexts use minimal amounts of memory.

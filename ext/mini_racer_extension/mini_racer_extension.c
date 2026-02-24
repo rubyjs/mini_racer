@@ -1690,6 +1690,20 @@ static VALUE snapshot_dump(VALUE self)
     return ss->blob;
 }
 
+static VALUE snapshot_load(VALUE klass, VALUE blob)
+{
+    Snapshot *ss;
+    VALUE self;
+
+    Check_Type(blob, T_STRING);
+    self = snapshot_alloc(klass);
+    TypedData_Get_Struct(self, Snapshot, &snapshot_type, ss);
+    ss->blob = rb_str_dup(blob);
+    rb_enc_associate(ss->blob, rb_ascii8bit_encoding());
+    ENC_CODERANGE_SET(ss->blob, ENC_CODERANGE_VALID);
+    return self;
+}
+
 static VALUE snapshot_size0(VALUE self)
 {
     Snapshot *ss;
@@ -1742,6 +1756,7 @@ void Init_mini_racer_extension(void)
     rb_define_method(c, "warmup!", snapshot_warmup, 1);
     rb_define_method(c, "dump", snapshot_dump, 0);
     rb_define_method(c, "size", snapshot_size0, 0);
+    rb_define_singleton_method(c, "load", snapshot_load, 1);
     rb_define_alloc_func(c, snapshot_alloc);
 
     c = rb_define_class_under(m, "Platform", rb_cObject);
