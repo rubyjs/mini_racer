@@ -17,6 +17,8 @@ jobs:
           - "macos-14" # arm64
           - "macos-15" # arm64
           - "macos-15-intel"
+          - "macos-26" # arm64
+          - "macos-26-intel"
           - "ubuntu-24.04"
         ruby:
           - "truffleruby+graalvm"
@@ -58,6 +60,8 @@ jobs:
           - "macos-14" # arm64
           - "macos-15" # arm64
           - "macos-15-intel"
+          - "macos-26" # arm64
+          - "macos-26-intel"
         ruby:
           - "ruby-3.1"
           - "ruby-3.2"
