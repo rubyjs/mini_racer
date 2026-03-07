@@ -32,6 +32,17 @@ $CXXFLAGS += " -fms-extensions"
 
 $CXXFLAGS += " -Wno-reserved-user-defined-literal" if IS_DARWIN
 
+# LLVM Clang 22+ treats -Wincompatible-pointer-types as an error by default;
+# suppress it until the `unsigned long` vs `uint64_t` mismatch in the extension
+# is properly fixed.
+unless try_compile(<<~'C', '-Wincompatible-pointer-types')
+  #include <stdint.h>
+  void f(const uint64_t *p) { (void)p; }
+  void g(void) { unsigned long a[1]; f(a); }
+C
+  $CFLAGS += " -Wno-incompatible-pointer-types"
+end
+
 if IS_DARWIN
   $LDFLAGS.insert(0, " -stdlib=libc++ ")
 else
