@@ -21,7 +21,14 @@ jobs:
           - "macos-26-intel"
           - "ubuntu-24.04"
         ruby:
-          - "truffleruby+graalvm"
+          - "truffleruby+graalvm-33"
+          - "truffleruby+graalvm-34"
+        exclude:
+          # starting TruffleRuby 34.0.0 no longer supports Intel on macOS
+          - os: "macos-15-intel"
+            ruby: "truffleruby+graalvm-34"
+          - os: "macos-26-intel"
+            ruby: "truffleruby+graalvm-34"
 
     name: ${{ matrix.os }} - ${{ matrix.ruby }}
     runs-on: ${{ matrix.os }}
@@ -33,7 +40,7 @@ jobs:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v4
         with:
           persist-credentials: false
-      - uses: ruby/setup-ruby@3ff19f5e2baf30647122352b96108b1fbe250c64 # v1
+      - uses: ruby/setup-ruby@4c56a21280b36d862b5fc31348f463d60bdc55d5 # v1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler: latest # to get this fix: https://github.com/rubygems/rubygems/issues/6165
@@ -76,7 +83,7 @@ jobs:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v4
         with:
           persist-credentials: false
-      - uses: ruby/setup-ruby@3ff19f5e2baf30647122352b96108b1fbe250c64 # v1
+      - uses: ruby/setup-ruby@4c56a21280b36d862b5fc31348f463d60bdc55d5 # v1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
