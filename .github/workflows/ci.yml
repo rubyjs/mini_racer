@@ -16,19 +16,10 @@ jobs:
         os:
           - "macos-14" # arm64
           - "macos-15" # arm64
-          - "macos-15-intel"
           - "macos-26" # arm64
-          - "macos-26-intel"
           - "ubuntu-24.04"
         ruby:
-          - "truffleruby+graalvm-33"
-          - "truffleruby+graalvm-34"
-        exclude:
-          # starting TruffleRuby 34.0.0 no longer supports Intel on macOS
-          - os: "macos-15-intel"
-            ruby: "truffleruby+graalvm-34"
-          - os: "macos-26-intel"
-            ruby: "truffleruby+graalvm-34"
+          - "truffleruby+graalvm"
 
     name: ${{ matrix.os }} - ${{ matrix.ruby }}
     runs-on: ${{ matrix.os }}
