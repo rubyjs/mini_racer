@@ -60,6 +60,25 @@ puts context.eval("array_and_hash()")
 # => {"a" => 1, "b" => [1, {"a" => 1}]}
 ```
 
+### Return binary data from Ruby to JavaScript
+
+Attached Ruby functions can return binary data as `Uint8Array` using `MiniRacer::Binary`:
+
+```ruby
+require "digest"
+
+context = MiniRacer::Context.new
+context.attach("sha256_raw", ->(data) {
+  MiniRacer::Binary.new(Digest::SHA256.digest(data))
+})
+
+# Inside JavaScript the return value is a Uint8Array
+context.eval("sha256_raw('hello') instanceof Uint8Array") # => true
+context.eval("sha256_raw('hello').length")                 # => 32
+```
+
+This is useful when you need to pass raw bytes (e.g., cryptographic digests, compressed data, binary file contents) from Ruby to JavaScript. The `MiniRacer::Binary` wrapper tells the bridge to serialize the data as a `Uint8Array` on the JavaScript side rather than a string.
+
 ### GIL free JavaScript execution
 
 The Ruby Global interpreter lock is released when scripts are executing:

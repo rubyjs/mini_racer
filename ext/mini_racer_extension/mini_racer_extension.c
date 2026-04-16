@@ -193,6 +193,7 @@ static VALUE terminated_error;
 static VALUE context_class;
 static VALUE snapshot_class;
 static VALUE date_time_class;
+static VALUE binary_class;
 static VALUE js_function_class;
 
 static pthread_mutex_t flags_mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -688,10 +689,17 @@ static int serialize1(Ser *s, VALUE refs, VALUE v)
         // entirely new objects
         if (rb_respond_to(v, rb_intern("to_time"))) {
             v = rb_funcall(v, rb_intern("to_time"), 0);
-        }
-        if (rb_obj_is_kind_of(v, rb_cTime)) {
-            struct timeval tv = rb_time_timeval(v);
-            ser_date(s, tv.tv_sec*1e3 + tv.tv_usec/1e3);
+            if (rb_obj_is_kind_of(v, rb_cTime)) {
+                struct timeval tv = rb_time_timeval(v);
+                ser_date(s, tv.tv_sec*1e3 + tv.tv_usec/1e3);
+            } else {
+                snprintf(s->err, sizeof(s->err), "unsupported type %s", rb_class2name(CLASS_OF(v)));
+                return -1;
+            }
+        } else if (!NIL_P(binary_class) && rb_obj_is_kind_of(v, binary_class)) {
+            t = rb_ivar_get(v, rb_intern("@data"));
+            Check_Type(t, T_STRING);
+            ser_uint8array(s, RSTRING_PTR(t), RSTRING_LEN(t));
         } else {
             snprintf(s->err, sizeof(s->err), "unsupported type %s", rb_class2name(CLASS_OF(v)));
             return -1;
@@ -1110,6 +1118,11 @@ static VALUE context_alloc(VALUE klass)
         a = rb_str_new_cstr("DateTime");
         if (Qtrue == rb_funcall(rb_cObject, f, 1, a))
             date_time_class = rb_const_get(rb_cObject, rb_intern("DateTime"));
+    }
+    if (NIL_P(binary_class)) {
+        VALUE m = rb_const_get(rb_cObject, rb_intern("MiniRacer"));
+        if (Qtrue == rb_funcall(m, rb_intern("const_defined?"), 1, rb_str_new_cstr("Binary")))
+            binary_class = rb_const_get(m, rb_intern("Binary"));
     }
     c = ruby_xmalloc(sizeof(*c));
     memset(c, 0, sizeof(*c));
@@ -1763,5 +1776,6 @@ void Init_mini_racer_extension(void)
     rb_define_singleton_method(c, "set_flags!", platform_set_flags, -1);
 
     date_time_class = Qnil; // lazy init
+    binary_class = Qnil; // lazy init
     js_function_class = rb_define_class_under(m, "JavaScriptFunction", rb_cObject);
 }

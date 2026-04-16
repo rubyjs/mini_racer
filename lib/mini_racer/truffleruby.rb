@@ -102,7 +102,7 @@ module MiniRacer
       else
         @snapshot = nil
       end
-      @is_object_or_array_func, @is_map_func, @is_map_iterator_func, @is_time_func, @js_date_to_time_func, @is_symbol_func, @js_symbol_to_symbol_func, @js_new_date_func, @js_new_array_func = eval_in_context <<-CODE
+      @is_object_or_array_func, @is_map_func, @is_map_iterator_func, @is_time_func, @js_date_to_time_func, @is_symbol_func, @js_symbol_to_symbol_func, @js_new_date_func, @js_new_array_func, @js_new_uint8array_func = eval_in_context <<-CODE
         [
           (x) => { return (x instanceof Object || x instanceof Array) && !(x instanceof Date) && !(x instanceof Function) },
           (x) => { return x instanceof Map },
@@ -113,6 +113,7 @@ module MiniRacer
           (x) => { var r = x.description; return r === undefined ? 'undefined' : r },
           (x) => { return new Date(x) },
           (x) => { return new Array(x) },
+          (x) => { return new Uint8Array(x) },
         ]
       CODE
     end
@@ -329,6 +330,8 @@ module MiniRacer
         js_new_date(value.to_f * 1000)
       when DateTime
         js_new_date(value.to_time.to_f * 1000)
+      when MiniRacer::Binary
+        @js_new_uint8array_func.call(value.data.bytes)
       else
         "Undefined Conversion"
       end
