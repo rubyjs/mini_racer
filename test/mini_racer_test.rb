@@ -1224,6 +1224,19 @@ class MiniRacerTest < Minitest::Test
     end
   end
 
+  def test_binary_returns_uint8array
+    context = MiniRacer::Context.new
+    context.attach("add_one", ->(data) {
+      MiniRacer::Binary.new(data.bytes.map { _1 + 1 }.pack("C*"))
+    })
+
+    result = context.eval <<~JS
+      var output = add_one(new Uint8Array([0, 1, 2, 3]));
+      (output instanceof Uint8Array) && Array.from(output).join(",") === "1,2,3,4";
+    JS
+    assert_equal true, result
+  end
+
   def test_exception_message_encoding
     e = nil
     begin

@@ -322,6 +322,19 @@ static void ser_string16(Ser *s, const void *p, size_t n)
     w(s, p, n);
 }
 
+// Uint8Array: ArrayBuffer header + data + typed array view descriptor
+static void ser_uint8array(Ser *s, const void *p, size_t n)
+{
+    w_byte(s, 'B');     // ArrayBuffer tag
+    w_varint(s, n);     // byte length
+    w(s, p, n);         // raw bytes
+    w_byte(s, 'V');     // typed array view tag
+    w_byte(s, 'B');     // Uint8Array type
+    w_varint(s, 0);     // byteOffset
+    w_varint(s, n);     // byteLength
+    w_varint(s, 0);     // flags
+}
+
 static void ser_object_begin(Ser *s)
 {
     w_byte(s, 'o');

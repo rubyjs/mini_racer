@@ -1,6 +1,17 @@
 require "mini_racer/version"
 require "pathname"
 
+module MiniRacer
+  class Binary
+    attr_reader :data
+
+    def initialize(data)
+      raise TypeError, "wrong argument type #{data.class} (expected String)" unless data.is_a?(String)
+      @data = data
+    end
+  end
+end
+
 if RUBY_ENGINE == "truffleruby"
   require "mini_racer/truffleruby"
 else
