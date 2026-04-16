@@ -1,4 +1,4 @@
-- 0.20.1 - 16-04-2026
+- 0.21.0 - 16-04-2026
   - Add MiniRacer::Binary for returning Uint8Array to JavaScript from attached Ruby callbacks
 
 - 0.20.0 - 24-02-2026
