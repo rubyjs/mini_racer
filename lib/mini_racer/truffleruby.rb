@@ -77,9 +77,13 @@ module MiniRacer
         raise "TruffleRuby #{RUBY_ENGINE_VERSION} does not have support for inner contexts, use a more recent version"
       end
 
+
+      if TruffleRuby.native?
+        raise "You need the TruffleRuby JVM Standalone for mini_racer because it is not possible to install the js component in the the Native standalone"
+      end
+
       unless Polyglot.languages.include? "js"
-        raise "The language 'js' is not available, you likely need to `export TRUFFLERUBYOPT='--jvm --polyglot'`\n" \
-          "You also need to install the 'js' component, see https://github.com/oracle/truffleruby/blob/master/doc/user/polyglot.md#installing-other-languages"
+        raise "The language 'js' is not available, you need to install the 'js' component.\nSee https://github.com/oracle/truffleruby/blob/master/doc/user/polyglot.md#installing-other-languages"
       end
 
       @context = Polyglot::InnerContext.new(on_cancelled: -> { 
