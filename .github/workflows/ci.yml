@@ -14,18 +14,14 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - "macos-14" # arm64
-          - "macos-15" # arm64
-          - "macos-26" # arm64
-          - "ubuntu-24.04"
+          - "macos-latest"
+          - "ubuntu-latest"
         ruby:
           - "truffleruby+graalvm"
 
     name: ${{ matrix.os }} - ${{ matrix.ruby }}
     runs-on: ${{ matrix.os }}
-
-    env:
-      TRUFFLERUBYOPT: "--jvm --polyglot"
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v4
@@ -34,7 +30,6 @@ jobs:
       - uses: ruby/setup-ruby@c4e5b1316158f92e3d49443a9d58b31d25ac0f8f # v1
         with:
           ruby-version: ${{ matrix.ruby }}
-          bundler: latest # to get this fix: https://github.com/rubygems/rubygems/issues/6165
           bundler-cache: true
       - name: Install GraalVM JS component
         run: truffleruby-polyglot-get js

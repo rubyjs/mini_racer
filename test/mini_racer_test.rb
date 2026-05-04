@@ -1224,14 +1224,20 @@ class MiniRacerTest < Minitest::Test
     end
   end
 
+  def test_uint8array_is_converted_to_string
+    context = MiniRacer::Context.new
+    result = context.eval('new Uint8Array([0, 1, 2, 3])')
+    assert_equal "\x00\x01\x02\x03".b, result
+  end
+
   def test_binary_returns_uint8array
     context = MiniRacer::Context.new
-    context.attach("add_one", ->(data) {
-      MiniRacer::Binary.new(data.bytes.map { _1 + 1 }.pack("C*"))
+    context.attach("create_uint8_array", -> {
+      MiniRacer::Binary.new([1, 2, 3, 4].pack("C*"))
     })
 
     result = context.eval <<~JS
-      var output = add_one(new Uint8Array([0, 1, 2, 3]));
+      var output = create_uint8_array();
       (output instanceof Uint8Array) && Array.from(output).join(",") === "1,2,3,4";
     JS
     assert_equal true, result
