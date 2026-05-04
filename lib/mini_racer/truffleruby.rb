@@ -106,20 +106,19 @@ module MiniRacer
       else
         @snapshot = nil
       end
-      @is_object_or_array_func, @is_map_func, @is_map_iterator_func, @is_time_func, @js_date_to_time_func, @is_symbol_func, @js_symbol_to_symbol_func, @js_new_date_func, @js_new_array_func, @js_new_uint8array_func = eval_in_context <<-CODE
-        [
-          (x) => { return (x instanceof Object || x instanceof Array) && !(x instanceof Date) && !(x instanceof Function) },
-          (x) => { return x instanceof Map },
-          (x) => { return x[Symbol.toStringTag] === 'Map Iterator' },
-          (x) => { return x instanceof Date },
-          (x) => { return x.getTime(x) },
-          (x) => { return typeof x === 'symbol' },
-          (x) => { var r = x.description; return r === undefined ? 'undefined' : r },
-          (x) => { return new Date(x) },
-          (x) => { return new Array(x) },
-          (x) => { return new Uint8Array(x) },
-        ]
-      CODE
+
+      @is_object_or_array_func = eval_in_context "(x) => { return (x instanceof Object || x instanceof Array) && !(x instanceof Date) && !(x instanceof Function) }"
+      @is_map_func = eval_in_context "(x) => { return x instanceof Map }"
+      @is_map_iterator_func = eval_in_context "(x) => { return x[Symbol.toStringTag] === 'Map Iterator' }"
+      @is_time_func = eval_in_context "(x) => { return x instanceof Date }"
+      @is_symbol_func = eval_in_context "(x) => { return typeof x === 'symbol' }"
+      @is_uint8_array_func = eval_in_context "(x) => { return x instanceof Uint8Array }"
+
+      @js_date_to_time_func = eval_in_context "(x) => { return x.getTime(x) }"
+      @js_symbol_to_symbol_func = eval_in_context "(x) => { var r = x.description; return r === undefined ? 'undefined' : r }"
+      @js_new_date_func = eval_in_context "(x) => { return new Date(x) }"
+      @js_new_array_func = eval_in_context "(x) => { return new Array(x) }"
+      @js_new_uint8array_func = eval_in_context "(x) => { return new Uint8Array(x) }"
     end
 
     def dispose_unsafe
@@ -236,6 +235,10 @@ module MiniRacer
         elsif value.respond_to?(:to_str)
           value.to_str.dup
         elsif value.respond_to?(:to_ary)
+          if uint8_array?(value)
+            return value.to_a.pack('C*')
+          end
+
           value.to_ary.map do |e|
             if e.respond_to?(:call)
               nil
@@ -285,13 +288,17 @@ module MiniRacer
       @is_time_func.call(value)
     end
 
+    def symbol?(value)
+      @is_symbol_func.call(value)
+    end
+
+    def uint8_array?(value)
+      @is_uint8_array_func.call(value)
+    end
+
     def js_date_to_time(value)
       millis = @js_date_to_time_func.call(value)
       Time.at(Rational(millis, 1000))
-    end
-
-    def symbol?(value)
-      @is_symbol_func.call(value)
     end
 
     def js_symbol_to_symbol(value)
