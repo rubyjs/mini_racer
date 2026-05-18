@@ -3,6 +3,7 @@
 #include "libplatform/libplatform.h"
 #include "mini_racer_v8.h"
 #include <memory>
+#include <unordered_map>
 #include <vector>
 #include <cassert>
 #include <cstdio>
@@ -92,6 +93,15 @@ struct State
     int err_reason;
     bool verbose_exceptions;
     std::vector<Callback*> callbacks;
+    // Cleared in ~State() under the still-live isolate so the contained
+    // Persistents can Reset() safely before isolate->Dispose().
+    std::unordered_map<int32_t, std::unique_ptr<v8::Persistent<v8::Script>>> scripts;
+    int32_t next_script_id;
+    // Depth counter incremented while v8_api_callback is on the stack.
+    // CreateCodeCache walks live isolate state and corrupts the parser
+    // when invoked from within a JS->Ruby->JS frame; see compile()'s
+    // `produce_cache` handling.
+    int in_callback;
     std::unique_ptr<v8::ArrayBuffer::Allocator> allocator;
     inline ~State();
 };
@@ -380,6 +390,12 @@ void v8_api_callback(const v8::FunctionCallbackInfo<v8::Value>& info)
     auto ext = v8::External::Cast(*info.Data());
     Callback *cb = static_cast<Callback*>(ext->Value());
     State& st = *cb->st;
+    // RAII counter so re-entrant compile() can refuse CreateCodeCache.
+    struct CallbackGuard {
+        State &st;
+        CallbackGuard(State &s) : st(s) { st.in_callback++; }
+        ~CallbackGuard()                { st.in_callback--; }
+    } _guard(st);
     v8::Local<v8::Array> request;
     {
         v8::Context::Scope context_scope(st.safe_context);
@@ -604,6 +620,181 @@ fail:
         assert(try_catch.HasCaught());
         goto fail; // retry; can be termination exception
     }
+}
+
+// request: [filename, source, cached_data|null, produce_cache:Bool]
+// response: errback [[handle_id:Int32, cached_data:ArrayBuffer|null, rejected:Bool], err]
+//
+// CreateCodeCache walks live isolate state in a way that corrupts the parser
+// when called from inside a v8_api_callback frame (re-entrant compile from
+// host fn). Callers must opt in via produce_cache and only do so from the
+// top level; we raise from re-entrant context rather than silently skipping
+// so misuse is caught immediately.
+extern "C" void v8_compile(State *pst, const uint8_t *p, size_t n)
+{
+    State& st = *pst;
+    v8::TryCatch try_catch(st.isolate);
+    try_catch.SetVerbose(st.verbose_exceptions);
+    v8::HandleScope handle_scope(st.isolate);
+    v8::ValueDeserializer des(st.isolate, p, n);
+    des.ReadHeader(st.context).Check();
+    v8::Local<v8::Array> result;
+    int cause = INTERNAL_ERROR;
+    {
+        v8::Local<v8::Value> request_v;
+        if (!des.ReadValue(st.context).ToLocal(&request_v)) goto fail;
+        v8::Local<v8::Object> request;
+        if (!request_v->ToObject(st.context).ToLocal(&request)) goto fail;
+        v8::Local<v8::Value> filename;
+        if (!request->Get(st.context, 0).ToLocal(&filename)) goto fail;
+        v8::Local<v8::Value> source_v;
+        if (!request->Get(st.context, 1).ToLocal(&source_v)) goto fail;
+        v8::Local<v8::Value> cached_v;
+        if (!request->Get(st.context, 2).ToLocal(&cached_v)) goto fail;
+        v8::Local<v8::Value> produce_v;
+        if (!request->Get(st.context, 3).ToLocal(&produce_v)) goto fail;
+        bool produce_cache = produce_v->BooleanValue(st.isolate);
+        v8::Local<v8::String> source;
+        if (!source_v->ToString(st.context).ToLocal(&source)) goto fail;
+
+        if (produce_cache && st.in_callback > 0) {
+            cause = RUNTIME_ERROR;
+            auto msg = v8::String::NewFromUtf8Literal(st.isolate,
+                "produce_cache: true is unsafe inside a host-function callback "
+                "(V8 CreateCodeCache corrupts parser state when re-entered); "
+                "compile with produce_cache from the top level instead");
+            st.isolate->ThrowException(v8::Exception::Error(msg));
+            goto fail;
+        }
+
+        // ser_uint8array on the Ruby side wraps the bytes in an ArrayBuffer +
+        // Uint8Array view. The view's backing bytes are valid for the whole
+        // v8_compile call, so BufferNotOwned avoids a copy — the CachedData
+        // destructor (run when source_obj goes out of scope) leaves them alone.
+        v8::ScriptCompiler::CachedData *cached_in = nullptr;
+        if (cached_v->IsArrayBufferView()) {
+            auto view = cached_v.As<v8::ArrayBufferView>();
+            int len = static_cast<int>(view->ByteLength());
+            if (len > 0) {
+                auto store = view->Buffer()->GetBackingStore();
+                auto bytes = static_cast<const uint8_t*>(store->Data()) + view->ByteOffset();
+                cached_in = new v8::ScriptCompiler::CachedData(
+                    bytes, len, v8::ScriptCompiler::CachedData::BufferNotOwned);
+            }
+        }
+
+        v8::ScriptOrigin origin(filename);
+        v8::ScriptCompiler::Source source_obj(source, origin, cached_in);
+        auto options = cached_in ? v8::ScriptCompiler::kConsumeCodeCache
+                                 : v8::ScriptCompiler::kNoCompileOptions;
+        v8::Local<v8::Script> script;
+        cause = PARSE_ERROR;
+        if (!v8::ScriptCompiler::Compile(st.context, &source_obj, options)
+            .ToLocal(&script)) goto fail;
+        cause = INTERNAL_ERROR;
+
+        bool rejected = (cached_in && source_obj.GetCachedData()->rejected);
+        v8::Local<v8::Value> cache_value = v8::Null(st.isolate);
+        if (produce_cache && (!cached_in || rejected)) {
+            std::unique_ptr<v8::ScriptCompiler::CachedData> blob(
+                v8::ScriptCompiler::CreateCodeCache(script->GetUnboundScript()));
+            if (blob && blob->length > 0) {
+                auto backing = v8::ArrayBuffer::NewBackingStore(st.isolate, blob->length);
+                memcpy(backing->Data(), blob->data, blob->length);
+                cache_value = v8::ArrayBuffer::New(st.isolate, std::move(backing));
+            }
+        }
+
+        int32_t id = ++st.next_script_id;
+        st.scripts[id] = std::unique_ptr<v8::Persistent<v8::Script>>(
+            new v8::Persistent<v8::Script>(st.isolate, script));
+
+        {
+            v8::Context::Scope context_scope(st.safe_context);
+            result = v8::Array::New(st.isolate, 3);
+        }
+        result->Set(st.context, 0, v8::Int32::New(st.isolate, id)).Check();
+        result->Set(st.context, 1, cache_value).Check();
+        result->Set(st.context, 2, v8::Boolean::New(st.isolate, rejected)).Check();
+    }
+    cause = NO_ERROR;
+fail:
+    if (st.isolate->IsExecutionTerminating()) {
+        st.isolate->CancelTerminateExecution();
+        cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
+        st.err_reason = NO_ERROR;
+    }
+    if (bubble_up_ruby_exception(st, &try_catch)) return;
+    if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
+    v8::Local<v8::Value> result_v = result.IsEmpty()
+        ? static_cast<v8::Local<v8::Value>>(v8::Undefined(st.isolate))
+        : static_cast<v8::Local<v8::Value>>(result);
+    auto err = to_error(st, &try_catch, cause);
+    if (!reply(st, result_v, err)) {
+        assert(try_catch.HasCaught());
+        goto fail;
+    }
+}
+
+extern "C" void v8_run(State *pst, const uint8_t *p, size_t n)
+{
+    State& st = *pst;
+    v8::TryCatch try_catch(st.isolate);
+    try_catch.SetVerbose(st.verbose_exceptions);
+    v8::HandleScope handle_scope(st.isolate);
+    v8::ValueDeserializer des(st.isolate, p, n);
+    des.ReadHeader(st.context).Check();
+    v8::Local<v8::Value> result;
+    int cause = INTERNAL_ERROR;
+    {
+        v8::Local<v8::Value> id_v;
+        if (!des.ReadValue(st.context).ToLocal(&id_v)) goto fail;
+        int32_t id;
+        if (!id_v->Int32Value(st.context).To(&id)) goto fail;
+        auto it = st.scripts.find(id);
+        if (it == st.scripts.end()) {
+            cause = RUNTIME_ERROR;
+            auto msg = v8::String::NewFromUtf8Literal(st.isolate, "no such script handle");
+            st.isolate->ThrowException(v8::Exception::Error(msg));
+            goto fail;
+        }
+        auto script = v8::Local<v8::Script>::New(st.isolate, *it->second);
+        v8::Local<v8::Value> result_v;
+        cause = RUNTIME_ERROR;
+        if (!script->Run(st.context).ToLocal(&result_v)) goto fail;
+        result = sanitize(st, result_v);
+    }
+    cause = NO_ERROR;
+fail:
+    if (st.isolate->IsExecutionTerminating()) {
+        st.isolate->CancelTerminateExecution();
+        cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
+        st.err_reason = NO_ERROR;
+    }
+    if (bubble_up_ruby_exception(st, &try_catch)) return;
+    if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
+    if (cause) result = v8::Undefined(st.isolate);
+    auto err = to_error(st, &try_catch, cause);
+    if (!reply(st, result, err)) {
+        assert(try_catch.HasCaught());
+        goto fail;
+    }
+}
+
+// Unknown ids are silently ignored — Ruby-side Script#dispose is idempotent.
+extern "C" void v8_dispose_script(State *pst, const uint8_t *p, size_t n)
+{
+    State& st = *pst;
+    v8::HandleScope handle_scope(st.isolate);
+    v8::ValueDeserializer des(st.isolate, p, n);
+    des.ReadHeader(st.context).Check();
+    v8::Local<v8::Value> id_v;
+    if (des.ReadValue(st.context).ToLocal(&id_v)) {
+        int32_t id;
+        if (id_v->Int32Value(st.context).To(&id))
+            st.scripts.erase(id);
+    }
+    reply_retry(st, v8::String::Empty(st.isolate));
 }
 
 extern "C" void v8_heap_stats(State *pst)
@@ -924,6 +1115,11 @@ extern "C" void v8_single_threaded_dispose(struct State *pst)
     delete pst; // see State::~State() below
 }
 
+extern "C" uint32_t v8_cached_data_version_tag(void)
+{
+    return v8::ScriptCompiler::CachedDataVersionTag();
+}
+
 } // namespace anonymous
 
 State::~State()
@@ -931,6 +1127,7 @@ State::~State()
     {
         v8::Locker locker(isolate);
         v8::Isolate::Scope isolate_scope(isolate);
+        scripts.clear();
         persistent_safe_context.Reset();
         persistent_context.Reset();
         ruby_exception.Reset();

@@ -158,6 +158,20 @@ typedef struct Snapshot {
     VALUE blob;
 } Snapshot;
 
+// GC-finalizer caveat: script_free cannot send a dispose RPC (would need
+// to take rr_mtx without a reliable GVL guarantee). Handles freed here
+// rely on State::~State() walking st.scripts at isolate teardown — so
+// long-lived Contexts with many short-lived Scripts accumulate Persistents
+// until the Context is disposed. Call Script#dispose explicitly to free
+// eagerly.
+typedef struct Script {
+    VALUE   context;      // parent Context VALUE (kept alive via mark)
+    VALUE   cached_data;  // ASCII-8BIT String or Qnil
+    int32_t handle_id;    // 0 if uninitialized or already freed
+    int     cache_rejected;
+    int     disposed;
+} Script;
+
 static void context_destroy(Context *c);
 static void context_free(void *arg);
 static void context_mark(void *arg);
@@ -185,6 +199,19 @@ static const rb_data_type_t snapshot_type = {
     },
 };
 
+static void script_free(void *arg);
+static void script_mark(void *arg);
+static size_t script_size(const void *arg);
+
+static const rb_data_type_t script_type = {
+    .wrap_struct_name   =  "mini_racer/script",
+    .function           = {
+        .dfree = script_free,
+        .dmark = script_mark,
+        .dsize = script_size,
+    },
+};
+
 static VALUE platform_init_error;
 static VALUE context_disposed_error;
 static VALUE parse_error;
@@ -196,9 +223,14 @@ static VALUE snapshot_error;
 static VALUE terminated_error;
 static VALUE context_class;
 static VALUE snapshot_class;
+static VALUE script_class;
 static VALUE date_time_class;
 static VALUE binary_class;
 static VALUE js_function_class;
+
+static ID id_filename;
+static ID id_cached_data;
+static ID id_produce_cache;
 
 static pthread_mutex_t flags_mtx = PTHREAD_MUTEX_INITIALIZER;
 static Buf flags; // protected by |flags_mtx|
@@ -808,10 +840,13 @@ static void dispatch1(Context *c, const uint8_t *p, size_t n)
     switch (*p) {
     case 'A': return v8_attach(c->pst, p+1, n-1);
     case 'C': return v8_timedwait(c, p+1, n-1, v8_call);
+    case 'D': return v8_dispose_script(c->pst, p+1, n-1);
     case 'E': return v8_timedwait(c, p+1, n-1, v8_eval);
     case 'H': return v8_heap_snapshot(c->pst);
+    case 'K': return v8_timedwait(c, p+1, n-1, v8_compile); // (K)ompile — 'C' is taken
     case 'M': return v8_perform_microtask_checkpoint(c->pst);
     case 'P': return v8_pump_message_loop(c->pst);
+    case 'R': return v8_timedwait(c, p+1, n-1, v8_run);
     case 'S': return v8_heap_stats(c->pst);
     case 'T': return v8_snapshot(c->pst, p+1, n-1);
     case 'W': return v8_warmup(c->pst, p+1, n-1);
@@ -1673,6 +1708,17 @@ init:
         barrier_wait(&c->early_init);
         barrier_wait(&c->late_init);
     }
+    // Deferred to first Context.new so Platform.set_flags! still has effect
+    // on the tag (which depends on V8 flags applied during v8_global_init).
+    {
+        static int version_tag_defined;
+        if (!version_tag_defined) {
+            VALUE m = rb_const_get(rb_cObject, rb_intern("MiniRacer"));
+            rb_define_const(m, "V8_CACHED_DATA_VERSION_TAG",
+                            UINT2NUM(v8_cached_data_version_tag()));
+            version_tag_defined = 1;
+        }
+    }
     return Qnil;
 fail:
     rb_raise(runtime_error, "Context.initialize: %s: %s", cause, strerror(r));
@@ -1806,10 +1852,178 @@ static VALUE script_error_cause(VALUE self)
     return rb_iv_get(self, "@cause");
 }
 
+static VALUE context_compile(int argc, VALUE *argv, VALUE self)
+{
+    VALUE a, e, source, filename, cached_data, produce_cache, kwargs;
+    VALUE script_v, result;
+    Script *script;
+    Context *c;
+    Ser s;
+
+    TypedData_Get_Struct(self, Context, &context_type, c);
+    rb_scan_args(argc, argv, "1:", &source, &kwargs);
+    Check_Type(source, T_STRING);
+    filename = Qnil;
+    cached_data = Qnil;
+    produce_cache = Qfalse;
+    if (!NIL_P(kwargs)) {
+        filename = rb_hash_aref(kwargs, ID2SYM(id_filename));
+        cached_data = rb_hash_aref(kwargs, ID2SYM(id_cached_data));
+        produce_cache = rb_hash_aref(kwargs, ID2SYM(id_produce_cache));
+    }
+    if (NIL_P(filename))
+        filename = rb_str_new_cstr("<compile>");
+    Check_Type(filename, T_STRING);
+    if (!NIL_P(cached_data)) {
+        Check_Type(cached_data, T_STRING);
+        // Refuse non-binary encodings so a user reading a cache file without
+        // 'rb' mode gets a clear error instead of mangled bytes flowing to V8.
+        if (rb_enc_get(cached_data) != rb_ascii8bit_encoding())
+            rb_raise(rb_eEncodingError,
+                     "cached_data must be ASCII-8BIT (binary), got %s",
+                     rb_enc_name(rb_enc_get(cached_data)));
+    }
+    ser_init1(&s, 'K');
+    ser_array_begin(&s, 4);
+    add_string(&s, filename);
+    add_string(&s, source);
+    if (NIL_P(cached_data)) {
+        ser_null(&s);
+    } else {
+        ser_uint8array(&s, (const uint8_t *)RSTRING_PTR(cached_data),
+                       RSTRING_LENINT(cached_data));
+    }
+    ser_bool(&s, RTEST(produce_cache));
+    ser_array_end(&s, 4);
+    a = rendezvous(c, &s.b);
+    e = rb_ary_pop(a);
+    handle_exception(e);
+    result = rb_ary_pop(a);
+    Check_Type(result, T_ARRAY);
+
+    script_v = rb_obj_alloc(script_class); // skip the raising initialize
+    TypedData_Get_Struct(script_v, Script, &script_type, script);
+    script->context = self;
+    script->handle_id = NUM2INT(rb_ary_entry(result, 0));
+    script->cached_data = rb_ary_entry(result, 1);
+    script->cache_rejected = RTEST(rb_ary_entry(result, 2));
+    return script_v;
+}
+
+static VALUE script_alloc(VALUE klass)
+{
+    Script *s;
+
+    s = ruby_xmalloc(sizeof(*s));
+    memset(s, 0, sizeof(*s));
+    s->context = Qnil;
+    s->cached_data = Qnil;
+    return TypedData_Wrap_Struct(klass, &script_type, s);
+}
+
+static void script_free(void *arg)
+{
+    // Intentionally does not send a dispose RPC — finalizers can't safely
+    // take rr_mtx. State::~State() walks st.scripts at isolate teardown so
+    // we leak nothing across a Context's lifetime; use Script#dispose to
+    // free eagerly mid-lifetime.
+    ruby_xfree(arg);
+}
+
+static void script_mark(void *arg)
+{
+    Script *s = arg;
+    rb_gc_mark(s->context);
+    rb_gc_mark(s->cached_data);
+}
+
+static size_t script_size(const void *arg)
+{
+    const Script *s = arg;
+    size_t base = sizeof(*s);
+    if (!NIL_P(s->cached_data))
+        base += RSTRING_LENINT(s->cached_data);
+    return base;
+}
+
+static VALUE script_initialize(int argc, VALUE *argv, VALUE self)
+{
+    (void)argc; (void)argv; (void)self;
+    rb_raise(runtime_error, "MiniRacer::Script must be created via Context#compile");
+    return Qnil;
+}
+
+static VALUE script_run(VALUE self)
+{
+    VALUE a, e;
+    Script *script;
+    Context *c;
+    Ser s;
+
+    TypedData_Get_Struct(self, Script, &script_type, script);
+    if (script->disposed)
+        rb_raise(runtime_error, "disposed script");
+    TypedData_Get_Struct(script->context, Context, &context_type, c);
+    if (atomic_load(&c->quit))
+        rb_raise(context_disposed_error, "disposed context");
+    ser_init1(&s, 'R');
+    ser_int(&s, script->handle_id);
+    a = rendezvous(c, &s.b);
+    e = rb_ary_pop(a);
+    handle_exception(e);
+    return rb_ary_pop(a);
+}
+
+static VALUE script_cached_data(VALUE self)
+{
+    Script *script;
+    TypedData_Get_Struct(self, Script, &script_type, script);
+    return script->cached_data;
+}
+
+static VALUE script_cache_rejected_p(VALUE self)
+{
+    Script *script;
+    TypedData_Get_Struct(self, Script, &script_type, script);
+    return script->cache_rejected ? Qtrue : Qfalse;
+}
+
+static VALUE script_dispose(VALUE self)
+{
+    VALUE e;
+    Script *script;
+    Context *c;
+    Ser s;
+
+    TypedData_Get_Struct(self, Script, &script_type, script);
+    if (script->disposed) return Qnil;
+    TypedData_Get_Struct(script->context, Context, &context_type, c);
+    script->disposed = 1;
+    // Context already gone? The handle was cleaned by State::~State().
+    if (atomic_load(&c->quit))
+        return Qnil;
+    ser_init1(&s, 'D');
+    ser_int(&s, script->handle_id);
+    e = rendezvous(c, &s.b);
+    handle_exception(e);
+    return Qnil;
+}
+
+static VALUE script_disposed_p(VALUE self)
+{
+    Script *script;
+    TypedData_Get_Struct(self, Script, &script_type, script);
+    return script->disposed ? Qtrue : Qfalse;
+}
+
 __attribute__((visibility("default")))
 void Init_mini_racer_extension(void)
 {
     VALUE c, m;
+
+    id_filename      = rb_intern("filename");
+    id_cached_data   = rb_intern("cached_data");
+    id_produce_cache = rb_intern("produce_cache");
 
     m = rb_define_module("MiniRacer");
     c = rb_define_class_under(m, "Error", rb_eStandardError);
@@ -1830,6 +2044,7 @@ void Init_mini_racer_extension(void)
     c = context_class = rb_define_class_under(m, "Context", rb_cObject);
     rb_define_method(c, "initialize", context_initialize, -1);
     rb_define_method(c, "attach", context_attach, 2);
+    rb_define_method(c, "compile", context_compile, -1);
     rb_define_method(c, "dispose", context_dispose, 0);
     rb_define_method(c, "stop", context_stop, 0);
     rb_define_method(c, "call", context_call, -1);
@@ -1840,6 +2055,15 @@ void Init_mini_racer_extension(void)
     rb_define_method(c, "pump_message_loop", context_pump_message_loop, 0);
     rb_define_method(c, "low_memory_notification", context_low_memory_notification, 0);
     rb_define_alloc_func(c, context_alloc);
+
+    c = script_class = rb_define_class_under(m, "Script", rb_cObject);
+    rb_define_method(c, "initialize", script_initialize, -1);
+    rb_define_method(c, "run", script_run, 0);
+    rb_define_method(c, "cached_data", script_cached_data, 0);
+    rb_define_method(c, "cache_rejected?", script_cache_rejected_p, 0);
+    rb_define_method(c, "dispose", script_dispose, 0);
+    rb_define_method(c, "disposed?", script_disposed_p, 0);
+    rb_define_alloc_func(c, script_alloc);
 
     c = snapshot_class = rb_define_class_under(m, "Snapshot", rb_cObject);
     rb_define_method(c, "initialize", snapshot_initialize, -1);

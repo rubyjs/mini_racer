@@ -1,5 +1,14 @@
 - (Unreleased)
   - Add `Context#perform_microtask_checkpoint` to synchronously drain the V8 microtask queue, useful for spec-compliant `dispatchEvent` sequencing inside Ruby callbacks
+  - Expose V8 ScriptCompiler::CachedData via Context#compile / MiniRacer::Script (#411)
+    - script = ctx.compile(src, filename:, cached_data:, produce_cache:) → Script handle
+    - script.run replays compiled bytecode without re-parsing
+    - script.cached_data persists V8's per-script bytecode cache when produce_cache: true
+    - script.cache_rejected? reports source/version mismatches
+    - MiniRacer::V8_CACHED_DATA_VERSION_TAG for cache-key invalidation
+    - produce_cache defaults to false; passing true from inside a host-fn callback raises (V8's CreateCodeCache corrupts parser state when re-entered, so warm the cache from the top level)
+    - Cross-process reuse requires both processes to load byte-identical snapshot data via Snapshot#dump / Snapshot.load (Snapshot.new(src) is non-deterministic) and is incompatible with Platform.set_flags!(:single_threaded) (V8 embeds per-process state in the blob under single-threaded mode)
+    - TruffleRuby shim falls back to source replay (no equivalent in GraalJS)
 
 - 0.21.1 - 25-05-2026
   - Run `:single_threaded` V8 dispatches on a reusable mini_racer-owned native thread so V8 does not execute on Ruby-owned threads

@@ -3,6 +3,10 @@
 require_relative 'shared'
 
 module MiniRacer
+  # GraalJS has no equivalent of V8's per-script bytecode cache reachable
+  # from Polyglot::InnerContext#eval, so the version tag is meaningless
+  # here. Define 0 as a sentinel callers can detect to skip cache logic.
+  V8_CACHED_DATA_VERSION_TAG = 0
 
   class Context
 
@@ -386,6 +390,52 @@ module MiniRacer
       # Intentionally noop since TruffleRuby mocks the snapshot API
       # by replaying snapshot source before the first eval/call
       self
+    end
+  end
+
+  # GraalJS has no per-script bytecode cache reachable from
+  # Polyglot::InnerContext#eval, so cached_data: is silently ignored and
+  # Script#run replays the source through Context#eval.
+  class Context
+    def compile(source, filename: nil, cached_data: nil, produce_cache: false)
+      raise(ContextDisposedError, 'attempted to call compile on a disposed context!') if @disposed
+      raise TypeError, "wrong type argument #{source.class} (should be a string)" unless source.is_a?(String)
+      raise TypeError, "wrong type argument #{filename.class} (should be a string)" unless filename.nil? || filename.is_a?(String)
+      if cached_data
+        raise TypeError, "wrong type argument #{cached_data.class} (should be a string)" unless cached_data.is_a?(String)
+        raise EncodingError, "cached_data must be ASCII-8BIT (binary), got #{cached_data.encoding}" if cached_data.encoding != Encoding::ASCII_8BIT
+      end
+      # produce_cache is accepted for API parity but has no effect — the shim
+      # has no per-script bytecode cache to produce.
+      Script.send(:new, self, source, filename)
+    end
+  end
+
+  class Script
+    private_class_method :new
+
+    def initialize(ctx, source, filename)
+      @ctx = ctx
+      @source = source
+      @filename = filename
+      @disposed = false
+    end
+
+    def run
+      raise MiniRacer::RuntimeError, 'disposed script' if @disposed
+      @ctx.eval(@source, filename: @filename) # raises ContextDisposedError if @ctx is disposed
+    end
+
+    def cached_data; nil; end
+    def cache_rejected?; false; end
+
+    def dispose
+      @disposed = true
+      nil
+    end
+
+    def disposed?
+      @disposed
     end
   end
 end

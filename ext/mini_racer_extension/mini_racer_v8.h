@@ -39,7 +39,10 @@ struct State *v8_thread_init(struct Context *c, const uint8_t *snapshot_buf,
                              int verbose_exceptions); // calls v8_thread_main
 void v8_attach(struct State *pst, const uint8_t *p, size_t n);
 void v8_call(struct State *pst, const uint8_t *p, size_t n);
+void v8_compile(struct State *pst, const uint8_t *p, size_t n);
+void v8_dispose_script(struct State *pst, const uint8_t *p, size_t n);
 void v8_eval(struct State *pst, const uint8_t *p, size_t n);
+void v8_run(struct State *pst, const uint8_t *p, size_t n);
 void v8_heap_stats(struct State *pst);
 void v8_heap_snapshot(struct State *pst);
 void v8_perform_microtask_checkpoint(struct State *pst);
@@ -50,6 +53,7 @@ void v8_low_memory_notification(struct State *pst);
 void v8_terminate_execution(struct State *pst); // called from ruby or watchdog thread
 void v8_single_threaded_enter(struct State *pst, struct Context *c, void (*f)(struct Context *c));
 void v8_single_threaded_dispose(struct State *pst);
+uint32_t v8_cached_data_version_tag(void); // safe to call after v8_global_init
 
 #ifdef __cplusplus
 }

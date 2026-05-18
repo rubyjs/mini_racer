@@ -129,6 +129,91 @@ context.eval("bar()", filename: "a/bar.js")
 # …
 ```
 
+### Bytecode cache for repeated script evaluation
+
+`Context#compile` returns a `MiniRacer::Script` handle you can run multiple times,
+and exposes V8's bytecode cache so subsequent Contexts can skip the parse step.
+
+In a single process — e.g. warming a `Context` pool from one canonical compile:
+
+```ruby
+# Warm the cache once — top-level compile, opt in with produce_cache: true.
+warm    = MiniRacer::Context.new
+warmed  = warm.compile(File.read("bundle.js"),
+                       filename:      "bundle.js",
+                       produce_cache: true)
+warmed.run
+blob = warmed.cached_data   # ASCII-8BIT String, hold onto it in memory
+
+# Subsequent Contexts (e.g. a per-request pool) consume the blob and skip parsing.
+ctx    = MiniRacer::Context.new
+script = ctx.compile(File.read("bundle.js"),
+                     filename:    "bundle.js",
+                     cached_data: blob)
+# script.cache_rejected? is false when V8 accepted the blob.
+script.run
+```
+
+Across processes (e.g. persisting blobs to disk), the consumer must boot from
+**byte-identical snapshot data** — two separate `Snapshot.new(src)` calls produce
+different blobs even for the same `src`, and V8 will then reject every cached
+blob. Use `Snapshot#dump` / `Snapshot.load` to share canonical bytes:
+
+```ruby
+# Build the snapshot once, persist its bytes.
+snap_bytes = MiniRacer::Snapshot.new(snapshot_src).dump
+File.binwrite("snapshot.bin", snap_bytes)
+
+# Every process loads the same bytes.
+snap = MiniRacer::Snapshot.load(File.binread("snapshot.bin"))
+ctx  = MiniRacer::Context.new(snapshot: snap)
+script = ctx.compile(File.read("bundle.js"),
+                     filename:    "bundle.js",
+                     cached_data: File.binread("bundle.js.cache"))
+script.run
+```
+
+`produce_cache` defaults to `false`; pass `true` to ask V8 for the cache blob.
+When the supplied `cached_data` is accepted, `script.cached_data` returns `nil` so
+callers can skip a redundant copy. When V8 produces a fresh blob (initial compile
+with `produce_cache: true`, or a rejection while `produce_cache: true` was also
+set), it returns the new bytes.
+
+`MiniRacer::V8_CACHED_DATA_VERSION_TAG` exposes V8's
+`ScriptCompiler::CachedDataVersionTag()` — mix it into your cache key alongside
+the source hash so a libv8-node version bump invalidates stale blobs automatically.
+The constant is populated on first `Context.new` (after `Platform.set_flags!`),
+so read it after constructing at least one Context.
+
+```ruby
+key = "#{Digest::SHA256.hexdigest(source)}-#{MiniRacer::V8_CACHED_DATA_VERSION_TAG}"
+```
+
+Notes:
+
+- A `Script` is bound to the `Context` that compiled it; reusing it on another
+  Context isn't supported.
+- `Script#dispose` frees the underlying V8 handle eagerly. The Ruby GC finalizer
+  does not (taking the V8 lock from a finalizer thread risks deadlock), so
+  long-lived Contexts with many short-lived scripts accumulate handles until
+  `Context#dispose` clears them.
+- `produce_cache: true` is only safe at the top level. From inside a host-fn
+  callback (i.e., re-entrant compile while a JS → Ruby → JS frame is on the
+  stack) it raises `MiniRacer::RuntimeError`, because V8's `CreateCodeCache`
+  walks live isolate state and corrupts the parser when re-entered. Warm the
+  cache from the top level once and pass it back via `cached_data:` from your
+  callbacks.
+- Cross-process reuse is **incompatible with `MiniRacer::Platform.set_flags!(:single_threaded)`**.
+  V8's single-threaded mode embeds process-local state in the cache blob, so
+  every cached_data is rejected when consumed in a fresh process. Same-process
+  reuse still works under `:single_threaded`. If you need both cross-process
+  reuse and `:single_threaded` (e.g. for fork-safety reasons), disable
+  `:single_threaded` for the path that produces / consumes the cache.
+- On TruffleRuby, `Script` is implemented as source replay (GraalJS has no
+  equivalent per-script bytecode cache reachable from `Polyglot::InnerContext`),
+  so `cached_data` and `produce_cache` are silently ignored and `cached_data`
+  always returns `nil`, and `MiniRacer::V8_CACHED_DATA_VERSION_TAG` is `0`.
+
 ### Fork Safety
 
 Some Ruby web servers employ forking (for example unicorn or puma in clustered mode). V8 is not fork safe by default and sadly Ruby does not have support for fork notifications per [#5446](https://bugs.ruby-lang.org/issues/5446).

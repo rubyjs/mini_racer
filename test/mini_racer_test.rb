@@ -1275,4 +1275,183 @@ class MiniRacerTest < Minitest::Test
     assert e
     assert_equal(e.message.encoding.to_s, "UTF-8")
   end
+
+  def test_v8_cached_data_version_tag
+    # Triggers v8_once_init which is when the constant is populated.
+    MiniRacer::Context.new
+
+    assert_kind_of Integer, MiniRacer::V8_CACHED_DATA_VERSION_TAG
+    if RUBY_ENGINE == "truffleruby"
+      assert_equal 0, MiniRacer::V8_CACHED_DATA_VERSION_TAG
+    else
+      refute_equal 0, MiniRacer::V8_CACHED_DATA_VERSION_TAG
+    end
+    # Stable across calls.
+    assert_equal MiniRacer::V8_CACHED_DATA_VERSION_TAG, MiniRacer::V8_CACHED_DATA_VERSION_TAG
+  end
+
+  def test_compile_run_roundtrip
+    ctx = MiniRacer::Context.new
+    script = ctx.compile("1 + 2 + 3")
+    assert_kind_of MiniRacer::Script, script
+    assert_equal 6, script.run
+    assert_equal 6, script.run # idempotent
+  end
+
+  def test_compile_filename_in_parse_error
+    err = assert_raises(MiniRacer::ParseError) do
+      MiniRacer::Context.new.compile("function foo(", filename: "bundle.js")
+    end
+    assert_includes err.message, "bundle.js"
+  end
+
+  def test_compile_invalid_source
+    assert_raises(MiniRacer::ParseError) do
+      MiniRacer::Context.new.compile("foo bar baz garbage")
+    end
+  end
+
+  def test_compile_runtime_error
+    ctx = MiniRacer::Context.new
+    script = ctx.compile("throw new Error('boom')")
+    err = assert_raises(MiniRacer::RuntimeError) do
+      script.run
+    end
+    assert_includes err.message, "boom"
+  end
+
+  def test_compile_cached_data_save_restore
+    skip "TruffleRuby has no equivalent caching API" if RUBY_ENGINE == "truffleruby"
+
+    src = "function sq(x) { return x * x } sq(7)"
+    ctx_a = MiniRacer::Context.new
+    s_a = ctx_a.compile(src, filename: "sq.js", produce_cache: true)
+    blob = s_a.cached_data
+    assert_kind_of String, blob
+    assert_equal Encoding::ASCII_8BIT, blob.encoding
+    assert_operator blob.bytesize, :>, 0
+    refute_predicate s_a, :cache_rejected?
+    assert_equal 49, s_a.run
+    ctx_a.dispose
+
+    ctx_b = MiniRacer::Context.new
+    s_b = ctx_b.compile(src, filename: "sq.js", cached_data: blob)
+    refute_predicate s_b, :cache_rejected?
+    assert_nil s_b.cached_data, "accepted blob → nil so caller skips redundant persist"
+    assert_equal 49, s_b.run
+  end
+
+  def test_compile_cached_data_rejection
+    skip "TruffleRuby has no equivalent caching API" if RUBY_ENGINE == "truffleruby"
+
+    src = "function sq(x) { return x * x } sq(7)"
+    corrupt = ("garbage" * 100).b
+    ctx = MiniRacer::Context.new
+    script = ctx.compile(src, cached_data: corrupt, produce_cache: true)
+    assert_predicate script, :cache_rejected?
+    fresh = script.cached_data
+    assert_kind_of String, fresh
+    assert_operator fresh.bytesize, :>, 0
+    assert_equal 49, script.run
+  end
+
+  def test_compile_default_skips_cache_production
+    skip "TruffleRuby has no equivalent caching API" if RUBY_ENGINE == "truffleruby"
+
+    ctx = MiniRacer::Context.new
+    script = ctx.compile("1 + 1", filename: "no_cache.js")
+    assert_nil script.cached_data
+    refute_predicate script, :cache_rejected?
+    assert_equal 2, script.run
+  end
+
+  def test_compile_produce_cache_inside_host_fn_raises
+    skip "TruffleRuby has no equivalent caching API" if RUBY_ENGINE == "truffleruby"
+
+    ctx = MiniRacer::Context.new
+    caught = nil
+    ctx.attach("trigger", lambda {
+      begin
+        ctx.compile("var v = 1; v", filename: "inside.js", produce_cache: true)
+      rescue MiniRacer::RuntimeError => e
+        caught = e
+      end
+      nil
+    })
+    ctx.eval("trigger()")
+    refute_nil caught, "produce_cache: true from a host-fn callback should raise"
+    assert_includes caught.message, "host-function callback"
+  end
+
+  def test_compile_inside_host_fn_default_is_safe
+    skip "TruffleRuby has no equivalent caching API" if RUBY_ENGINE == "truffleruby"
+
+    # Without produce_cache, repeated re-entrant compiles must not crash —
+    # this is the path Discourse-style embedders take from their inline-script
+    # host fns. cached_data stays nil because we skip CreateCodeCache in
+    # callback frames; the user can warm the cache via top-level compile
+    # calls with produce_cache: true at startup instead.
+    ctx = MiniRacer::Context.new
+    ctx.attach("run_inline", lambda {|label, body|
+      script = ctx.compile(body, filename: label)
+      script.run
+      script.dispose
+      nil
+    })
+    3.times do |i|
+      ctx.eval("run_inline('inline://#{i}.js', 'var x = #{i}; x + 1;')")
+    end
+  end
+
+  def test_compile_cached_data_must_be_binary
+    ctx = MiniRacer::Context.new
+    assert_raises(EncodingError) do
+      ctx.compile("1+1", cached_data: "not binary".encode("UTF-8"))
+    end
+  end
+
+  def test_compile_cached_data_type_error
+    ctx = MiniRacer::Context.new
+    assert_raises(TypeError) do
+      ctx.compile("1+1", cached_data: 42)
+    end
+  end
+
+  def test_script_dispose_idempotent
+    ctx = MiniRacer::Context.new
+    script = ctx.compile("1 + 1")
+    assert_equal 2, script.run
+    refute_predicate script, :disposed?
+    script.dispose
+    assert_predicate script, :disposed?
+    assert_nil script.dispose
+    assert_raises(MiniRacer::RuntimeError) { script.run }
+  end
+
+  def test_script_after_context_dispose
+    ctx = MiniRacer::Context.new
+    script = ctx.compile("1 + 1", produce_cache: true)
+    ctx.dispose
+    assert_raises(MiniRacer::ContextDisposedError) { script.run }
+    # cached_data is still readable — it was stashed at compile time
+    refute_nil script.cached_data unless RUBY_ENGINE == "truffleruby"
+    # dispose on script after context dispose is a no-op
+    assert_nil script.dispose
+  end
+
+  def test_script_new_direct_raises
+    assert_raises(StandardError) { MiniRacer::Script.new }
+  end
+
+  def test_compile_then_eval_interleave
+    # Compile mutates the context's globals just like eval, and survives
+    # interleaved evals.
+    ctx = MiniRacer::Context.new
+    s1 = ctx.compile("var counter = 10; counter")
+    assert_equal 10, s1.run
+    ctx.eval("counter += 5")
+    s2 = ctx.compile("counter * 2")
+    assert_equal 30, s2.run
+    assert_equal 31, ctx.eval("counter + 16")
+  end
 end
