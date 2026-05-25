@@ -1,3 +1,8 @@
+- 0.21.1 - 25-05-2026
+  - Run `:single_threaded` V8 dispatches on a reusable mini_racer-owned native thread so V8 does not execute on Ruby-owned threads
+  - Stop and join the reusable `:single_threaded` runner when contexts are disposed
+  - Document `:single_threaded` fork-safety requirements for pre-fork contexts
+
 - 0.21.0 - 16-04-2026
   - Add MiniRacer::Binary for returning Uint8Array to JavaScript from attached Ruby callbacks
 

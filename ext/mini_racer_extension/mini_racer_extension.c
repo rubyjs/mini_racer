@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <unistd.h>
 #include <math.h>
 
 #if defined(__linux__) && !defined(__GLIBC__)
@@ -136,6 +137,9 @@ typedef struct Context
     VALUE exception;   // pending exception or Qnil
     Buf req, res;      // ruby->v8 request/response, mediated by |mtx| and |cv|
     Buf snapshot;
+    pthread_t single_threaded_thr;
+    pid_t single_threaded_pid;
+    int single_threaded_thr_started;
     // |rr_mtx| stands for "recursive ruby mutex"; it's used to exclude
     // other ruby threads but allow reentrancy from the same ruby thread
     // (think ruby->js->ruby->js calls)
@@ -868,18 +872,10 @@ void v8_dispatch(Context *c)
 // only called when inside v8_call, v8_eval, or v8_pump_message_loop
 void v8_roundtrip(Context *c, const uint8_t **p, size_t *n)
 {
-    struct rendezvous_nogvl *args;
-
     buf_reset(&c->req);
-    if (single_threaded) {
-        assert(*c->res.buf == 'c'); // js -> ruby callback
-        args = &(struct rendezvous_nogvl){c, &c->req, &c->res};
-        rb_thread_call_with_gvl(rendezvous_callback, args);
-    } else {
-        pthread_cond_signal(&c->cv);
-        while (!c->req.len)
-            pthread_cond_wait(&c->cv, &c->mtx);
-    }
+    pthread_cond_signal(&c->cv);
+    while (!c->req.len)
+        pthread_cond_wait(&c->cv, &c->mtx);
     buf_reset(&c->res);
     *p = c->req.buf;
     *n = c->req.len;
@@ -991,10 +987,45 @@ fail:
     goto out;
 }
 
+static void *single_threaded_runner(void *arg)
+{
+    Context *c;
+
+    c = arg;
+    pthread_mutex_lock(&c->mtx);
+    for (;;) {
+        while (!c->req.len && atomic_load(&c->quit) < 1)
+            pthread_cond_wait(&c->cv, &c->mtx);
+        if (atomic_load(&c->quit) >= 1)
+            break;
+        v8_single_threaded_enter(c->pst, c, dispatch);
+        pthread_cond_signal(&c->cv);
+    }
+    pthread_mutex_unlock(&c->mtx);
+    return NULL;
+}
+
+static int single_threaded_runner_start(Context *c)
+{
+    pid_t pid;
+    int r;
+
+    pid = getpid();
+    if (c->single_threaded_thr_started && c->single_threaded_pid == pid)
+        return 0;
+    c->single_threaded_thr_started = 0;
+    c->single_threaded_pid = pid;
+    r = pthread_create(&c->single_threaded_thr, NULL, single_threaded_runner, c);
+    if (!r)
+        c->single_threaded_thr_started = 1;
+    return r;
+}
+
 static inline void *rendezvous_nogvl(void *arg)
 {
     struct rendezvous_nogvl *a;
     Context *c;
+    int r;
 
     a = arg;
     c = a->context;
@@ -1010,7 +1041,16 @@ next:
     assert(c->res.len == 0);
     buf_move(a->req, &c->req); // v8 thread takes ownership of req
     if (single_threaded) {
-        v8_single_threaded_enter(c->pst, c, dispatch);
+        r = single_threaded_runner_start(c);
+        if (r) {
+            buf_move(&c->req, a->req);
+            pthread_mutex_unlock(&c->mtx);
+            c->depth--;
+            pthread_mutex_unlock(&c->rr_mtx);
+            return (void *)(intptr_t)r;
+        }
+        pthread_cond_signal(&c->cv);
+        do pthread_cond_wait(&c->cv, &c->mtx); while (!c->res.len);
     } else {
         pthread_cond_signal(&c->cv);
         do pthread_cond_wait(&c->cv, &c->mtx); while (!c->res.len);
@@ -1019,6 +1059,7 @@ next:
     pthread_mutex_unlock(&c->mtx);
     if (*a->res->buf == 'c') { // js -> ruby callback?
         rb_thread_call_with_gvl(rendezvous_callback, a);
+        buf_reset(a->res);
         goto next;
     }
     c->depth--;
@@ -1028,12 +1069,16 @@ next:
 
 static void rendezvous_no_des(Context *c, Buf *req, Buf *res)
 {
+    void *r;
+
     if (atomic_load(&c->quit)) {
         buf_reset(req);
         rb_raise(context_disposed_error, "disposed context");
     }
-    rb_nogvl(rendezvous_nogvl, &(struct rendezvous_nogvl){c, req, res},
-             NULL, NULL, 0);
+    r = rb_nogvl(rendezvous_nogvl, &(struct rendezvous_nogvl){c, req, res},
+                 NULL, NULL, 0);
+    if (r)
+        rb_raise(runtime_error, "pthread_create: %s", strerror((int)(intptr_t)r));
 }
 
 // send request to & receive reply from v8 thread; takes ownership of |req|
@@ -1190,7 +1235,16 @@ static void *context_free_thread_do(void *arg)
     Context *c;
 
     c = arg;
-    v8_single_threaded_dispose(c->pst);
+    if (single_threaded && c->single_threaded_thr_started && c->single_threaded_pid == getpid()) {
+        pthread_mutex_lock(&c->mtx);
+        atomic_store(&c->quit, 2);
+        pthread_cond_signal(&c->cv);
+        pthread_mutex_unlock(&c->mtx);
+        pthread_join(c->single_threaded_thr, NULL);
+    }
+    if (c->pst)
+        v8_single_threaded_dispose(c->pst);
+    pthread_mutex_lock(&c->mtx);
     context_destroy(c);
     return NULL;
 }
@@ -1284,8 +1338,18 @@ static void *context_dispose_do(void *arg)
 
     c = arg;
     if (single_threaded) {
+        pthread_mutex_lock(&c->mtx);
+        while (c->req.len || c->res.len)
+            pthread_cond_wait(&c->cv, &c->mtx);
         atomic_store(&c->quit, 1);   // disposed
-        // intentionally a no-op for now
+        if (c->single_threaded_thr_started && c->single_threaded_pid == getpid()) {
+            pthread_cond_signal(&c->cv);
+            pthread_mutex_unlock(&c->mtx);
+            pthread_join(c->single_threaded_thr, NULL);
+            pthread_mutex_lock(&c->mtx);
+            c->single_threaded_thr_started = 0;
+        }
+        pthread_mutex_unlock(&c->mtx);
     } else {
         pthread_mutex_lock(&c->mtx);
         while (c->req.len || c->res.len)

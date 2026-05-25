@@ -139,6 +139,15 @@ Since 0.6.1 mini_racer does support V8 single threaded platform mode which shoul
 MiniRacer::Platform.set_flags!(:single_threaded)
 ```
 
+When using pre-fork `MiniRacer::Context` objects in `:single_threaded` mode,
+ensure the process only forks while MiniRacer is quiescent: no thread may be
+evaluating JavaScript, calling into a context, disposing/freeing a context,
+running a Ruby callback from JavaScript, or otherwise using MiniRacer at the
+instant of `fork`. In multi-threaded applications, guard all MiniRacer context
+operations and the `fork` itself with the same application-level lock. Forking
+while a MiniRacer operation is in progress can leave inherited pthread mutexes
+in an unusable state in the child process.
+
 If you want to ensure your application does not leak memory after fork either:
 
 1. Ensure no `MiniRacer::Context` objects are created in the master process; or

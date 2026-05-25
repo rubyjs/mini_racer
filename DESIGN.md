@@ -54,9 +54,11 @@ they are almost universally:
 deliberate changes & known bugs
 ===============================
 
-- `MiniRacer::Platform.set_flags! :single_threaded` still runs everything on
-  the same thread but is prone to crashes in Ruby < 3.4.0 due to a Ruby runtime
-  bug that clobbers thread-local variables.
+- `MiniRacer::Platform.set_flags! :single_threaded` runs V8 dispatches on a
+  reusable mini_racer-owned native thread. Pre-fork contexts may be used in the
+  child only if the process forks while MiniRacer is quiescent; applications that
+  fork from a multi-threaded process should guard all MiniRacer context
+  operations and `fork` with the same lock.
 
 - The `Isolate` class is gone. Maintaining a one-to-many relationship between
   isolates and contexts in a multi-threaded environment had a bad cost/benefit
