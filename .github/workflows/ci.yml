@@ -64,6 +64,7 @@ jobs:
 
     name: ${{ matrix.os }} - ${{ matrix.ruby }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v4
@@ -104,6 +105,7 @@ jobs:
 
     name: linux-${{ matrix.runner }} - ruby-${{ matrix.ruby }} - ${{ matrix.libc }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
 
     steps:
       - name: Start container
