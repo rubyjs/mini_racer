@@ -810,6 +810,7 @@ static void dispatch1(Context *c, const uint8_t *p, size_t n)
     case 'C': return v8_timedwait(c, p+1, n-1, v8_call);
     case 'E': return v8_timedwait(c, p+1, n-1, v8_eval);
     case 'H': return v8_heap_snapshot(c->pst);
+    case 'M': return v8_perform_microtask_checkpoint(c->pst);
     case 'P': return v8_pump_message_loop(c->pst);
     case 'S': return v8_heap_stats(c->pst);
     case 'T': return v8_snapshot(c->pst, p+1, n-1);
@@ -1469,6 +1470,17 @@ static VALUE context_heap_snapshot(VALUE self)
     return rb_utf8_str_new((char *)res.buf, res.len);
 }
 
+static VALUE context_perform_microtask_checkpoint(VALUE self)
+{
+    Context *c;
+    Buf b;
+
+    TypedData_Get_Struct(self, Context, &context_type, c);
+    buf_init(&b);
+    buf_putc(&b, 'M');        // (M)icrotask checkpoint, returns nil
+    return rendezvous(c, &b); // takes ownership of |b|
+}
+
 static VALUE context_pump_message_loop(VALUE self)
 {
     Context *c;
@@ -1824,6 +1836,7 @@ void Init_mini_racer_extension(void)
     rb_define_method(c, "eval", context_eval, -1);
     rb_define_method(c, "heap_stats", context_heap_stats, 0);
     rb_define_method(c, "heap_snapshot", context_heap_snapshot, 0);
+    rb_define_method(c, "perform_microtask_checkpoint", context_perform_microtask_checkpoint, 0);
     rb_define_method(c, "pump_message_loop", context_pump_message_loop, 0);
     rb_define_method(c, "low_memory_notification", context_low_memory_notification, 0);
     rb_define_alloc_func(c, context_alloc);

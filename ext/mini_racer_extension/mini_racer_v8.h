@@ -42,6 +42,7 @@ void v8_call(struct State *pst, const uint8_t *p, size_t n);
 void v8_eval(struct State *pst, const uint8_t *p, size_t n);
 void v8_heap_stats(struct State *pst);
 void v8_heap_snapshot(struct State *pst);
+void v8_perform_microtask_checkpoint(struct State *pst);
 void v8_pump_message_loop(struct State *pst);
 void v8_snapshot(struct State *pst, const uint8_t *p, size_t n);
 void v8_warmup(struct State *pst, const uint8_t *p, size_t n);

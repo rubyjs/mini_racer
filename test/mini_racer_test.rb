@@ -986,6 +986,28 @@ class MiniRacerTest < Minitest::Test
     assert_equal(v, 99)
   end
 
+  def test_perform_microtask_checkpoint_returns_nil
+    context = MiniRacer::Context.new
+    assert_nil(context.perform_microtask_checkpoint)
+  end
+
+  def test_perform_microtask_checkpoint_drains_from_callback
+    context = MiniRacer::Context.new
+    seen    = []
+
+    context.attach('note',  ->(s) { seen << s })
+    context.attach('drain', -> { context.perform_microtask_checkpoint })
+
+    context.eval <<~JS
+      Promise.resolve().then(() => note('microtask-fired'));
+      note('before-drain');
+      drain();
+      note('after-drain');
+    JS
+
+    assert_equal(%w[before-drain microtask-fired after-drain], seen)
+  end
+
   def test_webassembly
     if RUBY_ENGINE == "truffleruby"
       skip "TruffleRuby does not enable WebAssembly by default"
