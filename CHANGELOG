@@ -1,3 +1,6 @@
+- (Unreleased)
+  - Add `Context#perform_microtask_checkpoint` to synchronously drain the V8 microtask queue, useful for spec-compliant `dispatchEvent` sequencing inside Ruby callbacks
+
 - 0.21.1 - 25-05-2026
   - Run `:single_threaded` V8 dispatches on a reusable mini_racer-owned native thread so V8 does not execute on Ruby-owned threads
   - Stop and join the reusable `:single_threaded` runner when contexts are disposed

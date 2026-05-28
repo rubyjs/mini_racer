@@ -662,6 +662,18 @@ extern "C" void v8_heap_snapshot(State *pst)
     v8_reply(st.ruby_context, os.buf.data(), os.buf.size()); // not serialized because big
 }
 
+extern "C" void v8_perform_microtask_checkpoint(State *pst)
+{
+    // Leave any termination active so the enclosing v8_call/v8_eval frame
+    // surfaces OOM (set by v8_gc_callback) or watchdog termination to Ruby.
+    State& st = *pst;
+    v8::TryCatch try_catch(st.isolate);
+    try_catch.SetVerbose(st.verbose_exceptions);
+    v8::HandleScope handle_scope(st.isolate);
+    v8::MicrotasksScope::PerformCheckpoint(st.isolate);
+    reply_retry(st, v8::Undefined(st.isolate));
+}
+
 extern "C" void v8_pump_message_loop(State *pst)
 {
     State& st = *pst;
