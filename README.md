@@ -348,6 +348,38 @@ Performance is slightly better than running `context.eval("hello('George')")` si
 * compilation of eval'd string is avoided
 * function arguments don't need to be converted to JSON
 
+### Microtask checkpoints
+
+V8 drains its microtask queue (e.g. callbacks queued via `Promise.resolve().then(...)`) automatically when script execution returns to the embedder, so most code "just works":
+
+```ruby
+context = MiniRacer::Context.new
+context.eval(<<~JS)
+  let x = 0;
+  Promise.resolve().then(() => x = 99);
+JS
+context.eval("x")
+# => 99
+```
+
+When JavaScript invokes a Ruby callback synchronously and you need queued microtasks to drain mid-execution — e.g. for spec-compliant ordering across a chain of synchronous `dispatchEvent` listeners — call `context.perform_microtask_checkpoint` from the callback:
+
+```ruby
+context = MiniRacer::Context.new
+context.attach("drain", -> { context.perform_microtask_checkpoint })
+context.eval(<<~JS)
+  globalThis.log = [];
+  Promise.resolve().then(() => log.push("microtask"));
+  log.push("before");
+  drain();
+  log.push("after");
+JS
+context.eval("log")
+# => ["before", "microtask", "after"]
+```
+
+Without `drain()` the order would be `["before", "after", "microtask"]` because the microtask only runs once the outermost script returns. `perform_microtask_checkpoint` is a thin wrapper over V8's `MicrotasksScope::PerformCheckpoint`.
+
 ## Performance
 
 The `bench` folder contains benchmark.
