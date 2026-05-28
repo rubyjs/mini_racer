@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v4
         with:
           persist-credentials: false
-      - uses: ruby/setup-ruby@97ecb7b512899eb71ab1bf2310a624c6f1589ac6 # v1
+      - uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # v1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
@@ -64,12 +64,13 @@ jobs:
 
     name: ${{ matrix.os }} - ${{ matrix.ruby }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v4
         with:
           persist-credentials: false
-      - uses: ruby/setup-ruby@97ecb7b512899eb71ab1bf2310a624c6f1589ac6 # v1
+      - uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # v1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
@@ -104,6 +105,7 @@ jobs:
 
     name: linux-${{ matrix.runner }} - ruby-${{ matrix.ruby }} - ${{ matrix.libc }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
 
     steps:
       - name: Start container
