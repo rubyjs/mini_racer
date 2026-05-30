@@ -388,4 +388,40 @@ module MiniRacer
       self
     end
   end
+
+  # GraalJS has its own module-loading mechanism that doesn't map onto the
+  # handle-based MiniRacer::Module API; surface a clear error rather than
+  # a NoMethodError so callers know to gate the feature behind an engine
+  # check. The Module class itself is stubbed so cross-engine code can
+  # still reference MiniRacer::Module for is_a? / rescue clauses without
+  # tripping NameError.
+  class Context
+    def compile_module(*_args, **_opts)
+      raise NotImplementedError,
+            'Context#compile_module is not supported on TruffleRuby'
+    end
+
+    # nil is the documented "disable" value; accept it as a no-op so that
+    # `ctx.dynamic_import_resolver ||= ...` style code doesn't crash on
+    # TruffleRuby. Any callable raises, mirroring `compile_module`.
+    def dynamic_import_resolver=(blk)
+      return blk if blk.nil?
+      raise NotImplementedError,
+            'Context#dynamic_import_resolver= is not supported on TruffleRuby'
+    end
+
+    def dynamic_import_resolver = nil
+  end
+
+  class Module
+    UNSUPPORTED = 'MiniRacer::Module is not supported on TruffleRuby'
+
+    def initialize(*)         = raise(NotImplementedError, UNSUPPORTED)
+    def instantiate(*, &_blk) = raise(NotImplementedError, UNSUPPORTED)
+    def evaluate              = raise(NotImplementedError, UNSUPPORTED)
+    def namespace             = raise(NotImplementedError, UNSUPPORTED)
+    def status                = raise(NotImplementedError, UNSUPPORTED)
+    def dispose               = raise(NotImplementedError, UNSUPPORTED)
+    def disposed?             = raise(NotImplementedError, UNSUPPORTED)
+  end
 end

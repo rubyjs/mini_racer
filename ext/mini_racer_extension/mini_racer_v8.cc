@@ -3,6 +3,8 @@
 #include "libplatform/libplatform.h"
 #include "mini_racer_v8.h"
 #include <memory>
+#include <string>
+#include <unordered_map>
 #include <vector>
 #include <cassert>
 #include <cstdio>
@@ -67,6 +69,18 @@ struct Callback
     int32_t id;
 };
 
+// V8 doesn't expose ScriptOrigin's filename back from a v8::Module
+// (UnboundModuleScript only exposes the //# sourceURL magic comment),
+// so we cache the filename here at compile time. Used to populate the
+// referrer URL passed to the Ruby resolver block and `import.meta.url`.
+// v8::Global (not Persistent) so ~ModuleEntry releases the V8 handle
+// eagerly — Persistent's default traits skip Reset() in the destructor.
+struct ModuleEntry
+{
+    v8::Global<v8::Module> handle;
+    std::string filename;
+};
+
 // NOTE: do *not* use thread_locals to store state. In single-threaded
 // mode, V8 runs on the same thread as Ruby and the Ruby runtime clobbers
 // thread-locals when it context-switches threads. Ruby 3.4.0 has a new
@@ -92,6 +106,10 @@ struct State
     int err_reason;
     bool verbose_exceptions;
     std::vector<Callback*> callbacks;
+    // Cleared in ~State() under the still-live isolate so each
+    // ModuleEntry's v8::Global can Reset() before isolate->Dispose().
+    std::unordered_map<int32_t, std::unique_ptr<ModuleEntry>> modules;
+    int32_t next_module_id;
     std::unique_ptr<v8::ArrayBuffer::Allocator> allocator;
     inline ~State();
 };
@@ -314,6 +332,179 @@ void v8_gc_callback(v8::Isolate*, v8::GCType, v8::GCCallbackFlags, void *data)
     }
 }
 
+// Linear scan of st.modules to map a Local<Module> back to the filename
+// captured at compile time. Returns empty string if the module isn't ours
+// (shouldn't happen — all live modules come from v8_compile_module).
+static const std::string& module_filename(State& st, v8::Local<v8::Module> mod)
+{
+    static const std::string empty;
+    for (auto& kv : st.modules) {
+        auto stored = v8::Local<v8::Module>::New(st.isolate, kv.second->handle);
+        if (stored == mod) return kv.second->filename;
+    }
+    return empty;
+}
+
+// V8 calls this for every JS `import(...)` expression. We rendezvous to
+// Ruby (marker 'd'), expect a fully-instantiated MiniRacer::Module back,
+// evaluate it if still pending, then resolve the returned Promise with
+// its namespace. The contract requires the embedder to handle compile +
+// instantiate + evaluate; Ruby's resolver is responsible for the first
+// two, and we run Evaluate here so callers don't have to.
+static v8::MaybeLocal<v8::Promise> host_import_module_dynamically_callback(
+    v8::Local<v8::Context> context,
+    v8::Local<v8::Data> /*host_defined_options*/,
+    v8::Local<v8::Value> resource_name,
+    v8::Local<v8::String> specifier,
+    v8::Local<v8::FixedArray> /*import_attributes*/)
+{
+    auto isolate = context->GetIsolate();
+    State *pst = static_cast<State*>(isolate->GetData(0));
+    State& st = *pst;
+    v8::EscapableHandleScope handle_scope(isolate);
+
+    v8::Local<v8::Promise::Resolver> resolver;
+    if (!v8::Promise::Resolver::New(context).ToLocal(&resolver))
+        return v8::MaybeLocal<v8::Promise>();
+
+    // Single-exit helpers so every error path is one line.
+    auto escape = [&] { return handle_scope.Escape(resolver->GetPromise()); };
+    auto reject_with_value = [&](v8::Local<v8::Value> reason) {
+        (void)resolver->Reject(context, reason);
+        return escape();
+    };
+    // NewFromUtf8Literal returns a Local directly (no allocation Maybe),
+    // so error messages are safe under isolate OOM where NewFromUtf8 +
+    // ToLocalChecked would CHECK-fail.
+    auto reject_with_literal = [&](v8::Local<v8::String> msg) {
+        return reject_with_value(v8::Exception::Error(msg));
+    };
+
+    v8::Local<v8::Array> request;
+    {
+        v8::Context::Scope context_scope(st.safe_context);
+        request = v8::Array::New(st.isolate, 2);
+    }
+    request->Set(context, 0, specifier).Check();
+    // resource_name is the referrer's filename for module-initiated imports,
+    // or the script filename for eval-initiated ones. May be Undefined for
+    // ad-hoc compilations; coerce to empty string in that case.
+    v8::Local<v8::Value> ref = resource_name->IsString()
+        ? resource_name
+        : v8::Local<v8::Value>::Cast(v8::String::Empty(st.isolate));
+    request->Set(context, 1, ref).Check();
+
+    {
+        Serialized serialized(st, request);
+        if (!serialized.data)
+            return reject_with_literal(v8::String::NewFromUtf8Literal(isolate,
+                "could not serialize dynamic import request"));
+        uint8_t marker = 'd';
+        v8_reply(st.ruby_context, &marker, 1);
+        v8_reply(st.ruby_context, serialized.data, serialized.size);
+    }
+
+    const uint8_t *p;
+    size_t n;
+    for (;;) {
+        v8_roundtrip(st.ruby_context, &p, &n);
+        if (*p == 'd') break;
+        if (*p == 'e') {
+            v8::Local<v8::String> message;
+            auto type = v8::NewStringType::kNormal;
+            if (!v8::String::NewFromOneByte(st.isolate, p+1, type, n-1).ToLocal(&message))
+                message = v8::String::NewFromUtf8Literal(st.isolate, "Ruby exception");
+            return reject_with_literal(message);
+        }
+        v8_dispatch(st.ruby_context);
+    }
+
+    v8::ValueDeserializer des(st.isolate, p+1, n-1);
+    des.ReadHeader(st.context).Check();
+    v8::Local<v8::Value> id_v;
+    int32_t id;
+    if (!des.ReadValue(st.context).ToLocal(&id_v) ||
+        !id_v->Int32Value(st.context).To(&id))
+        return reject_with_literal(v8::String::NewFromUtf8Literal(isolate,
+            "dynamic import reply could not be decoded"));
+    auto it = st.modules.find(id);
+    if (it == st.modules.end())
+        return reject_with_literal(v8::String::NewFromUtf8Literal(isolate,
+            "dynamic import resolver returned a handle unknown to this Context"));
+    auto module = v8::Local<v8::Module>::New(st.isolate, it->second->handle);
+
+    auto status = module->GetStatus();
+    // The Ruby resolver must hand back a Module that's at least instantiated;
+    // auto-instantiating here is impossible because there's no per-call
+    // resolver block to recurse through.
+    if (status < v8::Module::kInstantiated)
+        return reject_with_literal(v8::String::NewFromUtf8Literal(isolate,
+            "dynamic import resolver returned an uninstantiated Module"));
+    if (status == v8::Module::kErrored)
+        return reject_with_value(module->GetException());
+    // kEvaluating means re-entry during cyclic dynamic import: V8 would
+    // give us a TDZ-laden namespace whose bindings throw ReferenceError.
+    // Spec-correct handling is to settle after the in-flight Evaluate
+    // completes, which requires TLA support; reject explicitly for now.
+    if (status == v8::Module::kEvaluating)
+        return reject_with_literal(v8::String::NewFromUtf8Literal(isolate,
+            "dynamic import target is mid-evaluation (cyclic dynamic import)"));
+    if (status == v8::Module::kInstantiated) {
+        v8::TryCatch try_catch(st.isolate);
+        try_catch.SetVerbose(st.verbose_exceptions);
+        v8::Local<v8::Value> eval_result;
+        if (!module->Evaluate(context).ToLocal(&eval_result)) {
+            // Termination set the empty MaybeLocal without throwing — let
+            // the surrounding eval frame surface it instead of swallowing.
+            if (isolate->IsExecutionTerminating())
+                return v8::MaybeLocal<v8::Promise>();
+            return reject_with_value(try_catch.HasCaught()
+                ? try_catch.Exception()
+                : v8::Local<v8::Value>::Cast(v8::Undefined(isolate)));
+        }
+        // Drain so synchronously-scheduled microtasks (e.g. the dep body's
+        // own Promise.resolve().then) settle before we inspect promise state;
+        // matches v8_evaluate_module.
+        isolate->PerformMicrotaskCheckpoint();
+        if (eval_result->IsPromise()) {
+            auto promise = eval_result.As<v8::Promise>();
+            if (promise->State() == v8::Promise::kRejected)
+                return reject_with_value(promise->Result());
+            if (promise->State() == v8::Promise::kPending)
+                return reject_with_literal(v8::String::NewFromUtf8Literal(isolate,
+                    "dynamic import target has top-level await (not supported)"));
+        }
+    }
+
+    (void)resolver->Resolve(context, module->GetModuleNamespace());
+    return escape();
+}
+
+// V8 calls this the first time JS reads `import.meta` for a module.
+// Populate the `url` property with the filename passed to compile_module
+// — needed for relative resolution helpers like `new URL(spec, import.meta.url)`.
+static void init_import_meta_object(v8::Local<v8::Context> context,
+                                    v8::Local<v8::Module> module,
+                                    v8::Local<v8::Object> meta)
+{
+    auto isolate = context->GetIsolate();
+    State *pst = static_cast<State*>(isolate->GetData(0));
+    const std::string& filename = module_filename(*pst, module);
+    // Pass the byte length explicitly: filenames may contain embedded NULs,
+    // and NewFromUtf8 without a length argument truncates at the first NUL.
+    v8::Local<v8::String> name;
+    auto type = v8::NewStringType::kNormal;
+    if (!v8::String::NewFromUtf8(isolate, filename.data(), type,
+                                 static_cast<int>(filename.size())).ToLocal(&name))
+        return;
+    auto key = v8::String::NewFromUtf8Literal(isolate, "url");
+    // Do not Check() — a user-installed setter on Object.prototype.url
+    // would throw, and Check() would abort the process. Letting the
+    // Maybe<bool> drop surfaces the failure as a JS exception via the
+    // surrounding TryCatch frame.
+    (void)meta->Set(context, key, name);
+}
+
 extern "C" State *v8_thread_init(Context *c, const uint8_t *snapshot_buf,
                                  size_t snapshot_len, int64_t max_memory,
                                  int verbose_exceptions)
@@ -332,6 +523,14 @@ extern "C" State *v8_thread_init(Context *c, const uint8_t *snapshot_buf,
         params.snapshot_blob = &blob;
     }
     st.isolate = v8::Isolate::New(params);
+    // Slot 0 lets v8 callbacks that don't take embedder data (notably
+    // Module::InstantiateModule's ResolveCallback) recover State.
+    st.isolate->SetData(0, pst);
+    // Populate `import.meta.url` with the filename passed to compile_module.
+    st.isolate->SetHostInitializeImportMetaObjectCallback(init_import_meta_object);
+    // Dispatch JS `import(...)` expressions to Ruby via marker 'd'.
+    st.isolate->SetHostImportModuleDynamicallyCallback(
+        host_import_module_dynamically_callback);
     st.max_memory = max_memory;
     if (st.max_memory > 0)
         st.isolate->AddGCEpilogueCallback(v8_gc_callback, pst);
@@ -604,6 +803,413 @@ fail:
         assert(try_catch.HasCaught());
         goto fail; // retry; can be termination exception
     }
+}
+
+// Pulls a Module handle id out of the request, looks it up in st.modules,
+// and stores the Local in *out. On miss, sets *cause = RUNTIME_ERROR and
+// throws a V8 exception; on deserialization failure, leaves *cause alone
+// and lets the standard fail-path handler take over. Returns false in
+// either failure case so callers can `goto fail` consistently.
+static bool module_from_request(State& st,
+                                v8::ValueDeserializer& des,
+                                v8::Local<v8::Module>* out,
+                                int* cause)
+{
+    v8::Local<v8::Value> id_v;
+    if (!des.ReadValue(st.context).ToLocal(&id_v)) return false;
+    int32_t id;
+    if (!id_v->Int32Value(st.context).To(&id)) return false;
+    auto it = st.modules.find(id);
+    if (it == st.modules.end()) {
+        *cause = RUNTIME_ERROR;
+        auto msg = v8::String::NewFromUtf8Literal(st.isolate, "no such module handle");
+        st.isolate->ThrowException(v8::Exception::Error(msg));
+        return false;
+    }
+    *out = v8::Local<v8::Module>::New(st.isolate, it->second->handle);
+    return true;
+}
+
+// request: [filename, source]
+// response: errback [handle_id:Int32, err]
+//
+// Parses |source| as an ES module. handle_id keys st.modules for later
+// v8_instantiate_module / v8_evaluate_module / v8_module_namespace /
+// v8_dispose_module. Imports declared by the module are not resolved here
+// — that happens in v8_instantiate_module via a Ruby-provided resolver.
+extern "C" void v8_compile_module(State *pst, const uint8_t *p, size_t n)
+{
+    State& st = *pst;
+    v8::TryCatch try_catch(st.isolate);
+    try_catch.SetVerbose(st.verbose_exceptions);
+    v8::HandleScope handle_scope(st.isolate);
+    v8::ValueDeserializer des(st.isolate, p, n);
+    des.ReadHeader(st.context).Check();
+    v8::Local<v8::Value> result;
+    int cause = INTERNAL_ERROR;
+    {
+        v8::Local<v8::Value> request_v;
+        if (!des.ReadValue(st.context).ToLocal(&request_v)) goto fail;
+        v8::Local<v8::Object> request;
+        if (!request_v->ToObject(st.context).ToLocal(&request)) goto fail;
+        v8::Local<v8::Value> filename;
+        if (!request->Get(st.context, 0).ToLocal(&filename)) goto fail;
+        v8::Local<v8::Value> source_v;
+        if (!request->Get(st.context, 1).ToLocal(&source_v)) goto fail;
+        v8::Local<v8::String> source;
+        if (!source_v->ToString(st.context).ToLocal(&source)) goto fail;
+
+        // is_module must be true on the ScriptOrigin for V8 to accept
+        // import/export syntax.
+        v8::ScriptOrigin origin(filename,
+                                /*resource_line_offset=*/0,
+                                /*resource_column_offset=*/0,
+                                /*resource_is_shared_cross_origin=*/false,
+                                /*script_id=*/-1,
+                                /*source_map_url=*/v8::Local<v8::Value>(),
+                                /*resource_is_opaque=*/false,
+                                /*is_wasm=*/false,
+                                /*is_module=*/true);
+        v8::ScriptCompiler::Source source_obj(source, origin);
+        v8::Local<v8::Module> module;
+        cause = PARSE_ERROR;
+        if (!v8::ScriptCompiler::CompileModule(st.isolate, &source_obj)
+            .ToLocal(&module)) goto fail;
+        cause = INTERNAL_ERROR;
+
+        int32_t id = ++st.next_module_id;
+        auto entry = std::make_unique<ModuleEntry>();
+        entry->handle.Reset(st.isolate, module);
+        v8::String::Utf8Value fname(st.isolate, filename);
+        if (*fname) entry->filename.assign(*fname, fname.length());
+        st.modules[id] = std::move(entry);
+        result = v8::Int32::New(st.isolate, id);
+    }
+    cause = NO_ERROR;
+fail:
+    if (st.isolate->IsExecutionTerminating()) {
+        st.isolate->CancelTerminateExecution();
+        cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
+        st.err_reason = NO_ERROR;
+    }
+    if (bubble_up_ruby_exception(st, &try_catch)) return;
+    if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
+    if (result.IsEmpty()) result = v8::Undefined(st.isolate);
+    auto err = to_error(st, &try_catch, cause);
+    if (!reply(st, result, err)) {
+        assert(try_catch.HasCaught());
+        goto fail;
+    }
+}
+
+// V8 invokes this for each static import while InstantiateModule walks
+// the import graph. It has no embedder slot, so State is recovered via
+// isolate->GetData(0). We round-trip to Ruby with marker 'm', expect an
+// int32 handle id back, and look it up in st.modules.
+//
+// The Ruby resolver block can re-enter the v8 thread via other dispatch
+// tags (e.g. compile_module the requested module on demand) — that flows
+// through v8_dispatch inside the wait loop, like v8_api_callback does.
+static v8::MaybeLocal<v8::Module> resolve_module_callback(
+    v8::Local<v8::Context> context,
+    v8::Local<v8::String> specifier,
+    v8::Local<v8::FixedArray> /*import_assertions*/,
+    v8::Local<v8::Module> referrer)
+{
+    v8::Isolate *isolate = context->GetIsolate();
+    State *pst = static_cast<State*>(isolate->GetData(0));
+    State& st = *pst;
+
+    // InstantiateModule walks the entire import graph in one call; without
+    // an explicit scope, every Local allocated per import (request, dispatch
+    // buffers, transitive compile_module Locals) would pile into whatever
+    // outer scope the embedder installed. EscapableHandleScope so the
+    // returned Local<Module> survives the scope's destruction.
+    v8::EscapableHandleScope handle_scope(isolate);
+
+    v8::Local<v8::Array> request;
+    {
+        v8::Context::Scope context_scope(st.safe_context);
+        request = v8::Array::New(st.isolate, 2);
+    }
+    // Use the callback's |context| (matches what V8 walked the graph in)
+    // rather than st.context. In mini_racer's single-context-per-isolate
+    // model they're the same handle, but this is defensive in case that
+    // ever changes.
+    request->Set(context, 0, specifier).Check();
+    // Referrer URL — the filename passed to compile_module's filename:
+    // kwarg. Lets the Ruby resolver resolve relative specifiers
+    // (`./foo`, `../bar`) against the importing module. Falls back to
+    // an empty string if we can't materialize the v8::String (OOM).
+    // Pass length explicitly so embedded NULs in the filename survive.
+    v8::Local<v8::Value> referrer_name;
+    v8::Local<v8::String> s;
+    const std::string& ref_fn = module_filename(st, referrer);
+    auto type = v8::NewStringType::kNormal;
+    if (v8::String::NewFromUtf8(st.isolate, ref_fn.data(), type,
+                                static_cast<int>(ref_fn.size())).ToLocal(&s)) {
+        referrer_name = s;
+    } else {
+        referrer_name = v8::String::Empty(st.isolate);
+    }
+    request->Set(context, 1, referrer_name).Check();
+    {
+        Serialized serialized(st, request);
+        if (!serialized.data) return v8::MaybeLocal<v8::Module>();
+        uint8_t marker = 'm';
+        v8_reply(st.ruby_context, &marker, 1);
+        v8_reply(st.ruby_context, serialized.data, serialized.size);
+    }
+    const uint8_t *p;
+    size_t n;
+    for (;;) {
+        v8_roundtrip(st.ruby_context, &p, &n);
+        if (*p == 'm') break;
+        if (*p == 'e') {
+            v8::Local<v8::String> message;
+            auto type = v8::NewStringType::kNormal;
+            if (!v8::String::NewFromOneByte(st.isolate, p+1, type, n-1).ToLocal(&message)) {
+                message = v8::String::NewFromUtf8Literal(st.isolate, "Ruby exception");
+            }
+            auto exception = v8::Exception::Error(message);
+            st.ruby_exception.Reset(st.isolate, exception);
+            st.isolate->ThrowException(exception);
+            return v8::MaybeLocal<v8::Module>();
+        }
+        v8_dispatch(st.ruby_context);
+    }
+    v8::ValueDeserializer des(st.isolate, p+1, n-1);
+    des.ReadHeader(st.context).Check();
+    v8::Local<v8::Value> id_v;
+    if (!des.ReadValue(st.context).ToLocal(&id_v)) return v8::MaybeLocal<v8::Module>();
+    int32_t id;
+    if (!id_v->Int32Value(st.context).To(&id)) return v8::MaybeLocal<v8::Module>();
+    auto it = st.modules.find(id);
+    if (it == st.modules.end()) {
+        auto msg = v8::String::NewFromUtf8Literal(st.isolate,
+            "module resolver returned a handle unknown to this Context");
+        st.isolate->ThrowException(v8::Exception::Error(msg));
+        return v8::MaybeLocal<v8::Module>();
+    }
+    return handle_scope.Escape(v8::Local<v8::Module>::New(st.isolate,
+                                                          it->second->handle));
+}
+
+// request: [handle_id:Int32]
+// response: errback [undefined, err]
+extern "C" void v8_instantiate_module(State *pst, const uint8_t *p, size_t n)
+{
+    State& st = *pst;
+    v8::TryCatch try_catch(st.isolate);
+    try_catch.SetVerbose(st.verbose_exceptions);
+    v8::HandleScope handle_scope(st.isolate);
+    v8::ValueDeserializer des(st.isolate, p, n);
+    des.ReadHeader(st.context).Check();
+    v8::Local<v8::Value> result;
+    int cause = INTERNAL_ERROR;
+    {
+        v8::Local<v8::Module> module;
+        if (!module_from_request(st, des, &module, &cause)) goto fail;
+        cause = RUNTIME_ERROR;
+        v8::Maybe<bool> ok = module->InstantiateModule(st.context, resolve_module_callback);
+        if (ok.IsNothing() || !ok.FromJust()) goto fail;
+        result = v8::Undefined(st.isolate);
+    }
+    cause = NO_ERROR;
+fail:
+    if (st.isolate->IsExecutionTerminating()) {
+        st.isolate->CancelTerminateExecution();
+        cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
+        st.err_reason = NO_ERROR;
+    }
+    if (bubble_up_ruby_exception(st, &try_catch)) return;
+    if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
+    if (result.IsEmpty()) result = v8::Undefined(st.isolate);
+    auto err = to_error(st, &try_catch, cause);
+    if (!reply(st, result, err)) {
+        assert(try_catch.HasCaught());
+        goto fail;
+    }
+}
+
+// request: [handle_id:Int32]
+// response: errback [evaluation_result, err]
+//
+// V8 wraps every module evaluation in a Promise (settles synchronously for
+// non-TLA modules). We drain microtasks once, then unwrap. Pending after
+// the drain means the module has top-level await still in flight — not
+// supported in this round; the user gets a clear error.
+extern "C" void v8_evaluate_module(State *pst, const uint8_t *p, size_t n)
+{
+    State& st = *pst;
+    v8::TryCatch try_catch(st.isolate);
+    try_catch.SetVerbose(st.verbose_exceptions);
+    v8::HandleScope handle_scope(st.isolate);
+    v8::ValueDeserializer des(st.isolate, p, n);
+    des.ReadHeader(st.context).Check();
+    v8::Local<v8::Value> result;
+    int cause = INTERNAL_ERROR;
+    {
+        v8::Local<v8::Module> module;
+        if (!module_from_request(st, des, &module, &cause)) goto fail;
+        // V8 requires status >= kInstantiated for Evaluate; calling on an
+        // uninstantiated module hits a CHECK and aborts the process.
+        if (module->GetStatus() < v8::Module::kInstantiated) {
+            cause = RUNTIME_ERROR;
+            auto msg = v8::String::NewFromUtf8Literal(st.isolate,
+                "module must be instantiated before it can be evaluated");
+            st.isolate->ThrowException(v8::Exception::Error(msg));
+            goto fail;
+        }
+        cause = RUNTIME_ERROR;
+        v8::Local<v8::Value> eval_result;
+        if (!module->Evaluate(st.context).ToLocal(&eval_result)) goto fail;
+        st.isolate->PerformMicrotaskCheckpoint();
+        if (!eval_result->IsPromise()) {
+            // older V8 / unusual configurations may return a plain value
+            result = sanitize(st, eval_result);
+        } else {
+            auto promise = eval_result.As<v8::Promise>();
+            if (promise->State() == v8::Promise::kFulfilled) {
+                result = sanitize(st, promise->Result());
+            } else if (promise->State() == v8::Promise::kRejected) {
+                st.isolate->ThrowException(promise->Result());
+                goto fail;
+            } else {
+                auto msg = v8::String::NewFromUtf8Literal(st.isolate,
+                    "module evaluation is still pending "
+                    "(top-level await is not yet supported)");
+                st.isolate->ThrowException(v8::Exception::Error(msg));
+                goto fail;
+            }
+        }
+    }
+    cause = NO_ERROR;
+fail:
+    if (st.isolate->IsExecutionTerminating()) {
+        st.isolate->CancelTerminateExecution();
+        cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
+        st.err_reason = NO_ERROR;
+    }
+    if (bubble_up_ruby_exception(st, &try_catch)) return;
+    if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
+    if (result.IsEmpty()) result = v8::Undefined(st.isolate);
+    auto err = to_error(st, &try_catch, cause);
+    if (!reply(st, result, err)) {
+        assert(try_catch.HasCaught());
+        goto fail;
+    }
+}
+
+// request: [handle_id:Int32]
+// response: errback [namespace_value, err]
+//
+// GetModuleNamespace requires the module to be at least instantiated
+// (V8 will fatal otherwise). Plain-data exports come back as Hash
+// entries via the regular sanitize path; function exports are filtered
+// out by the safe-context wrapper, same as other Object returns.
+extern "C" void v8_module_namespace(State *pst, const uint8_t *p, size_t n)
+{
+    State& st = *pst;
+    v8::TryCatch try_catch(st.isolate);
+    try_catch.SetVerbose(st.verbose_exceptions);
+    v8::HandleScope handle_scope(st.isolate);
+    v8::ValueDeserializer des(st.isolate, p, n);
+    des.ReadHeader(st.context).Check();
+    v8::Local<v8::Value> result;
+    int cause = INTERNAL_ERROR;
+    {
+        v8::Local<v8::Module> module;
+        if (!module_from_request(st, des, &module, &cause)) goto fail;
+        if (module->GetStatus() < v8::Module::kInstantiated) {
+            cause = RUNTIME_ERROR;
+            auto msg = v8::String::NewFromUtf8Literal(st.isolate,
+                "module must be instantiated before its namespace can be read");
+            st.isolate->ThrowException(v8::Exception::Error(msg));
+            goto fail;
+        }
+        cause = RUNTIME_ERROR;
+        result = sanitize(st, module->GetModuleNamespace());
+    }
+    cause = NO_ERROR;
+fail:
+    if (st.isolate->IsExecutionTerminating()) {
+        st.isolate->CancelTerminateExecution();
+        cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
+        st.err_reason = NO_ERROR;
+    }
+    if (bubble_up_ruby_exception(st, &try_catch)) return;
+    if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
+    if (result.IsEmpty()) result = v8::Undefined(st.isolate);
+    auto err = to_error(st, &try_catch, cause);
+    if (!reply(st, result, err)) {
+        assert(try_catch.HasCaught());
+        goto fail;
+    }
+}
+
+// response: errback [status_name:String, err]
+// status_name is one of the v8::Module::Status enum names in lowercase
+// ("uninstantiated", "instantiating", "instantiated", "evaluating",
+// "evaluated", "errored"). Ruby side converts to a symbol.
+extern "C" void v8_module_status(State *pst, const uint8_t *p, size_t n)
+{
+    State& st = *pst;
+    v8::TryCatch try_catch(st.isolate);
+    try_catch.SetVerbose(st.verbose_exceptions);
+    v8::HandleScope handle_scope(st.isolate);
+    v8::ValueDeserializer des(st.isolate, p, n);
+    des.ReadHeader(st.context).Check();
+    v8::Local<v8::Value> result;
+    int cause = INTERNAL_ERROR;
+    {
+        v8::Local<v8::Module> module;
+        if (!module_from_request(st, des, &module, &cause)) goto fail;
+        const char *name;
+        switch (module->GetStatus()) {
+        case v8::Module::kUninstantiated: name = "uninstantiated"; break;
+        case v8::Module::kInstantiating:  name = "instantiating";  break;
+        case v8::Module::kInstantiated:   name = "instantiated";   break;
+        case v8::Module::kEvaluating:     name = "evaluating";     break;
+        case v8::Module::kEvaluated:      name = "evaluated";      break;
+        case v8::Module::kErrored:        name = "errored";        break;
+        default:                          name = "unknown";        break;
+        }
+        v8::Local<v8::String> s;
+        if (!v8::String::NewFromUtf8(st.isolate, name).ToLocal(&s)) goto fail;
+        result = s;
+    }
+    cause = NO_ERROR;
+fail:
+    if (st.isolate->IsExecutionTerminating()) {
+        st.isolate->CancelTerminateExecution();
+        cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
+        st.err_reason = NO_ERROR;
+    }
+    if (bubble_up_ruby_exception(st, &try_catch)) return;
+    if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
+    if (result.IsEmpty()) result = v8::Undefined(st.isolate);
+    auto err = to_error(st, &try_catch, cause);
+    if (!reply(st, result, err)) {
+        assert(try_catch.HasCaught());
+        goto fail;
+    }
+}
+
+// Unknown ids are silently ignored — Ruby-side Module#dispose is idempotent.
+extern "C" void v8_dispose_module(State *pst, const uint8_t *p, size_t n)
+{
+    State& st = *pst;
+    v8::HandleScope handle_scope(st.isolate);
+    v8::ValueDeserializer des(st.isolate, p, n);
+    des.ReadHeader(st.context).Check();
+    v8::Local<v8::Value> id_v;
+    if (des.ReadValue(st.context).ToLocal(&id_v)) {
+        int32_t id;
+        if (id_v->Int32Value(st.context).To(&id))
+            st.modules.erase(id);
+    }
+    reply_retry(st, v8::String::Empty(st.isolate));
 }
 
 extern "C" void v8_heap_stats(State *pst)
@@ -931,6 +1537,7 @@ State::~State()
     {
         v8::Locker locker(isolate);
         v8::Isolate::Scope isolate_scope(isolate);
+        modules.clear();
         persistent_safe_context.Reset();
         persistent_context.Reset();
         ruby_exception.Reset();

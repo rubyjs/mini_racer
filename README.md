@@ -380,6 +380,77 @@ context.eval("log")
 
 Without `drain()` the order would be `["before", "after", "microtask"]` because the microtask only runs once the outermost script returns. `perform_microtask_checkpoint` is a thin wrapper over V8's `MicrotasksScope::PerformCheckpoint`.
 
+### ES modules
+
+`Context#compile_module` exposes V8's ES module API for code that uses
+`import` / `export` syntax. Unlike `eval` (which only accepts script-level
+syntax), modules can have static imports that resolve to other modules and
+expose named exports through a real Module Namespace Object.
+
+```ruby
+context = MiniRacer::Context.new
+
+dep  = context.compile_module("export const base = 10", filename: "dep.js")
+main = context.compile_module(<<~JS, filename: "main.js")
+  import { base } from 'dep'
+  export const doubled = base * 2
+JS
+
+main.instantiate {|specifier, referrer| dep }  # called once per static import
+dep.evaluate
+main.evaluate
+
+main.namespace  # => {"doubled" => 20}
+```
+
+* `Context#compile_module(source, filename:)` — parses the source as a
+  module; the returned `MiniRacer::Module` is bound to its Context. The
+  `filename` is also exposed to the module as `import.meta.url`.
+* `Module#instantiate { |specifier, referrer_url| ... }` — walks the static
+  import graph. The resolver block is called once per import declaration
+  with the raw specifier string and the importing module's filename, so
+  relative specifiers (`./foo`, `../bar`) can be resolved against the
+  referrer. It must return another `MiniRacer::Module` (typically from a
+  per-Context cache). Imports can also be resolved lazily from inside the
+  block via further `Context#compile_module` calls.
+* `Module#evaluate` — runs the module body. Returns the evaluation result
+  (`nil` for the typical `export const …` shape). Modules with top-level
+  `await` raise `MiniRacer::RuntimeError` for now.
+* `Module#namespace` — returns the Module Namespace Object as a Hash
+  (`{ "default" => …, "namedExport" => … }`). Available after
+  `instantiate` succeeds; `evaluate` populates the values.
+* `Module#status` — one of `:uninstantiated`, `:instantiating`,
+  `:instantiated`, `:evaluating`, `:evaluated`, `:errored`.
+* `Module#dispose` / `Module#disposed?` — eager handle release, mirroring
+  the convention used elsewhere.
+* `Context#dynamic_import_resolver = proc { |specifier, referrer_url| ... }`
+  — handler for JS `import(...)` expressions. The proc must return a
+  `MiniRacer::Module` (already instantiated; `evaluate` is driven for you
+  if pending). Set to `nil` to reject all dynamic imports. Drain the
+  microtask queue with `Context#perform_microtask_checkpoint` to see the
+  result in a `.then` callback or after `await`.
+
+```ruby
+context.dynamic_import_resolver = ->(spec, _ref) { cache.fetch(spec) }
+context.eval(%(import('dep').then(ns => globalThis.r = ns.x)), filename: 'caller.js')
+context.perform_microtask_checkpoint
+context.eval('globalThis.r')  # => 42
+```
+
+Notes:
+
+- A `Module` is bound to the `Context` that compiled it; resolvers must
+  return modules from the same Context.
+- `Module#dispose` frees the underlying V8 handle eagerly. The Ruby GC
+  finalizer does not (taking the V8 lock from a finalizer thread risks
+  deadlock), so long-lived Contexts with many short-lived modules
+  accumulate handles until `Context#dispose` clears them.
+- Top-level await is not yet supported; `evaluate` raises if the
+  module's evaluation promise stays pending after the microtask drain.
+- On TruffleRuby, `Context#compile_module` raises `NotImplementedError`
+  — GraalJS has its own module-loading mechanism that doesn't map onto
+  this handle-based API. PRs to bridge are welcome.
+
 ## Performance
 
 The `bench` folder contains benchmark.

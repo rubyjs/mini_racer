@@ -1,5 +1,6 @@
 - (Unreleased)
   - Add `Context#perform_microtask_checkpoint` to synchronously drain the V8 microtask queue, useful for spec-compliant `dispatchEvent` sequencing inside Ruby callbacks
+  - Add ES module API via `Context#compile_module` / `MiniRacer::Module` (#421): `compile_module(source, filename:)` returns a Module handle bound to the Context (and exposes `filename` to the module as `import.meta.url`); `Module#instantiate { |specifier, referrer_url| ... }` walks static imports via a Ruby-side resolver block (the referrer URL is the importing module's filename, so relative specifiers can be resolved); `Module#evaluate` runs the module body; `Module#namespace` returns the Module Namespace Object as a Hash; `Module#status` exposes V8's lifecycle state; `Module#dispose` / `Module#disposed?` mirror `Script`'s eager handle release. `Context#dynamic_import_resolver=` handles JS `import(...)` expressions (resolver receives specifier + referrer URL, returns a `MiniRacer::Module`; the loaded module is evaluated if pending). Top-level await is not supported in this round (evaluate raises if the evaluation promise stays pending). The TruffleRuby shim raises `NotImplementedError`.
 
 - 0.21.1 - 25-05-2026
   - Run `:single_threaded` V8 dispatches on a reusable mini_racer-owned native thread so V8 does not execute on Ruby-owned threads
