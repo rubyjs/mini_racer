@@ -721,7 +721,6 @@ extern "C" void v8_compile(State *pst, const uint8_t *p, size_t n)
             goto fail;
         }
         int32_t id = ++st.next_script_id;
-        st.scripts[id].Reset(st.isolate, script);
 
         {
             v8::Context::Scope context_scope(st.safe_context);
@@ -735,6 +734,13 @@ extern "C" void v8_compile(State *pst, const uint8_t *p, size_t n)
         if (!result->Set(st.context, 0, v8::Int32::New(st.isolate, id)).FromMaybe(false)) goto fail;
         if (!result->Set(st.context, 1, cache_value).FromMaybe(false)) goto fail;
         if (!result->Set(st.context, 2, v8::Boolean::New(st.isolate, rejected)).FromMaybe(false)) goto fail;
+
+        // Register the handle only after the reply array is fully built. If a
+        // Set above bailed (e.g. watchdog termination), the Ruby side gets an
+        // error and never learns the id, so it could never erase the entry —
+        // inserting earlier would orphan an undisposable handle until Context
+        // teardown.
+        st.scripts[id].Reset(st.isolate, script);
     }
     cause = NO_ERROR;
 fail:

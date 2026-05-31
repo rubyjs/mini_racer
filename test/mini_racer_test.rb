@@ -1458,8 +1458,12 @@ class MiniRacerTest < Minitest::Test
     ctx.low_memory_notification
     retained_growth = ctx.heap_stats[:used_global_handles_size] - base2
 
-    skip "this build does not report used_global_handles_size" if retained_growth.zero?
-    assert_operator disposed_growth, :<, retained_growth / 2,
+    # 300 retained Global<Script> handles grow the table by thousands of bytes;
+    # a build that doesn't report the metric leaves it ~0, so skip rather than
+    # assert vacuously. Compare with multiplication to avoid an integer-division
+    # boundary collapsing the bound to 0.
+    skip "this build does not report used_global_handles_size" if retained_growth < 1000
+    assert_operator disposed_growth * 2, :<, retained_growth,
                     "Script#dispose should free V8 global handles eagerly " \
                     "(disposed=#{disposed_growth}, retained=#{retained_growth})"
   end
