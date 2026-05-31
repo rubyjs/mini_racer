@@ -1299,6 +1299,10 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_compile_filename_in_parse_error
+    # The TruffleRuby shim is source-replay: it does not parse at compile time
+    # (Polyglot::InnerContext#eval has no parse-only mode), so a syntax error
+    # surfaces from Script#run instead, not from compile.
+    skip "TruffleRuby shim defers parsing to run" if RUBY_ENGINE == "truffleruby"
     err = assert_raises(MiniRacer::ParseError) do
       MiniRacer::Context.new.compile("function foo(", filename: "bundle.js")
     end
@@ -1306,6 +1310,7 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_compile_invalid_source
+    skip "TruffleRuby shim defers parsing to run" if RUBY_ENGINE == "truffleruby"
     assert_raises(MiniRacer::ParseError) do
       MiniRacer::Context.new.compile("foo bar baz garbage")
     end
