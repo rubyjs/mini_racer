@@ -1428,6 +1428,37 @@ class MiniRacerTest < Minitest::Test
     assert_raises(MiniRacer::RuntimeError) { script.run }
   end
 
+  def test_script_dispose_releases_v8_handles_eagerly
+    # Each compiled Script pins a v8::Global<v8::Script>. Disposing must
+    # release it eagerly: if the handle were a default-traits v8::Persistent
+    # (whose destructor does NOT Reset), erase() would leak it until the
+    # Context is disposed and disposed_growth would track retained_growth.
+    skip "TruffleRuby has no equivalent caching API" if RUBY_ENGINE == "truffleruby"
+    ctx = MiniRacer::Context.new
+
+    base = ctx.heap_stats[:used_global_handles_size]
+    300.times do |i|
+      ctx.compile("var x#{i} = #{i}; x#{i}", filename: "d#{i}.js").tap(&:run).dispose
+    end
+    ctx.low_memory_notification
+    disposed_growth = ctx.heap_stats[:used_global_handles_size] - base
+
+    retained = []
+    base2 = ctx.heap_stats[:used_global_handles_size]
+    300.times do |i|
+      s = ctx.compile("var y#{i} = #{i}; y#{i}", filename: "r#{i}.js")
+      s.run
+      retained << s # keep alive so the global handles stay live
+    end
+    ctx.low_memory_notification
+    retained_growth = ctx.heap_stats[:used_global_handles_size] - base2
+
+    skip "this build does not report used_global_handles_size" if retained_growth.zero?
+    assert_operator disposed_growth, :<, retained_growth / 2,
+                    "Script#dispose should free V8 global handles eagerly " \
+                    "(disposed=#{disposed_growth}, retained=#{retained_growth})"
+  end
+
   def test_script_after_context_dispose
     ctx = MiniRacer::Context.new
     script = ctx.compile("1 + 1", produce_cache: true)

@@ -93,9 +93,13 @@ struct State
     int err_reason;
     bool verbose_exceptions;
     std::vector<Callback*> callbacks;
-    // Cleared in ~State() under the still-live isolate so the contained
-    // Persistents can Reset() safely before isolate->Dispose().
-    std::unordered_map<int32_t, std::unique_ptr<v8::Persistent<v8::Script>>> scripts;
+    // v8::Global (not Persistent): Global's destructor Reset()s the handle,
+    // so erase()/clear() actually release the compiled script eagerly.
+    // Default-traits Persistent has kResetInDestructor=false — destroying it
+    // is a no-op that leaks the global handle until isolate->Dispose(), which
+    // would silently defeat Script#dispose. Cleared in ~State() under the
+    // still-live isolate so each Global can Reset() before isolate->Dispose().
+    std::unordered_map<int32_t, v8::Global<v8::Script>> scripts;
     int32_t next_script_id;
     // Depth counter incremented while v8_api_callback is on the stack.
     // CreateCodeCache walks live isolate state and corrupts the parser
@@ -705,17 +709,32 @@ extern "C" void v8_compile(State *pst, const uint8_t *p, size_t n)
             }
         }
 
+        // Ids are monotonic and serialized as Int32 on the wire. Refuse to
+        // wrap at INT32_MAX rather than invoke signed-overflow UB / risk
+        // aliasing a still-live id (unreachable in practice — each undisposed
+        // script pins a handle, so the isolate OOMs long before 2^31).
+        if (st.next_script_id == INT32_MAX) {
+            cause = INTERNAL_ERROR;
+            auto msg = v8::String::NewFromUtf8Literal(st.isolate,
+                "script id space exhausted for this Context");
+            st.isolate->ThrowException(v8::Exception::Error(msg));
+            goto fail;
+        }
         int32_t id = ++st.next_script_id;
-        st.scripts[id] = std::unique_ptr<v8::Persistent<v8::Script>>(
-            new v8::Persistent<v8::Script>(st.isolate, script));
+        st.scripts[id].Reset(st.isolate, script);
 
         {
             v8::Context::Scope context_scope(st.safe_context);
             result = v8::Array::New(st.isolate, 3);
         }
-        result->Set(st.context, 0, v8::Int32::New(st.isolate, id)).Check();
-        result->Set(st.context, 1, cache_value).Check();
-        result->Set(st.context, 2, v8::Boolean::New(st.isolate, rejected)).Check();
+        // Populate via the goto-fail idiom, not .Check(): v8_compile runs
+        // under the watchdog ('K' → v8_timedwait), so a timeout can leave the
+        // isolate terminating here, making Set() return Nothing — .Check()
+        // would abort the process. The fail path cancels termination and
+        // replies a proper TERMINATED_ERROR errback instead.
+        if (!result->Set(st.context, 0, v8::Int32::New(st.isolate, id)).FromMaybe(false)) goto fail;
+        if (!result->Set(st.context, 1, cache_value).FromMaybe(false)) goto fail;
+        if (!result->Set(st.context, 2, v8::Boolean::New(st.isolate, rejected)).FromMaybe(false)) goto fail;
     }
     cause = NO_ERROR;
 fail:
@@ -758,7 +777,7 @@ extern "C" void v8_run(State *pst, const uint8_t *p, size_t n)
             st.isolate->ThrowException(v8::Exception::Error(msg));
             goto fail;
         }
-        auto script = v8::Local<v8::Script>::New(st.isolate, *it->second);
+        auto script = v8::Local<v8::Script>::New(st.isolate, it->second);
         v8::Local<v8::Value> result_v;
         cause = RUNTIME_ERROR;
         if (!script->Run(st.context).ToLocal(&result_v)) goto fail;

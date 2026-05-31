@@ -160,10 +160,10 @@ typedef struct Snapshot {
 
 // GC-finalizer caveat: script_free cannot send a dispose RPC (would need
 // to take rr_mtx without a reliable GVL guarantee). Handles freed here
-// rely on State::~State() walking st.scripts at isolate teardown — so
-// long-lived Contexts with many short-lived Scripts accumulate Persistents
+// rely on State::~State() clearing st.scripts at isolate teardown — so
+// long-lived Contexts with many short-lived Scripts accumulate V8 handles
 // until the Context is disposed. Call Script#dispose explicitly to free
-// eagerly.
+// eagerly (it erases the v8::Global, which Reset()s the handle).
 typedef struct Script {
     VALUE   context;      // parent Context VALUE (kept alive via mark)
     VALUE   cached_data;  // ASCII-8BIT String or Qnil
@@ -1891,7 +1891,7 @@ static VALUE context_compile(int argc, VALUE *argv, VALUE self)
         ser_null(&s);
     } else {
         ser_uint8array(&s, (const uint8_t *)RSTRING_PTR(cached_data),
-                       RSTRING_LENINT(cached_data));
+                       RSTRING_LEN(cached_data));
     }
     ser_bool(&s, RTEST(produce_cache));
     ser_array_end(&s, 4);
