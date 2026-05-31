@@ -1444,7 +1444,16 @@ class MiniRacerTest < Minitest::Test
     ctx = MiniRacer::Context.new
     mod = ctx.compile_module('export const x = 1', filename: 'a.js')
     err = assert_raises(MiniRacer::RuntimeError) { mod.evaluate }
-    assert_includes err.message, 'instantiated'
+    assert_includes err.message, 'must be instantiated' # not "uninstantiated"
+  end
+
+  def test_compile_module_default_filename
+    skip_on_truffleruby_module
+    ctx = MiniRacer::Context.new
+    mod = ctx.compile_module('globalThis.metaUrl = import.meta.url')
+    mod.instantiate { raise 'resolver should not be called' }
+    mod.evaluate
+    assert_equal '<compile_module>', ctx.eval('globalThis.metaUrl')
   end
 
   def test_module_resolver_rejects_module_from_other_context
@@ -1598,14 +1607,16 @@ class MiniRacerTest < Minitest::Test
   def test_module_evaluate_top_level_await_unsupported
     skip_on_truffleruby_module
     ctx = MiniRacer::Context.new
+    # A never-settling await keeps the evaluation promise genuinely pending
+    # after the microtask drain, exercising the top-level-await detection
+    # branch (an awaited setTimeout would instead reject — setTimeout is
+    # undefined — and never reach that branch).
     tla = ctx.compile_module(
-      "await new Promise((resolve) => setTimeout(resolve, 1)); export const x = 1",
+      "await new Promise(() => {}); export const x = 1",
       filename: "tla.js")
     tla.instantiate { raise "resolver should not be called" }
-    # setTimeout is undefined in this isolate so the await rejects; the
-    # surface contract is that the user gets a MiniRacer::RuntimeError
-    # rather than a hang/crash, regardless of which rejection V8 surfaces.
-    assert_raises(MiniRacer::RuntimeError) { tla.evaluate }
+    err = assert_raises(MiniRacer::RuntimeError) { tla.evaluate }
+    assert_includes err.message, "top-level await"
   end
 
   def test_module_namespace_data_exports
