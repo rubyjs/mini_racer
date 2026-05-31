@@ -474,6 +474,13 @@ static v8::MaybeLocal<v8::Promise> host_import_module_dynamically_callback(
                 return reject_with_literal(v8::String::NewFromUtf8Literal(isolate,
                     "dynamic import target has top-level await (not supported)"));
         }
+    } else if (status == v8::Module::kEvaluated && module->IsGraphAsync()) {
+        // The resolver handed back an already-evaluated module. We confirmed
+        // settlement above only for the just-evaluated (kInstantiated) branch;
+        // a previously-evaluated async module may still have a pending
+        // top-level await whose TDZ namespace would fatally abort. Refuse it.
+        return reject_with_literal(v8::String::NewFromUtf8Literal(isolate,
+            "dynamic import target uses top-level await (not supported)"));
     }
 
     (void)resolver->Resolve(context, module->GetModuleNamespace());
@@ -1118,12 +1125,13 @@ fail:
 // request: [handle_id:Int32]
 // response: errback [namespace_value, err]
 //
-// Only a fully evaluated module has a safe-to-read namespace. Reading the
-// namespace of an instantiated-but-not-yet-evaluated module touches export
-// bindings that are still in the temporal dead zone; their accessors throw on
-// every property the serializer visits, which V8 turns into an unrecoverable
-// FatalProcessOutOfMemory (process abort), not a catchable exception. So gate
-// on kEvaluated, surface an errored module's own exception, and reject every
+// Only a fully evaluated, non-async module has a safe-to-read namespace.
+// Reading the namespace of a module whose export bindings are still in the
+// temporal dead zone (not yet evaluated, or a top-level-await module whose
+// promise never settled) makes the serializer hit a throwing accessor on
+// every property, which V8 turns into an unrecoverable FatalProcessOutOfMemory
+// (process abort), not a catchable exception. So require kEvaluated AND
+// !IsGraphAsync(), surface an errored module's own exception, and reject every
 // other state with a clear error. Plain-data exports come back as Hash entries
 // via the regular sanitize path; function exports are filtered out by the
 // safe-context wrapper, same as other Object returns.
@@ -1150,6 +1158,22 @@ extern "C" void v8_module_namespace(State *pst, const uint8_t *p, size_t n)
             cause = RUNTIME_ERROR;
             auto msg = v8::String::NewFromUtf8Literal(st.isolate,
                 "module must be evaluated before its namespace can be read");
+            st.isolate->ThrowException(v8::Exception::Error(msg));
+            goto fail;
+        }
+        // kEvaluated is necessary but NOT sufficient: V8 sets kEvaluated as
+        // soon as Evaluate() returns, even for a top-level-await module whose
+        // promise never settled, leaving the export bindings in the TDZ.
+        // IsGraphAsync() is false exactly when the evaluation promise settled
+        // synchronously (per V8's Evaluate contract), so a non-async kEvaluated
+        // module — including one evaluated only transitively as a dependency —
+        // is the one case whose namespace is safe to read. Refuse async graphs;
+        // reading their TDZ bindings would fatally abort the process.
+        if (module->IsGraphAsync()) {
+            cause = RUNTIME_ERROR;
+            auto msg = v8::String::NewFromUtf8Literal(st.isolate,
+                "module namespace is unavailable: the module (or a dependency) "
+                "uses top-level await, which is not supported");
             st.isolate->ThrowException(v8::Exception::Error(msg));
             goto fail;
         }

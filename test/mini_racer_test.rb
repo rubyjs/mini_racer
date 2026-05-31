@@ -1674,6 +1674,39 @@ class MiniRacerTest < Minitest::Test
     assert_includes err.message, "boom"
   end
 
+  def test_module_namespace_on_pending_top_level_await_raises
+    # A top-level-await module reaches status :evaluated as soon as Evaluate
+    # returns its (still-pending) promise, so the kEvaluated gate alone is not
+    # enough — reading its TDZ namespace used to abort the process. The async
+    # graph must be refused with a catchable error.
+    skip_on_truffleruby_module
+    ctx = MiniRacer::Context.new
+    mod = ctx.compile_module("await new Promise(() => {}); export const x = 1",
+                             filename: "tla.js")
+    mod.instantiate { raise "resolver should not be called" }
+    assert_raises(MiniRacer::RuntimeError) { mod.evaluate }
+    assert_equal :evaluated, mod.status # V8 marks it evaluated despite pending await
+    err = assert_raises(MiniRacer::RuntimeError) { mod.namespace }
+    assert_includes err.message, "top-level await"
+    # Context/V8 thread survived (did not abort).
+    assert_kind_of MiniRacer::Module, ctx.compile_module("export const y = 2", filename: "y.js")
+  end
+
+  def test_module_namespace_of_transitively_evaluated_dependency
+    # Evaluating the importer evaluates its dependencies too; the dependency's
+    # namespace must be readable even though dep.evaluate was never called
+    # directly (it is a synchronous, fully-evaluated module).
+    skip_on_truffleruby_module
+    ctx = MiniRacer::Context.new
+    dep  = ctx.compile_module("export const base = 10", filename: "dep.js")
+    main = ctx.compile_module("import { base } from 'dep'; export const doubled = base * 2",
+                              filename: "main.js")
+    main.instantiate { dep }
+    main.evaluate # evaluates dep transitively; dep.evaluate is NOT called
+    assert_equal({"base" => 10}, dep.namespace)
+    assert_equal({"doubled" => 20}, main.namespace)
+  end
+
   def test_module_status_transitions
     skip_on_truffleruby_module
     ctx = MiniRacer::Context.new
