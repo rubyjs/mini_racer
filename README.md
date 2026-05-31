@@ -417,8 +417,10 @@ main.namespace  # => {"doubled" => 20}
   (`nil` for the typical `export const …` shape). Modules with top-level
   `await` raise `MiniRacer::RuntimeError` for now.
 * `Module#namespace` — returns the Module Namespace Object as a Hash
-  (`{ "default" => …, "namedExport" => … }`). Available after
-  `instantiate` succeeds; `evaluate` populates the values.
+  (`{ "default" => …, "namedExport" => … }`). Only available after
+  `evaluate` succeeds; calling it earlier raises `MiniRacer::RuntimeError`
+  (the export bindings are not yet initialized), and on an errored module it
+  re-raises the module's own error.
 * `Module#status` — one of `:uninstantiated`, `:instantiating`,
   `:instantiated`, `:evaluating`, `:evaluated`, `:errored`.
 * `Module#dispose` / `Module#disposed?` — eager handle release, mirroring

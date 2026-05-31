@@ -1637,6 +1637,32 @@ class MiniRacerTest < Minitest::Test
     assert_raises(MiniRacer::RuntimeError) { mod.namespace }
   end
 
+  def test_module_namespace_before_evaluate_raises
+    # Reading the namespace of an instantiated-but-unevaluated module used to
+    # abort the whole process (fatal V8 OOM as the TDZ export accessors recurse
+    # through the serializer). It must raise a catchable error instead.
+    skip_on_truffleruby_module
+    ctx = MiniRacer::Context.new
+    mod = ctx.compile_module("export const x = 1", filename: "a.js")
+    mod.instantiate { raise "resolver should not be called" }
+    assert_equal :instantiated, mod.status
+    err = assert_raises(MiniRacer::RuntimeError) { mod.namespace }
+    assert_includes err.message, "evaluated"
+    # Context/V8 thread survived (did not abort).
+    assert_kind_of MiniRacer::Module, ctx.compile_module("export const y = 2", filename: "y.js")
+  end
+
+  def test_module_namespace_on_errored_module_reraises
+    skip_on_truffleruby_module
+    ctx = MiniRacer::Context.new
+    mod = ctx.compile_module("throw new Error('boom')", filename: "bad.js")
+    mod.instantiate { raise "resolver should not be called" }
+    assert_raises(MiniRacer::RuntimeError) { mod.evaluate }
+    assert_equal :errored, mod.status
+    err = assert_raises(MiniRacer::RuntimeError) { mod.namespace }
+    assert_includes err.message, "boom"
+  end
+
   def test_module_status_transitions
     skip_on_truffleruby_module
     ctx = MiniRacer::Context.new

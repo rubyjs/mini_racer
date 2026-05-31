@@ -1104,10 +1104,15 @@ fail:
 // request: [handle_id:Int32]
 // response: errback [namespace_value, err]
 //
-// GetModuleNamespace requires the module to be at least instantiated
-// (V8 will fatal otherwise). Plain-data exports come back as Hash
-// entries via the regular sanitize path; function exports are filtered
-// out by the safe-context wrapper, same as other Object returns.
+// Only a fully evaluated module has a safe-to-read namespace. Reading the
+// namespace of an instantiated-but-not-yet-evaluated module touches export
+// bindings that are still in the temporal dead zone; their accessors throw on
+// every property the serializer visits, which V8 turns into an unrecoverable
+// FatalProcessOutOfMemory (process abort), not a catchable exception. So gate
+// on kEvaluated, surface an errored module's own exception, and reject every
+// other state with a clear error. Plain-data exports come back as Hash entries
+// via the regular sanitize path; function exports are filtered out by the
+// safe-context wrapper, same as other Object returns.
 extern "C" void v8_module_namespace(State *pst, const uint8_t *p, size_t n)
 {
     State& st = *pst;
@@ -1121,10 +1126,16 @@ extern "C" void v8_module_namespace(State *pst, const uint8_t *p, size_t n)
     {
         v8::Local<v8::Module> module;
         if (!module_from_request(st, des, &module, &cause)) goto fail;
-        if (module->GetStatus() < v8::Module::kInstantiated) {
+        auto status = module->GetStatus();
+        if (status == v8::Module::kErrored) {
+            cause = RUNTIME_ERROR;
+            st.isolate->ThrowException(module->GetException());
+            goto fail;
+        }
+        if (status != v8::Module::kEvaluated) {
             cause = RUNTIME_ERROR;
             auto msg = v8::String::NewFromUtf8Literal(st.isolate,
-                "module must be instantiated before its namespace can be read");
+                "module must be evaluated before its namespace can be read");
             st.isolate->ThrowException(v8::Exception::Error(msg));
             goto fail;
         }
