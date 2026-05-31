@@ -2049,6 +2049,11 @@ static VALUE context_compile_module(int argc, VALUE *argv, VALUE self)
     e = rb_ary_pop(a);
     handle_exception(e);
     result = rb_ary_pop(a);
+    // v8_compile_module replies with the Int32 handle id on success; a
+    // non-integer would mean the v8 thread fell through to its Undefined
+    // fail path without an error. Guard rather than feed junk to NUM2INT.
+    if (!RB_INTEGER_TYPE_P(result))
+        rb_raise(internal_error, "compile_module: expected an integer handle id");
 
     module_v = rb_obj_alloc(module_class); // skip the raising initialize
     TypedData_Get_Struct(module_v, Module, &module_type, m);

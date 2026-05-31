@@ -488,6 +488,9 @@ static void init_import_meta_object(v8::Local<v8::Context> context,
                                     v8::Local<v8::Object> meta)
 {
     auto isolate = context->GetIsolate();
+    // module_filename() materializes a Local<Module> per entry while scanning;
+    // give them a scope to reclaim instead of piling onto the caller's.
+    v8::HandleScope handle_scope(isolate);
     State *pst = static_cast<State*>(isolate->GetData(0));
     const std::string& filename = module_filename(*pst, module);
     // Pass the byte length explicitly: filenames may contain embedded NULs,
@@ -877,6 +880,17 @@ extern "C" void v8_compile_module(State *pst, const uint8_t *p, size_t n)
             .ToLocal(&module)) goto fail;
         cause = INTERNAL_ERROR;
 
+        // Ids are monotonic and serialized as Int32 on the wire. Refuse to
+        // wrap rather than invoke signed-overflow UB and risk aliasing a
+        // still-live handle id (unreachable in practice — each live module
+        // pins a Global handle, so the isolate OOMs long before 2^31).
+        if (st.next_module_id == INT32_MAX) {
+            cause = INTERNAL_ERROR;
+            auto msg = v8::String::NewFromUtf8Literal(st.isolate,
+                "module id space exhausted for this Context");
+            st.isolate->ThrowException(v8::Exception::Error(msg));
+            goto fail;
+        }
         int32_t id = ++st.next_module_id;
         auto entry = std::make_unique<ModuleEntry>();
         entry->handle.Reset(st.isolate, module);
