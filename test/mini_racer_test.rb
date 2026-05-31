@@ -151,6 +151,31 @@ class MiniRacerTest < Minitest::Test
     assert_raises { context.eval("while(true){}") }
   end
 
+  def test_nested_timed_call_does_not_disarm_outer_timeout
+    # A host fn that re-enters eval/call nests another timed dispatch. Each
+    # v8_timedwait frame must own its watchdog, otherwise cancelling the inner
+    # (fast) call's watchdog also tears down the outer one and the outer
+    # timeout never fires. The safety stop turns a regression into a slow
+    # failure instead of a hang.
+    if RUBY_ENGINE == "truffleruby"
+      skip "exercises the CRuby watchdog implementation"
+    end
+    context = MiniRacer::Context.new(timeout: 100)
+    context.attach("quick", proc { context.eval("1 + 1") })
+    stopper = Thread.new do
+      sleep 5
+      context.stop
+    end
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    assert_raises(MiniRacer::ScriptTerminatedError) do
+      context.eval("quick(); while (true) {}")
+    end
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+    stopper.kill
+    assert_operator elapsed, :<, 2,
+                    "outer 100ms timeout should still fire after a nested timed call (took #{elapsed}s)"
+  end
+
   def test_returns_javascript_function
     context = MiniRacer::Context.new
     assert_same MiniRacer::JavaScriptFunction,

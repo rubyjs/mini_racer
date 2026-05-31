@@ -146,11 +146,9 @@ typedef struct Context
     pthread_mutex_t rr_mtx;
     pthread_mutex_t mtx;
     pthread_cond_t cv;
-    struct {
-        pthread_mutex_t mtx;
-        pthread_cond_t cv;
-        int cancel;
-    } wd; // watchdog
+    // The watchdog is per v8_timedwait frame (see struct Watchdog), not stored
+    // here, so a nested timed call (host fn / module resolver re-entering
+    // eval/call/compile_module) can't disarm the outer frame's timeout.
     Barrier early_init, late_init;
 } Context;
 
@@ -755,49 +753,89 @@ static int deadline_exceeded(struct timespec deadline)
     return timespec_le(deadline, deadline_ms(0));
 }
 
+// Per v8_timedwait-frame watchdog state. Stack-allocated by the caller and
+// torn down before that frame returns, so the watchdog thread (which only
+// borrows the pointer) never outlives it. Keeping this off the Context is what
+// makes nested timed calls safe: cancelling an inner frame's watchdog touches
+// only the inner cv/cancel, so it can no longer wake the outer frame's watchdog
+// and disarm the outer timeout.
+struct Watchdog {
+    pthread_mutex_t mtx;
+    pthread_cond_t  cv;
+    int             cancel;
+    int             timeout;
+    struct State   *pst;
+};
+
 static void *v8_watchdog(void *arg)
 {
+    struct Watchdog *w = arg;
     struct timespec deadline;
-    Context *c;
 
-    c = arg;
-    deadline = deadline_ms(c->timeout);
-    pthread_mutex_lock(&c->wd.mtx);
+    deadline = deadline_ms(w->timeout);
+    pthread_mutex_lock(&w->mtx);
     for (;;) {
-        if (c->wd.cancel)
+        if (w->cancel)
             break;
-        pthread_cond_timedwait(&c->wd.cv, &c->wd.mtx, &deadline);
-        if (c->wd.cancel)
+        pthread_cond_timedwait(&w->cv, &w->mtx, &deadline);
+        if (w->cancel)
             break;
         if (deadline_exceeded(deadline)) {
-            v8_terminate_execution(c->pst);
+            v8_terminate_execution(w->pst);
             break;
         }
     }
-    pthread_mutex_unlock(&c->wd.mtx);
+    pthread_mutex_unlock(&w->mtx);
     return NULL;
 }
 
 static void v8_timedwait(Context *c, const uint8_t *p, size_t n,
                          void (*func)(struct State *pst, const uint8_t *p, size_t n))
 {
+    struct Watchdog w;
     pthread_t thr;
-    int r;
+    int armed = 0;
 
-    r = -1;
-    if (c->timeout > 0 && (r = pthread_create(&thr, NULL, v8_watchdog, c))) {
-        fprintf(stderr, "mini_racer: watchdog: pthread_create: %s\n", strerror(r));
-        fflush(stderr);
+    if (c->timeout > 0) {
+        pthread_condattr_t cattr;
+        int r;
+
+        w.cancel = 0;
+        w.timeout = c->timeout;
+        w.pst = c->pst;
+        pthread_condattr_init(&cattr);
+#ifndef __APPLE__
+        // deadline_ms uses CLOCK_MONOTONIC off Apple; match it on the cv.
+        pthread_condattr_setclock(&cattr, CLOCK_MONOTONIC);
+#endif
+        if ((r = pthread_mutex_init(&w.mtx, NULL)) == 0) {
+            if ((r = pthread_cond_init(&w.cv, &cattr)) == 0) {
+                if ((r = pthread_create(&thr, NULL, v8_watchdog, &w)) == 0) {
+                    armed = 1;
+                } else {
+                    pthread_cond_destroy(&w.cv);
+                    pthread_mutex_destroy(&w.mtx);
+                }
+            } else {
+                pthread_mutex_destroy(&w.mtx);
+            }
+        }
+        pthread_condattr_destroy(&cattr);
+        if (r) { // ran without a timeout rather than aborting the call
+            fprintf(stderr, "mini_racer: watchdog: %s\n", strerror(r));
+            fflush(stderr);
+        }
     }
     func(c->pst, p, n);
-    if (r)
+    if (!armed)
         return;
-    pthread_mutex_lock(&c->wd.mtx);
-    c->wd.cancel = 1;
-    pthread_cond_signal(&c->wd.cv);
-    pthread_mutex_unlock(&c->wd.mtx);
+    pthread_mutex_lock(&w.mtx);
+    w.cancel = 1;
+    pthread_cond_signal(&w.cv);
+    pthread_mutex_unlock(&w.mtx);
     pthread_join(thr, NULL);
-    c->wd.cancel = 0;
+    pthread_cond_destroy(&w.cv);
+    pthread_mutex_destroy(&w.mtx);
 }
 
 static void dispatch1(Context *c, const uint8_t *p, size_t n)
@@ -1197,26 +1235,16 @@ static VALUE context_alloc(VALUE klass)
     cause = "pthread_cond_init";
     if ((r = pthread_cond_init(&c->cv, &cattr)))
         goto fail3;
-    cause = "pthread_mutex_init";
-    if ((r = pthread_mutex_init(&c->wd.mtx, NULL)))
-        goto fail4;
-    cause = "pthread_cond_init";
-    if (pthread_cond_init(&c->wd.cv, &cattr))
-        goto fail5;
     cause = "barrier_init";
     if ((r = barrier_init(&c->early_init, 2)))
-        goto fail6;
+        goto fail4;
     cause = "barrier_init";
     if ((r = barrier_init(&c->late_init, 2)))
-        goto fail7;
+        goto fail5;
     pthread_condattr_destroy(&cattr);
     return TypedData_Wrap_Struct(klass, &context_type, c);
-fail7:
-    barrier_destroy(&c->early_init);
-fail6:
-    pthread_cond_destroy(&c->wd.cv);
 fail5:
-    pthread_mutex_destroy(&c->wd.mtx);
+    barrier_destroy(&c->early_init);
 fail4:
     pthread_cond_destroy(&c->cv);
 fail3:
@@ -1290,8 +1318,6 @@ static void context_destroy(Context *c)
     pthread_cond_destroy(&c->cv);
     barrier_destroy(&c->early_init);
     barrier_destroy(&c->late_init);
-    pthread_mutex_destroy(&c->wd.mtx);
-    pthread_cond_destroy(&c->wd.cv);
     buf_reset(&c->snapshot);
     buf_reset(&c->req);
     buf_reset(&c->res);
