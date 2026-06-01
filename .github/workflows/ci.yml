@@ -56,8 +56,6 @@ jobs:
           - "macos-26" # arm64
           - "macos-26-intel"
         ruby:
-          - "ruby-3.1"
-          - "ruby-3.2"
           - "ruby-3.3"
           - "ruby-3.4"
           - "ruby-4.0"
@@ -91,8 +89,6 @@ jobs:
       fail-fast: false
       matrix:
         ruby:
-          - "3.1"
-          - "3.2"
           - "3.3"
           - "3.4"
           - "4.0"
