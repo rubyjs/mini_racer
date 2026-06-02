@@ -1,5 +1,6 @@
 - (Unreleased)
   - Add `Context#perform_microtask_checkpoint` to synchronously drain the V8 microtask queue, useful for spec-compliant `dispatchEvent` sequencing inside Ruby callbacks
+  - Add an opt-in JavaScript host namespace via `Context.new(host_namespace:)` (à la Deno's `Deno`/Bun's `Bun`); when enabled it exposes `<namespace>.drainMicrotasks()`, an inline (no Ruby round-trip) microtask checkpoint for draining between synchronous JS operations
 
 - 0.21.1 - 25-05-2026
   - Run `:single_threaded` V8 dispatches on a reusable mini_racer-owned native thread so V8 does not execute on Ruby-owned threads

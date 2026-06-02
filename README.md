@@ -380,6 +380,25 @@ context.eval("log")
 
 Without `drain()` the order would be `["before", "after", "microtask"]` because the microtask only runs once the outermost script returns. `perform_microtask_checkpoint` is a thin wrapper over V8's `MicrotasksScope::PerformCheckpoint`.
 
+When the drain has to happen from within JavaScript itself — for example between each listener in a synchronous `dispatchEvent` chain — the same checkpoint is available to JS as `drainMicrotasks()`. It runs inline on the V8 thread without the Ruby ↔ V8 round-trip, so no `attach` is required.
+
+It is exposed through an opt-in **host namespace** — a single object (in the spirit of Deno's `Deno` or Bun's `Bun`) that mini_racer hangs its non-standard helpers off. Pass `host_namespace:` to enable it; by default nothing is injected and the global stays clean:
+
+```ruby
+context = MiniRacer::Context.new(host_namespace: "MiniRacer")
+context.eval(<<~JS)
+  globalThis.log = [];
+  Promise.resolve().then(() => log.push("microtask"));
+  log.push("before");
+  MiniRacer.drainMicrotasks();
+  log.push("after");
+JS
+context.eval("log")
+# => ["before", "microtask", "after"]
+```
+
+`host_namespace:` accepts a String (the global name to use), `true` (the default name `"MiniRacer"`), or `nil`/`false` (the default — inject nothing). The namespace object is defined non-enumerable so it does not appear in `Object.keys(globalThis)`, while its methods are ordinary properties discoverable via `Object.keys(MiniRacer)`. Like `perform_microtask_checkpoint`, `drainMicrotasks()` is a no-op while a microtask checkpoint is already in progress, and it lets watchdog/out-of-memory termination propagate to the enclosing `eval`/`call`. (The host namespace is V8-only; it is not installed on the TruffleRuby backend.)
+
 ## Performance
 
 The `bench` folder contains benchmark.

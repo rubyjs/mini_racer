@@ -137,6 +137,7 @@ typedef struct Context
     VALUE exception;   // pending exception or Qnil
     Buf req, res;      // ruby->v8 request/response, mediated by |mtx| and |cv|
     Buf snapshot;
+    Buf host_namespace; // NUL-terminated global name to install host helpers on, or empty
     pthread_t single_threaded_thr;
     pid_t single_threaded_pid;
     int single_threaded_thr_started;
@@ -901,7 +902,8 @@ static void *v8_thread_start(void *arg)
     c = arg;
     barrier_wait(&c->early_init);
     v8_once_init();
-    v8_thread_init(c, c->snapshot.buf, c->snapshot.len, c->max_memory, c->verbose_exceptions);
+    v8_thread_init(c, c->snapshot.buf, c->snapshot.len, c->max_memory, c->verbose_exceptions,
+                   c->host_namespace.len ? (const char *)c->host_namespace.buf : NULL);
     while (c->quit < 2)
         pthread_cond_wait(&c->cv, &c->mtx);
     context_destroy(c);
@@ -1175,6 +1177,7 @@ static VALUE context_alloc(VALUE klass)
     c->exception = Qnil;
     c->procs = rb_ary_new();
     buf_init(&c->snapshot);
+    buf_init(&c->host_namespace);
     buf_init(&c->req);
     buf_init(&c->res);
     cause = "pthread_condattr_init";
@@ -1293,6 +1296,7 @@ static void context_destroy(Context *c)
     pthread_mutex_destroy(&c->wd.mtx);
     pthread_cond_destroy(&c->wd.cv);
     buf_reset(&c->snapshot);
+    buf_reset(&c->host_namespace);
     buf_reset(&c->req);
     buf_reset(&c->res);
     ruby_xfree(c);
@@ -1650,6 +1654,20 @@ static VALUE context_initialize(int argc, VALUE *argv, VALUE self)
                 rb_raise(runtime_error, "out of memory");
         } else if (!strcmp(s, "verbose_exceptions")) {
             c->verbose_exceptions = !(v == Qfalse || v == Qnil);
+        } else if (!strcmp(s, "host_namespace")) {
+            const char *ns = NULL;
+            if (v == Qtrue) {
+                ns = "MiniRacer"; // default brand, like Deno's `Deno`
+            } else if (v != Qnil && v != Qfalse) {
+                Check_Type(v, T_STRING);
+                ns = StringValueCStr(v); // raises on embedded NUL
+            }
+            if (ns && *ns) {
+                // store the name plus its NUL terminator
+                buf_reset(&c->host_namespace);
+                if (buf_put(&c->host_namespace, ns, strlen(ns) + 1))
+                    rb_raise(runtime_error, "out of memory");
+            }
         } else {
             rb_raise(runtime_error, "bad keyword: %s", s);
         }
@@ -1657,7 +1675,8 @@ static VALUE context_initialize(int argc, VALUE *argv, VALUE self)
 init:
     if (single_threaded) {
         v8_once_init();
-        c->pst = v8_thread_init(c, c->snapshot.buf, c->snapshot.len, c->max_memory, c->verbose_exceptions);
+        c->pst = v8_thread_init(c, c->snapshot.buf, c->snapshot.len, c->max_memory, c->verbose_exceptions,
+                                c->host_namespace.len ? (const char *)c->host_namespace.buf : NULL);
     } else {
         cause = "pthread_attr_init";
         if ((r = pthread_attr_init(&attr)))

@@ -1,12 +1,12 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require "open3"
 require "rbconfig"
 require "tempfile"
+require "timeout"
 
 class MiniRacerSingleThreadedTest < Minitest::Test
-  def assert_single_threaded_script(script)
+  def assert_single_threaded_script(script, timeout: 60)
     skip "single-threaded V8 platform tests are only for CRuby" unless RUBY_ENGINE == "ruby"
 
     file = Tempfile.new(["mini_racer_single_threaded", ".rb"])
@@ -20,13 +20,28 @@ class MiniRacerSingleThreadedTest < Minitest::Test
     RUBY
     file.close
 
-    stdout, stderr, status = Open3.capture3(RbConfig.ruby, file.path)
+    # Run with a bounded wait and kill on timeout so a regression that
+    # deadlocks the single-threaded runner (e.g. a v8::Locker taken on the
+    # shared Ruby thread) fails deterministically instead of hanging the suite.
+    read, write = IO.pipe
+    pid = Process.spawn(RbConfig.ruby, file.path, out: write, err: write)
+    write.close
+    reader = Thread.new { read.read }
+
+    begin
+      _, status = Timeout.timeout(timeout) { Process.wait2(pid) }
+    rescue Timeout::Error
+      Process.kill("KILL", pid)
+      Process.wait(pid)
+      flunk "single-threaded script did not finish within #{timeout}s (possible deadlock):\n#{reader.value}"
+    end
+
+    output = reader.value
+    read.close
     assert status.success?, <<~MSG
       single-threaded script failed with status #{status.exitstatus}
-      stdout:
-      #{stdout}
-      stderr:
-      #{stderr}
+      output:
+      #{output}
     MSG
   ensure
     file&.unlink
@@ -134,6 +149,23 @@ class MiniRacerSingleThreadedTest < Minitest::Test
       end
       Process.wait(pid)
       raise "child failed" unless $?.success?
+    RUBY
+  end
+
+  def test_host_namespace_drain_microtasks
+    # The native checkpoint runs inline on the isolate thread and must not take
+    # a v8::Locker, which would deadlock when V8 shares the Ruby thread.
+    assert_single_threaded_script <<~'RUBY'
+      context = MiniRacer::Context.new(host_namespace: "MiniRacer")
+      order = context.eval(<<~JS)
+        const seen = [];
+        Promise.resolve().then(() => seen.push("microtask-fired"));
+        seen.push("before-drain");
+        MiniRacer.drainMicrotasks();
+        seen.push("after-drain");
+        seen;
+      JS
+      raise "bad drain order: #{order.inspect}" unless order == %w[before-drain microtask-fired after-drain]
     RUBY
   end
 end

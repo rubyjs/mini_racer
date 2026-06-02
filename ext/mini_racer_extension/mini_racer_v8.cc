@@ -314,9 +314,41 @@ void v8_gc_callback(v8::Isolate*, v8::GCType, v8::GCCallbackFlags, void *data)
     }
 }
 
+// Native, rendezvous-free microtask checkpoint. When the embedder opts in via
+// Context.new(host_namespace:), it is hung off the host namespace as
+// <namespace>.drainMicrotasks(). Unlike Context#perform_microtask_checkpoint
+// (dispatch tag 'M') this runs inline on the isolate thread and never
+// round-trips through the Ruby<->V8 rendezvous, so JS can drain the queue
+// mid-execution -- e.g. between synchronous dispatchEvent listeners -- for
+// ~sub-microsecond cost. It mirrors v8_perform_microtask_checkpoint but
+// without the reply, and deliberately leaves any termination active so the
+// enclosing v8_call/v8_eval frame surfaces OOM (v8_gc_callback) or watchdog
+// termination to Ruby.
+void v8_drain_microtasks_callback(const v8::FunctionCallbackInfo<v8::Value>& info)
+{
+    auto ext = v8::External::Cast(*info.Data());
+    State& st = *static_cast<State*>(ext->Value());
+    // Do *not* take a v8::Locker here: in single-threaded mode V8 already holds
+    // the isolate on this (the Ruby) thread, so locking would deadlock.
+    //
+    // An uncaught exception thrown by a drained microtask is routed by V8 to
+    // its message/unhandled-rejection handlers, not propagated out of
+    // PerformCheckpoint, so this TryCatch normally catches nothing; it exists
+    // only to mirror v8_perform_microtask_checkpoint and honor verbose_exceptions.
+    // It must not (and does not) clear a pending termination.
+    v8::TryCatch try_catch(st.isolate);
+    try_catch.SetVerbose(st.verbose_exceptions);
+    v8::HandleScope handle_scope(st.isolate);
+    // PerformCheckpoint is a guarded no-op when the microtask depth is > 0, so
+    // it is safe to call mid-execution and never force-nests microtask runs.
+    v8::MicrotasksScope::PerformCheckpoint(st.isolate);
+    info.GetReturnValue().SetUndefined();
+}
+
 extern "C" State *v8_thread_init(Context *c, const uint8_t *snapshot_buf,
                                  size_t snapshot_len, int64_t max_memory,
-                                 int verbose_exceptions)
+                                 int verbose_exceptions,
+                                 const char *host_namespace)
 {
     State *pst = new State{};
     State& st = *pst;
@@ -362,6 +394,31 @@ extern "C" State *v8_thread_init(Context *c, const uint8_t *snapshot_buf,
             // revoke access again now that the script did its one-time setup
             st.safe_context->UseDefaultSecurityToken();
             st.safe_context_function = v8::Local<v8::Function>::Cast(function_v);
+        }
+        // If the embedder opted in via Context.new(host_namespace:), install a
+        // single host-namespace object (in the spirit of Deno's `Deno` / Bun's
+        // `Bun`) under that global name and hang native helpers off it. The
+        // object closes over native code pointers so it cannot live in the
+        // (de)serialized snapshot; it is installed here on every fresh context.
+        // Both multi-threaded and single-threaded contexts (and snapshot-backed
+        // ones) reach this point exactly once via v8_thread_init, so this
+        // covers them all. The namespace is non-enumerable on globalThis so it
+        // stays out of Object.keys(globalThis)/for-in; its methods are ordinary
+        // enumerable properties so they remain discoverable on the object.
+        if (host_namespace && *host_namespace) {
+            v8::Local<v8::String> ns_name;
+            if (v8::String::NewFromUtf8(st.isolate, host_namespace).ToLocal(&ns_name)) {
+                auto ns = v8::Object::New(st.isolate);
+                auto data = v8::External::New(st.isolate, pst);
+                auto drain_name = v8::String::NewFromUtf8Literal(st.isolate, "drainMicrotasks");
+                auto drain =
+                    v8::Function::New(st.context, v8_drain_microtasks_callback, data)
+                    .ToLocalChecked();
+                ns->Set(st.context, drain_name, drain).Check();
+                st.context->Global()
+                    ->DefineOwnProperty(st.context, ns_name, ns, v8::DontEnum)
+                    .Check();
+            }
         }
         if (single_threaded) {
             st.persistent_safe_context_function.Reset(st.isolate, st.safe_context_function);

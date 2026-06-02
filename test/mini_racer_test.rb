@@ -1008,6 +1008,174 @@ class MiniRacerTest < Minitest::Test
     assert_equal(%w[before-drain microtask-fired after-drain], seen)
   end
 
+  # Creates a context with the host namespace installed, skipping on backends
+  # that do not implement it (V8/CRuby only, like perform_microtask_checkpoint).
+  def host_namespace_context(host_namespace: "MiniRacer", **options)
+    if RUBY_ENGINE == "truffleruby"
+      skip "host_namespace is only implemented on the V8 backend"
+    end
+    MiniRacer::Context.new(host_namespace: host_namespace, **options)
+  end
+
+  def test_host_namespace_not_installed_by_default
+    context = MiniRacer::Context.new
+
+    # Opt-in only: without host_namespace nothing is injected. (drainMicrotasks
+    # is the real method name; assert it never leaks as a bare global either.)
+    assert_equal("undefined", context.eval("typeof MiniRacer"))
+    assert_equal("undefined", context.eval("typeof drainMicrotasks"))
+  end
+
+  def test_host_namespace_false_or_empty_is_off
+    assert_equal("undefined", MiniRacer::Context.new(host_namespace: false).eval("typeof MiniRacer"))
+    assert_equal("undefined", MiniRacer::Context.new(host_namespace: "").eval("typeof MiniRacer"))
+  end
+
+  def test_host_namespace_rejects_invalid_type
+    # CRuby (C Check_Type) raises TypeError; TruffleRuby (shared.rb) raises
+    # ArgumentError. Accept either so the test is backend-portable.
+    assert_raises(TypeError, ArgumentError) do
+      MiniRacer::Context.new(host_namespace: 123)
+    end
+  end
+
+  def test_host_namespace_true_uses_default_name
+    context = host_namespace_context(host_namespace: true)
+    assert_equal("function", context.eval("typeof MiniRacer.drainMicrotasks"))
+  end
+
+  def test_host_namespace_accepts_a_custom_name
+    context = host_namespace_context(host_namespace: "App")
+
+    assert_equal("function", context.eval("typeof App.drainMicrotasks"))
+    assert_equal("undefined", context.eval("typeof MiniRacer"))
+  end
+
+  def test_host_namespace_is_non_enumerable_but_methods_are_discoverable
+    context = host_namespace_context
+
+    # The namespace object itself stays out of globalThis enumeration...
+    refute(context.eval("Object.keys(globalThis).includes('MiniRacer')"))
+    refute(context.eval("Object.getOwnPropertyDescriptor(globalThis, 'MiniRacer').enumerable"))
+    # ...but its methods are ordinary own properties, so they are discoverable.
+    assert_equal(%w[drainMicrotasks], context.eval("Object.keys(MiniRacer)"))
+  end
+
+  def test_host_namespace_drain_microtasks_inline
+    context = host_namespace_context
+
+    # Unlike perform_microtask_checkpoint, no Ruby callback round-trip is
+    # needed: JS drains the queue mid-execution by calling the native method.
+    order = context.eval(<<~JS)
+      const seen = [];
+      Promise.resolve().then(() => seen.push("microtask-fired"));
+      seen.push("before-drain");
+      MiniRacer.drainMicrotasks();
+      seen.push("after-drain");
+      seen;
+    JS
+
+    assert_equal(%w[before-drain microtask-fired after-drain], order)
+  end
+
+  def test_host_namespace_drain_microtasks_is_a_noop_when_nested
+    context = host_namespace_context
+
+    # Calling it from inside a running microtask (depth > 0) must be a guarded
+    # no-op that does not synchronously re-enter the queue. m1 enqueues m3 then
+    # drains; under a correct no-op m3 runs only after m1 returns, so "m1-end"
+    # precedes "m3". A re-entering (force-nesting) implementation would run m3
+    # inside m1 and yield "m3" before "m1-end".
+    order = context.eval(<<~JS)
+      const seen = [];
+      Promise.resolve().then(() => {
+        seen.push("m1-start");
+        Promise.resolve().then(() => seen.push("m3"));
+        MiniRacer.drainMicrotasks();
+        seen.push("m1-end");
+      });
+      MiniRacer.drainMicrotasks();
+      seen;
+    JS
+
+    assert_equal(%w[m1-start m1-end m3], order)
+  end
+
+  def test_host_namespace_drain_microtasks_does_not_propagate_microtask_exceptions
+    context = host_namespace_context
+
+    # An exception thrown by a drained microtask is routed to V8's handlers
+    # (as with perform_microtask_checkpoint), not propagated to the caller: the
+    # drain returns normally and the context stays usable.
+    order = context.eval(<<~JS)
+      const seen = [];
+      Promise.resolve().then(() => { throw new Error("boom"); });
+      seen.push("before");
+      MiniRacer.drainMicrotasks();
+      seen.push("after");
+      seen;
+    JS
+
+    assert_equal(%w[before after], order)
+    assert_equal(2, context.eval("1 + 1"))
+  end
+
+  def test_host_namespace_drain_microtasks_returns_undefined
+    context = host_namespace_context
+    assert_nil(context.eval("MiniRacer.drainMicrotasks()"))
+  end
+
+  def test_host_namespace_installed_on_snapshot_backed_context
+    snapshot = MiniRacer::Snapshot.new("var fromSnapshot = 42;")
+    context = host_namespace_context(snapshot: snapshot)
+
+    # The namespace closes over native pointers and is not part of the
+    # snapshot; it must be (re)installed on every fresh context.
+    assert_equal("function", context.eval("typeof MiniRacer.drainMicrotasks"))
+    assert_equal(42, context.eval("fromSnapshot"))
+  end
+
+  def test_host_namespace_drain_microtasks_surfaces_termination
+    context = host_namespace_context(timeout: 50)
+
+    # A runaway microtask drained here must let watchdog termination propagate
+    # to the enclosing eval. Asserting that the trailing statement did not run
+    # (rather than only that an error was raised) proves the termination came
+    # from the inline drain: were drainMicrotasks() a no-op, the kAuto
+    # checkpoint at script end would still terminate, but reached_after would
+    # already be true.
+    assert_raises(MiniRacer::ScriptTerminatedError) do
+      context.eval(<<~JS)
+        globalThis.reached_after = false;
+        Promise.resolve().then(() => { while (true) {} });
+        MiniRacer.drainMicrotasks();
+        globalThis.reached_after = true;
+      JS
+    end
+
+    refute(context.eval("globalThis.reached_after"))
+  end
+
+  def test_host_namespace_drain_microtasks_surfaces_out_of_memory
+    context = host_namespace_context(max_memory: 100_000_000)
+
+    # Same as above for the out-of-memory path (v8_gc_callback), which the
+    # README documents alongside watchdog termination.
+    assert_raises(MiniRacer::V8OutOfMemoryError) do
+      context.eval(<<~JS)
+        globalThis.reached_after = false;
+        Promise.resolve().then(() => {
+          let s = 1000, a = new Array(s); a.fill(0);
+          while (true) { s *= 1.1; let n = new Array(Math.floor(s)); n.fill(0); a = a.concat(n); }
+        });
+        MiniRacer.drainMicrotasks();
+        globalThis.reached_after = true;
+      JS
+    end
+
+    refute(context.eval("globalThis.reached_after"))
+  end
+
   def test_webassembly
     if RUBY_ENGINE == "truffleruby"
       skip "TruffleRuby does not enable WebAssembly by default"

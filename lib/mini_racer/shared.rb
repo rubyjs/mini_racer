@@ -99,10 +99,10 @@ module MiniRacer
       end
     end
 
-    def initialize(max_memory: nil, timeout: nil, isolate: nil, ensure_gc_after_idle: nil, snapshot: nil, marshal_stack_depth: nil)
+    def initialize(max_memory: nil, timeout: nil, isolate: nil, ensure_gc_after_idle: nil, snapshot: nil, marshal_stack_depth: nil, host_namespace: nil)
       options ||= {}
 
-      check_init_options!(isolate: isolate, snapshot: snapshot, max_memory: max_memory, marshal_stack_depth: marshal_stack_depth, ensure_gc_after_idle: ensure_gc_after_idle, timeout: timeout)
+      check_init_options!(isolate: isolate, snapshot: snapshot, max_memory: max_memory, marshal_stack_depth: marshal_stack_depth, ensure_gc_after_idle: ensure_gc_after_idle, timeout: timeout, host_namespace: host_namespace)
 
       @functions = {}
       @timeout = nil
@@ -310,7 +310,7 @@ module MiniRacer
       rp&.close
     end
 
-    def check_init_options!(isolate:, snapshot:, max_memory:, marshal_stack_depth:, ensure_gc_after_idle:, timeout:)
+    def check_init_options!(isolate:, snapshot:, max_memory:, marshal_stack_depth:, ensure_gc_after_idle:, timeout:, host_namespace:)
       assert_option_is_nil_or_a('isolate', isolate, Isolate)
       assert_option_is_nil_or_a('snapshot', snapshot, Snapshot)
 
@@ -318,6 +318,10 @@ module MiniRacer
       assert_numeric_or_nil('marshal_stack_depth', marshal_stack_depth, min_value: 1, max_value: MARSHAL_STACKDEPTH_MAX_VALUE)
       assert_numeric_or_nil('ensure_gc_after_idle', ensure_gc_after_idle, min_value: 1)
       assert_numeric_or_nil('timeout', timeout, min_value: 1)
+
+      unless host_namespace.nil? || host_namespace == true || host_namespace == false || host_namespace.is_a?(String)
+        raise ArgumentError, "host_namespace must be a String, true, false, or nil, passed a #{host_namespace.inspect}"
+      end
 
       if isolate && snapshot
         raise ArgumentError, 'can only pass one of isolate and snapshot options'
