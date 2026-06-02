@@ -1,4 +1,4 @@
-ARG RUBY_VERSION=3.2
+ARG RUBY_VERSION=4
 FROM ruby:${RUBY_VERSION}
 
 RUN test ! -f /etc/alpine-release || apk add --no-cache build-base git

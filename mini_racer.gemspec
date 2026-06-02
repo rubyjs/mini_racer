@@ -50,5 +50,5 @@ Gem::Specification.new do |spec|
     ext/mini_racer_extension/extconf.rb
   ]
 
-  spec.required_ruby_version = ">= 3.1"
+  spec.required_ruby_version = ">= 3.3"
 end
