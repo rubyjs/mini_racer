@@ -397,7 +397,7 @@ context.eval("log")
 # => ["before", "microtask", "after"]
 ```
 
-`host_namespace:` accepts a String (the global name to use), `true` (the default name `"MiniRacer"`), or `nil`/`false` (the default — inject nothing). The namespace object is defined non-enumerable so it does not appear in `Object.keys(globalThis)`, while its methods are ordinary properties discoverable via `Object.keys(MiniRacer)`. Like `perform_microtask_checkpoint`, `drainMicrotasks()` is a no-op while a microtask checkpoint is already in progress, and it lets watchdog/out-of-memory termination propagate to the enclosing `eval`/`call`. (The host namespace is V8-only; it is not installed on the TruffleRuby backend.)
+`host_namespace:` accepts a String (the global name to use — it must be a valid JavaScript identifier), `true` (the default name `"MiniRacer"`), or `nil`/`false` (the default — inject nothing). The namespace object is defined non-enumerable so it does not appear in `Object.keys(globalThis)`, while its methods are ordinary properties discoverable via `Object.keys(MiniRacer)`. Like `perform_microtask_checkpoint`, `drainMicrotasks()` is a no-op while a microtask checkpoint is already in progress, and it lets watchdog/out-of-memory termination propagate to the enclosing `eval`/`call`. (The host namespace is V8-only; it is not installed on the TruffleRuby backend.)
 
 ## Performance
 

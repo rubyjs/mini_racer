@@ -1663,6 +1663,18 @@ static VALUE context_initialize(int argc, VALUE *argv, VALUE self)
                 ns = StringValueCStr(v); // raises on embedded NUL
             }
             if (ns && *ns) {
+                // The name becomes a global, so require a valid (ASCII) JS
+                // identifier; otherwise it would only be reachable through
+                // globalThis["..."] rather than as `<name>.method()`.
+                for (const char *q = ns; *q; q++) {
+                    int ch = (unsigned char)*q;
+                    int ident_start = ch == '_' || ch == '$' ||
+                        (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+                    int ident_char = ident_start || (ch >= '0' && ch <= '9');
+                    if (!(q == ns ? ident_start : ident_char))
+                        rb_raise(rb_eArgError,
+                                 "host_namespace must be a valid identifier: %s", ns);
+                }
                 // store the name plus its NUL terminator
                 buf_reset(&c->host_namespace);
                 if (buf_put(&c->host_namespace, ns, strlen(ns) + 1))

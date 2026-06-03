@@ -1039,6 +1039,21 @@ class MiniRacerTest < Minitest::Test
     end
   end
 
+  def test_host_namespace_rejects_invalid_identifier
+    # Non-identifier names would only be reachable via globalThis["..."], not as
+    # `<name>.drainMicrotasks()`, so they are rejected up front.
+    ["foo-bar", "foo.bar", "123abc", "with space", "a/b"].each do |name|
+      assert_raises(ArgumentError) do
+        MiniRacer::Context.new(host_namespace: name)
+      end
+    end
+  end
+
+  def test_host_namespace_allows_identifier_punctuation
+    context = host_namespace_context(host_namespace: "$mr_2")
+    assert_equal("function", context.eval("typeof $mr_2.drainMicrotasks"))
+  end
+
   def test_host_namespace_true_uses_default_name
     context = host_namespace_context(host_namespace: true)
     assert_equal("function", context.eval("typeof MiniRacer.drainMicrotasks"))

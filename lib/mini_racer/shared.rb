@@ -323,6 +323,10 @@ module MiniRacer
         raise ArgumentError, "host_namespace must be a String, true, false, or nil, passed a #{host_namespace.inspect}"
       end
 
+      if host_namespace.is_a?(String) && !host_namespace.empty? && !host_namespace.match?(/\A[A-Za-z_$][A-Za-z0-9_$]*\z/)
+        raise ArgumentError, "host_namespace must be a valid identifier, passed #{host_namespace.inspect}"
+      end
+
       if isolate && snapshot
         raise ArgumentError, 'can only pass one of isolate and snapshot options'
       end
