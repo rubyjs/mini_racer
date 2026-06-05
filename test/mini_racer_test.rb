@@ -987,11 +987,17 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_perform_microtask_checkpoint_returns_nil
+    if RUBY_ENGINE == "truffleruby"
+      skip "TruffleRuby does not implement perform_microtask_checkpoint (V8-only)"
+    end
     context = MiniRacer::Context.new
     assert_nil(context.perform_microtask_checkpoint)
   end
 
   def test_perform_microtask_checkpoint_drains_from_callback
+    if RUBY_ENGINE == "truffleruby"
+      skip "TruffleRuby does not implement perform_microtask_checkpoint (V8-only)"
+    end
     context = MiniRacer::Context.new
     seen    = []
 
