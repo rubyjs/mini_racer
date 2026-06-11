@@ -118,6 +118,24 @@ module MiniRacer
       @js_symbol_to_symbol_func = eval_in_context "(x) => { var r = x.description; return r === undefined ? 'undefined' : r }"
       @js_new_date_func = eval_in_context "(x) => { return new Date(x) }"
       @js_new_array_func = eval_in_context "(x) => { return new Array(x) }"
+      # looks up a (dotted) function name as properties from globalThis,
+      # instead of evaluating the name as source code, so that names with
+      # embedded NUL bytes or other invalid syntax resolve correctly
+      @js_lookup_call_target_func = eval_in_context <<~JS
+        (name) => {
+          let target = globalThis;
+          for (const key of name.split(".")) {
+            if (target == null) {
+              throw new ReferenceError(name + " is not defined");
+            }
+            target = target[key];
+          }
+          if (target === undefined) {
+            throw new ReferenceError(name + " is not defined");
+          }
+          return target;
+        }
+      JS
       @js_new_uint8array_func = eval_in_context "(x) => { return new Uint8Array(x) }"
     end
 
@@ -174,7 +192,7 @@ module MiniRacer
       raise RuntimeError, "TruffleRuby does not support call after stop" if @stopped
       begin
         translate do
-          function = eval_in_context(function_name)
+          function = @js_lookup_call_target_func.call(convert_ruby_to_js(encode(function_name)))
           function.call(*convert_ruby_to_js(arguments))
         end
       rescue Polyglot::ForeignException => e
@@ -225,8 +243,11 @@ module MiniRacer
 
     def convert_js_to_ruby(value)
       case value
-      when true, false, Integer, Float
+      when true, false, Integer
         value
+      when Float
+        # match the C extension: integral doubles convert to Ruby Integers
+        value.finite? && value == value.truncate ? value.to_i : value
       else
         if value.nil?
           nil
@@ -370,6 +391,10 @@ module MiniRacer
   class Platform
     def self.set_flag_as_str!(flag)
       raise TypeError, "wrong type argument #{flag.class} (should be a string)" unless flag.is_a?(String)
+      raise ArgumentError, "flag contains NUL byte" if flag.include?("\0")
+      # the C extension normalizes flags into a 256 byte "--flag" buffer
+      normalized = flag.start_with?("--") ? flag : "--#{flag}"
+      raise ArgumentError, "flag too long" if normalized.bytesize >= 256
       raise MiniRacer::PlatformAlreadyInitialized, "The platform is already initialized." if Context.instance_variable_get(:@context_initialized)
       Context.instance_variable_set(:@use_strict, true) if "--use_strict" == flag
     end
