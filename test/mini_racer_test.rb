@@ -1228,6 +1228,25 @@ class MiniRacerTest < Minitest::Test
     end
   end
 
+  def test_large_javascript_numbers_do_not_wrap
+    context = MiniRacer::Context.new
+
+    {
+      "Number.MAX_SAFE_INTEGER" => 2**53 - 1,
+      "2**62" => 2**62,
+      "2**63" => 2**63,
+      "-(2**62) - 1024" => -(2**62) - 1024,
+    }.each do |source, expected|
+      result = context.eval(source)
+      assert_kind_of Integer, result
+      assert_equal expected, result
+    end
+
+    context.attach("allow_admin", proc { |uid| [uid, uid < 0] })
+    assert_equal [7, false], context.eval("allow_admin(7)")
+    assert_equal [2**62, false], context.eval("allow_admin(2**62)")
+  end
+
   def test_large_integer
     [10_000_000_001, -2**63, 2**63-1].each { |big_int|
       context = MiniRacer::Context.new

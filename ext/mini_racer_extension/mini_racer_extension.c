@@ -316,13 +316,19 @@ static void des_bool(void *arg, int v)
 
 static void des_int(void *arg, int64_t v)
 {
-    put(arg, LONG2FIX(v));
+    put(arg, LL2NUM((LONG_LONG)v));
 }
 
 static void des_num(void *arg, double v)
 {
-    if (isfinite(v) && v == trunc(v) && v >= INT64_MIN && v <= INT64_MAX) {
-        put(arg, LONG2FIX(v));
+    if (isfinite(v) && v == trunc(v)) {
+        // INT64_MAX is not exactly representable as a double: it rounds up to
+        // 2^63, which would let 2^63 through and make the cast undefined.
+        if (v >= -0x1p63 && v < 0x1p63) {
+            put(arg, LL2NUM((LONG_LONG)v));
+        } else {
+            put(arg, rb_dbl2big(v));
+        }
     } else {
         put(arg, DBL2NUM(v));
     }
