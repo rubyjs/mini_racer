@@ -226,6 +226,91 @@ class MiniRacerTest < Minitest::Test
     end
   end
 
+  def test_attached_exception_with_nul_message_does_not_deadlock_context
+    require "open3"
+    require "rbconfig"
+
+    script = <<~'RUBY'
+      $stdout.sync = true
+      $stderr.sync = true
+
+      Thread.new do
+        sleep 10
+        warn "child timed out"
+        exit!(99)
+      end
+
+      require "mini_racer"
+
+      NUL_PAYLOAD = "boom(\"a" + 0.chr + "b\")"
+
+      def assert_reusable(context, label)
+        thread = Thread.new { context.eval("40 + 2") }
+        unless thread.join(2)
+          warn "#{label} reuse eval blocked"
+          exit!(10)
+        end
+
+        result = thread.value
+        unless result == 42
+          warn "#{label} reuse eval returned #{result.inspect}"
+          exit!(11)
+        end
+      end
+
+      context = MiniRacer::Context.new
+      context.attach("boom", proc { |x| raise(ArgumentError, x) })
+      begin
+        context.eval(NUL_PAYLOAD)
+        warn "expected same-thread callback exception"
+        exit!(12)
+      rescue ArgumentError => e
+        unless e.message == "a\x00b"
+          warn "same-thread wrong exception message: #{e.message.inspect}"
+          exit!(13)
+        end
+      end
+      assert_reusable(context, "same-thread")
+
+      context = MiniRacer::Context.new
+      context.attach("boom", proc { |x| raise(ArgumentError, x) })
+      poison = Thread.new do
+        begin
+          context.eval(NUL_PAYLOAD)
+          ["no exception", nil]
+        rescue => e
+          [e.class.name, e.message]
+        end
+      end
+
+      unless poison.join(2)
+        warn "cross-thread poison eval blocked"
+        exit!(14)
+      end
+
+      unless poison.value == ["ArgumentError", "a\x00b"]
+        warn "cross-thread wrong exception: #{poison.value.inspect}"
+        exit!(15)
+      end
+      assert_reusable(context, "cross-thread")
+    RUBY
+
+    stdout, stderr, status = Open3.capture3(
+      RbConfig.ruby,
+      "-I#{File.expand_path("../lib", __dir__)}",
+      "-e",
+      script
+    )
+
+    assert status.success?, <<~MSG
+      NUL callback exception script failed with status #{status.exitstatus || "signal #{status.termsig}"}
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+  end
+
   def test_attached_on_object
     context = MiniRacer::Context.new
     context.eval "var minion"

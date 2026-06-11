@@ -988,9 +988,9 @@ fail:
     ser_init0(&s);   // ruby exception pending
     w_byte(&s, 'e'); // send ruby error message to v8 thread
     r = rb_funcall(c->exception, rb_intern("to_s"), 0);
-    err = StringValueCStr(r);
+    err = StringValuePtr(r);
     if (err)
-        w(&s, err, strlen(err));
+        w(&s, err, RSTRING_LEN(r));
     goto out;
 }
 
