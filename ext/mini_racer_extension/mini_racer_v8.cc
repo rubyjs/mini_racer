@@ -5,11 +5,12 @@
 #include <memory>
 #include <vector>
 #include <cassert>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <vector>
+#include <limits>
 
 // note: the filter function gets called inside the safe context,
 // i.e., the context that has not been tampered with by user JS
@@ -122,6 +123,106 @@ struct Serialized
         free(data);
     }
 };
+
+void append_bytes(std::vector<char>& out, const char *p, size_t n)
+{
+    out.insert(out.end(), p, p + n);
+}
+
+void append_literal(std::vector<char>& out, const char *s)
+{
+    append_bytes(out, s, strlen(s));
+}
+
+bool append_utf8(std::vector<char>& out, const v8::String::Utf8Value& s)
+{
+    if (!*s) return false;
+    append_bytes(out, *s, s.length());
+    return true;
+}
+
+void append_format(std::vector<char>& out, const char *fmt, ...)
+{
+    char buf[128];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n <= 0) return;
+    if (static_cast<size_t>(n) < sizeof(buf)) {
+        append_bytes(out, buf, n);
+        return;
+    }
+
+    std::vector<char> tmp(static_cast<size_t>(n) + 1);
+    va_start(ap, fmt);
+    vsnprintf(tmp.data(), tmp.size(), fmt, ap);
+    va_end(ap);
+    append_bytes(out, tmp.data(), n);
+}
+
+v8::Local<v8::String> string_from_bytes(v8::Isolate *isolate, const std::vector<char>& bytes)
+{
+    v8::Local<v8::String> s;
+    auto type = v8::NewStringType::kNormal;
+    if (bytes.size() <= static_cast<size_t>(std::numeric_limits<int>::max()) &&
+        v8::String::NewFromUtf8(isolate, bytes.data(), type,
+                                static_cast<int>(bytes.size())).ToLocal(&s)) {
+        return s;
+    }
+
+    char fallback[] = {
+        bytes.empty() ? static_cast<char>(INTERNAL_ERROR) : bytes[0],
+        'u', 'n', 'e', 'x', 'p', 'e', 'c', 't', 'e', 'd', ' ', 'e', 'r', 'r', 'o', 'r'
+    };
+    if (v8::String::NewFromUtf8(isolate, fallback, type, static_cast<int>(sizeof(fallback))).ToLocal(&s)) return s;
+    return v8::String::Empty(isolate);
+}
+
+void set_error_message(std::vector<char>& out, int cause, const char *message)
+{
+    out.clear();
+    out.push_back(static_cast<char>(cause));
+    append_literal(out, message);
+}
+
+bool set_error_message(std::vector<char>& out, int cause, const v8::String::Utf8Value& message)
+{
+    out.clear();
+    out.push_back(static_cast<char>(cause));
+    return append_utf8(out, message);
+}
+
+void set_fallback_error(State& st, v8::TryCatch *try_catch, int cause,
+                        std::vector<char>& out)
+{
+    v8::String::Utf8Value s(st.isolate, try_catch->Exception());
+    const char *message = *s ? nullptr : "unexpected failure";
+    if (cause == MEMORY_ERROR) message = "out of memory";
+    if (cause == TERMINATED_ERROR) message = "terminated";
+    if (message) {
+        set_error_message(out, cause, message);
+    } else if (!set_error_message(out, cause, s)) {
+        set_error_message(out, cause, "unexpected failure");
+    }
+}
+
+bool read_path_key(State& st, const char *&p, const char *pe,
+                   v8::Local<v8::String> *key, bool *last)
+{
+    const char *dot;
+    size_t n;
+
+    if (p > pe) return false;
+    dot = static_cast<const char*>(memchr(p, '.', pe - p));
+    *last = (dot == nullptr);
+    n = *last ? static_cast<size_t>(pe - p) : static_cast<size_t>(dot - p);
+    if (n > static_cast<size_t>(std::numeric_limits<int>::max())) return false;
+    auto type = v8::NewStringType::kNormal;
+    if (!v8::String::NewFromUtf8(st.isolate, p, type, static_cast<int>(n)).ToLocal(key)) return false;
+    p = *last ? pe : dot + 1;
+    return true;
+}
 
 bool bubble_up_ruby_exception(State& st, v8::TryCatch *try_catch)
 {
@@ -249,35 +350,40 @@ v8::Local<v8::Value> sanitize(State& st, v8::Local<v8::Value> v)
 
 v8::Local<v8::String> to_error(State& st, v8::TryCatch *try_catch, int cause)
 {
-    v8::Local<v8::Value> t;
-    char buf[1024];
+    std::vector<char> buf;
 
-    *buf = '\0';
     if (cause == NO_ERROR) {
-        // nothing to do
+        return v8::String::Empty(st.isolate);
     } else if (cause == PARSE_ERROR) {
         auto message = try_catch->Message();
         v8::String::Utf8Value s(st.isolate, message->Get());
         v8::String::Utf8Value name(st.isolate, message->GetScriptResourceName());
-        if (!*s || !*name) goto fallback;
-        auto line = message->GetLineNumber(st.context).FromMaybe(0);
-        auto column = message->GetStartColumn(st.context).FromMaybe(0);
-        snprintf(buf, sizeof(buf), "%c%s at %s:%d:%d", cause, *s, *name, line, column);
-    } else if (try_catch->StackTrace(st.context).ToLocal(&t)) {
-        v8::String::Utf8Value s(st.isolate, t);
-        if (!*s) goto fallback;
-        snprintf(buf, sizeof(buf), "%c%s", cause, *s);
+        if (*s && *name) {
+            buf.push_back(static_cast<char>(cause));
+            append_utf8(buf, s);
+            append_literal(buf, " at ");
+            append_utf8(buf, name);
+            auto line = message->GetLineNumber(st.context).FromMaybe(0);
+            auto column = message->GetStartColumn(st.context).FromMaybe(0);
+            append_format(buf, ":%d:%d", line, column);
+        } else {
+            set_fallback_error(st, try_catch, cause, buf);
+        }
     } else {
-    fallback:
-        v8::String::Utf8Value s(st.isolate, try_catch->Exception());
-        const char *message = *s ? *s : "unexpected failure";
-        if (cause == MEMORY_ERROR) message = "out of memory";
-        if (cause == TERMINATED_ERROR) message = "terminated";
-        snprintf(buf, sizeof(buf), "%c%s", cause, message);
+        v8::Local<v8::Value> t;
+        if (try_catch->StackTrace(st.context).ToLocal(&t)) {
+            v8::String::Utf8Value s(st.isolate, t);
+            if (*s) {
+                buf.push_back(static_cast<char>(cause));
+                append_utf8(buf, s);
+            } else {
+                set_fallback_error(st, try_catch, cause, buf);
+            }
+        } else {
+            set_fallback_error(st, try_catch, cause, buf);
+        }
     }
-    v8::Local<v8::String> s;
-    if (v8::String::NewFromUtf8(st.isolate, buf).ToLocal(&s)) return s;
-    return v8::String::Empty(st.isolate);
+    return string_from_bytes(st.isolate, buf);
 }
 
 extern "C" void v8_global_init(void)
@@ -445,23 +551,19 @@ extern "C" void v8_attach(State *pst, const uint8_t *p, size_t n)
         v8::Local<v8::String> name;
         if (!name_v->ToString(st.context).ToLocal(&name)) goto fail;
         int32_t id;
-        if (!id_v->Int32Value(st.context).To(&id)) goto fail;
-        Callback *cb = new Callback{pst, id};
-        st.callbacks.push_back(cb);
-        v8::Local<v8::External> ext = v8::External::New(st.isolate, cb);
-        v8::Local<v8::Function> function;
-        if (!v8::Function::New(st.context, v8_api_callback, ext).ToLocal(&function)) goto fail;
+        if (!id_v->IsInt32()) goto fail;
+        id = id_v.As<v8::Int32>()->Value();
         // support foo.bar.baz paths
         v8::String::Utf8Value path(st.isolate, name);
         if (!*path) goto fail;
+        const char *p = *path;
+        const char *pe = p + path.length();
         v8::Local<v8::Object> obj = st.context->Global();
         v8::Local<v8::String> key;
-        for (const char *p = *path;;) {
-            size_t n = strcspn(p, ".");
-            auto type = v8::NewStringType::kNormal;
-            if (!v8::String::NewFromUtf8(st.isolate, p, type, n).ToLocal(&key)) goto fail;
-            if (p[n] == '\0') break;
-            p += n + 1;
+        for (;;) {
+            bool last;
+            if (!read_path_key(st, p, pe, &key, &last)) goto fail;
+            if (last) break;
             v8::Local<v8::Value> val;
             if (!obj->Get(st.context, key).ToLocal(&val)) goto fail;
             if (!val->IsObject() && !val->IsFunction()) {
@@ -470,6 +572,11 @@ extern "C" void v8_attach(State *pst, const uint8_t *p, size_t n)
             }
             obj = val.As<v8::Object>();
         }
+        std::unique_ptr<Callback> cb(new Callback{pst, id});
+        v8::Local<v8::External> ext = v8::External::New(st.isolate, cb.get());
+        v8::Local<v8::Function> function;
+        if (!v8::Function::New(st.context, v8_api_callback, ext).ToLocal(&function)) goto fail;
+        st.callbacks.push_back(cb.release());
         if (!obj->Set(st.context, key, function).FromMaybe(false)) goto fail;
     }
     cause = NO_ERROR;
@@ -504,14 +611,14 @@ extern "C" void v8_call(State *pst, const uint8_t *p, size_t n)
         // support foo.bar.baz paths
         v8::String::Utf8Value path(st.isolate, name);
         if (!*path) goto fail;
+        const char *p = *path;
+        const char *pe = p + path.length();
         v8::Local<v8::Object> obj = st.context->Global();
         v8::Local<v8::String> key;
-        for (const char *p = *path;;) {
-            size_t n = strcspn(p, ".");
-            auto type = v8::NewStringType::kNormal;
-            if (!v8::String::NewFromUtf8(st.isolate, p, type, n).ToLocal(&key)) goto fail;
-            if (p[n] == '\0') break;
-            p += n + 1;
+        for (;;) {
+            bool last;
+            if (!read_path_key(st, p, pe, &key, &last)) goto fail;
+            if (last) break;
             v8::Local<v8::Value> val;
             if (!obj->Get(st.context, key).ToLocal(&val)) goto fail;
             if (!val->ToObject(st.context).ToLocal(&obj)) goto fail;
@@ -704,7 +811,7 @@ fail:
 int snapshot(bool is_warmup, bool verbose_exceptions,
              const v8::String::Utf8Value& code,
              v8::StartupData blob, v8::StartupData *result,
-             char (*errbuf)[512])
+             std::vector<char> *errbuf)
 {
     // SnapshotCreator takes ownership of isolate
     v8::Isolate *isolate = v8::Isolate::Allocate();
@@ -728,7 +835,8 @@ int snapshot(bool is_warmup, bool verbose_exceptions,
         auto type = v8::NewStringType::kNormal;
         if (!v8::String::NewFromUtf8(isolate, *code, type, code.length()).ToLocal(&source)) {
             v8::String::Utf8Value s(isolate, try_catch.Exception());
-            if (*s) snprintf(*errbuf, sizeof(*errbuf), "%c%s", cause, *s);
+            if (!set_error_message(*errbuf, cause, s))
+                set_error_message(*errbuf, cause, "unexpected failure");
             goto fail;
         }
         v8::ScriptOrigin origin(filename);
@@ -745,8 +853,16 @@ int snapshot(bool is_warmup, bool verbose_exceptions,
             v8::String::Utf8Value name(isolate, m->GetScriptResourceName());
             auto line = m->GetLineNumber(context).FromMaybe(0);
             auto column = m->GetStartColumn(context).FromMaybe(0);
-            snprintf(*errbuf, sizeof(*errbuf), "%c%s\n%s:%d:%d",
-                     cause, *s, *name, line, column);
+            if (*s && *name) {
+                errbuf->clear();
+                errbuf->push_back(static_cast<char>(cause));
+                append_utf8(*errbuf, s);
+                append_literal(*errbuf, "\n");
+                append_utf8(*errbuf, name);
+                append_format(*errbuf, ":%d:%d", line, column);
+            } else {
+                set_error_message(*errbuf, cause, "unexpected failure");
+            }
             goto fail;
         }
         cause = INTERNAL_ERROR;
@@ -777,7 +893,7 @@ extern "C" void v8_snapshot(State *pst, const uint8_t *p, size_t n)
     v8::Local<v8::Value> result;
     v8::StartupData blob{nullptr, 0};
     int cause = INTERNAL_ERROR;
-    char errbuf[512] = {0};
+    std::vector<char> errbuf;
     {
         v8::Local<v8::Value> code_v;
         if (!des.ReadValue(st.context).ToLocal(&code_v)) goto fail;
@@ -806,10 +922,8 @@ fail:
     if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
     if (cause) result = v8::Undefined(st.isolate);
     v8::Local<v8::Value> err;
-    if (*errbuf) {
-        if (!v8::String::NewFromUtf8(st.isolate, errbuf).ToLocal(&err)) {
-            err = v8::String::NewFromUtf8Literal(st.isolate, "unexpected error");
-        }
+    if (!errbuf.empty()) {
+        err = string_from_bytes(st.isolate, errbuf);
     } else {
         err = to_error(st, &try_catch, cause);
     }
@@ -831,7 +945,7 @@ extern "C" void v8_warmup(State *pst, const uint8_t *p, size_t n)
     v8::Local<v8::Value> result;
     v8::StartupData blob{nullptr, 0};
     int cause = INTERNAL_ERROR;
-    char errbuf[512] = {0};
+    std::vector<char> errbuf;
     {
         v8::Local<v8::Value> request_v;
         if (!des.ReadValue(st.context).ToLocal(&request_v)) goto fail;
@@ -878,10 +992,8 @@ fail:
     if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
     if (cause) result = v8::Undefined(st.isolate);
     v8::Local<v8::Value> err;
-    if (*errbuf) {
-        if (!v8::String::NewFromUtf8(st.isolate, errbuf).ToLocal(&err)) {
-            err = v8::String::NewFromUtf8Literal(st.isolate, "unexpected error");
-        }
+    if (!errbuf.empty()) {
+        err = string_from_bytes(st.isolate, errbuf);
     } else {
         err = to_error(st, &try_catch, cause);
     }
@@ -932,6 +1044,7 @@ State::~State()
     {
         v8::Locker locker(isolate);
         v8::Isolate::Scope isolate_scope(isolate);
+        persistent_safe_context_function.Reset();
         persistent_safe_context.Reset();
         persistent_context.Reset();
         ruby_exception.Reset();

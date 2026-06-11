@@ -311,6 +311,40 @@ class MiniRacerTest < Minitest::Test
     MSG
   end
 
+  def test_javascript_exception_with_nul_message_preserves_message
+    context = MiniRacer::Context.new
+
+    error = assert_raises(MiniRacer::RuntimeError) do
+      context.eval("throw new Error('a\\0b')")
+    end
+
+    assert_equal "Error: a\x00b", error.message
+    assert_equal 42, context.eval("40 + 2")
+  end
+
+  def test_snapshot_exception_with_nul_message_preserves_message
+    if RUBY_ENGINE == "truffleruby"
+      skip "TruffleRuby does not yet implement snapshots"
+    end
+
+    error = assert_raises(MiniRacer::SnapshotError) do
+      MiniRacer::Snapshot.new("throw new Error('a\\0b')")
+    end
+
+    assert_equal "Uncaught Error: a\x00b", error.message
+  end
+
+  def test_function_names_with_nul_bytes_are_not_truncated
+    context = MiniRacer::Context.new
+
+    context.attach("with_nul\x00suffix", proc { "attached" })
+    assert_equal "undefined", context.eval("typeof globalThis.with_nul")
+    assert_equal "attached", context.eval("globalThis['with_nul\\u0000suffix']()")
+
+    context.eval("globalThis['call_nul\\u0000suffix'] = function() { return 'called'; }")
+    assert_equal "called", context.call("call_nul\x00suffix")
+  end
+
   def test_attached_on_object
     context = MiniRacer::Context.new
     context.eval "var minion"
@@ -723,6 +757,54 @@ class MiniRacerTest < Minitest::Test
     assert_raises(MiniRacer::PlatformAlreadyInitialized) do
       MiniRacer::Platform.set_flags! :noconcurrent_recompilation
     end
+  end
+
+  def test_platform_set_flags_rejects_nul_bytes
+    require "open3"
+    require "rbconfig"
+
+    script = <<~'RUBY'
+      require "mini_racer"
+      begin
+        MiniRacer::Platform.set_flags!("--use-strict\0--single-threaded")
+      rescue ArgumentError => e
+        exit!(e.message.include?("NUL") ? 0 : 2)
+      end
+      exit!(1)
+    RUBY
+
+    _stdout, stderr, status = Open3.capture3(
+      RbConfig.ruby,
+      "-I#{File.expand_path("../lib", __dir__)}",
+      "-e",
+      script
+    )
+
+    assert status.success?, "expected NUL flag rejection, got status #{status.exitstatus}: #{stderr}"
+  end
+
+  def test_platform_set_flags_rejects_overly_long_flags
+    require "open3"
+    require "rbconfig"
+
+    script = <<~'RUBY'
+      require "mini_racer"
+      begin
+        MiniRacer::Platform.set_flags!("--" + "x" * 300)
+      rescue ArgumentError => e
+        exit!(e.message.include?("too long") ? 0 : 2)
+      end
+      exit!(1)
+    RUBY
+
+    _stdout, stderr, status = Open3.capture3(
+      RbConfig.ruby,
+      "-I#{File.expand_path("../lib", __dir__)}",
+      "-e",
+      script
+    )
+
+    assert status.success?, "expected long flag rejection, got status #{status.exitstatus}: #{stderr}"
   end
 
   def test_platform_set_flags_works
@@ -1333,7 +1415,7 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_large_integer
-    [10_000_000_001, -2**63, 2**63-1].each { |big_int|
+    [10_000_000_001, -(2**62), -2**63, 2**63-1].each { |big_int|
       context = MiniRacer::Context.new
       context.attach("test", proc { big_int })
       result = context.eval("test()")

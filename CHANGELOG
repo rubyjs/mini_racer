@@ -3,6 +3,7 @@
   - Fix native memory leaks in `Context#heap_snapshot`/`Context#write_heap_snapshot`; thanks to Pranjali Thakur from depthfirst.com
   - Fix large integral JavaScript numbers wrapping to negative Ruby integers; thanks to Pranjali Thakur from depthfirst.com
   - Fix Ruby callback exceptions with embedded NUL bytes permanently deadlocking a context; thanks to Pranjali Thakur from depthfirst.com
+  - Preserve embedded NUL bytes in JavaScript exception messages and attached function names, and reject unsafe V8 flags containing NUL bytes or overly long values
 
 - 0.21.1 - 25-05-2026
   - Run `:single_threaded` V8 dispatches on a reusable mini_racer-owned native thread so V8 does not execute on Ruby-owned threads

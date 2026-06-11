@@ -370,19 +370,8 @@ static void des_bigint(void *arg, const void *p, size_t n, int sign)
     if (t >> 63)
         *a++ = 0; // suppress sign extension
     v = rb_big_unpack(limbs, a-limbs);
-    if (sign < 0) {
-        // rb_big_unpack returns T_FIXNUM for smallish bignums
-        switch (TYPE(v)) {
-        case T_BIGNUM:
-            v = rb_big_mul(v, LONG2FIX(-1));
-            break;
-        case T_FIXNUM:
-            v = LONG2FIX(-1 * FIX2LONG(v));
-            break;
-        default:
-            abort();
-        }
-    }
+    if (sign < 0)
+        v = rb_funcall(v, rb_intern("-@"), 0);
     put(c, v);
 }
 
@@ -943,6 +932,7 @@ static VALUE rendezvous_callback_do(VALUE arg)
     Context *c;
     DesCtx d;
     Buf *b;
+    long id;
 
     a = (void *)arg;
     b = a->res;
@@ -952,7 +942,12 @@ static VALUE rendezvous_callback_do(VALUE arg)
     DesCtx_init(&d);
     args = deserialize1(&d, b->buf+1, b->len-1); // skip 'c' marker
     func = rb_ary_pop(args); // callback id
-    func = rb_ary_entry(c->procs, FIX2LONG(func));
+    if (!RB_INTEGER_TYPE_P(func))
+        rb_raise(runtime_error, "bad callback id");
+    id = NUM2LONG(func);
+    if (id < 0 || id >= RARRAY_LEN(c->procs))
+        rb_raise(runtime_error, "bad callback id");
+    func = rb_ary_entry(c->procs, id);
     return rb_funcall2(func, rb_intern("call"), RARRAY_LENINT(args), RARRAY_PTR(args));
 }
 
@@ -1122,16 +1117,35 @@ static VALUE rendezvous(Context *c, Buf *req)
     return rendezvous1(c, req, &d);
 }
 
-static void handle_exception(VALUE e)
+static void raise_exception_with_message(VALUE klass, VALUE e)
 {
-    const char *s;
-    VALUE klass;
+    long n;
+    VALUE message;
 
     if (NIL_P(e))
         return;
     e = StringValue(e);
-    s = StringValueCStr(e);
-    switch (*s) {
+    n = RSTRING_LEN(e);
+    if (n == 0 || RSTRING_PTR(e)[0] == NO_ERROR)
+        return;
+    message = rb_str_subseq(e, 1, n - 1);
+    rb_exc_raise(rb_exc_new_str(klass, message));
+}
+
+static void handle_exception(VALUE e)
+{
+    const char *s;
+    VALUE klass;
+    long n;
+
+    if (NIL_P(e))
+        return;
+    e = StringValue(e);
+    n = RSTRING_LEN(e);
+    if (n == 0)
+        return;
+    s = RSTRING_PTR(e);
+    switch ((unsigned char)*s) {
     case NO_ERROR:
         return;
     case INTERNAL_ERROR:
@@ -1150,9 +1164,9 @@ static void handle_exception(VALUE e)
         klass = terminated_error;
         break;
     default:
-        rb_raise(internal_error, "bad error class %02x", *s);
+        rb_raise(internal_error, "bad error class %02x", (unsigned char)*s);
     }
-    rb_enc_raise(rb_enc_get(e), klass, "%s", s+1);
+    raise_exception_with_message(klass, e);
 }
 
 static VALUE context_alloc(VALUE klass)
@@ -1324,13 +1338,17 @@ static VALUE context_attach(VALUE self, VALUE name, VALUE proc)
     Context *c;
     VALUE e;
     Ser s;
+    long id;
 
     TypedData_Get_Struct(self, Context, &context_type, c);
+    id = RARRAY_LEN(c->procs);
+    if (id > INT32_MAX)
+        rb_raise(runtime_error, "too many callbacks");
     // request is (A)ttach, [name, id] array
     ser_init1(&s, 'A');
     ser_array_begin(&s, 2);
     add_string(&s, name);
-    ser_int(&s, RARRAY_LENINT(c->procs));
+    ser_int(&s, id);
     ser_array_end(&s, 2);
     rb_ary_push(c->procs, proc);
     // response is an exception or undefined
@@ -1528,7 +1546,8 @@ static VALUE context_low_memory_notification(VALUE self)
 
 static int platform_set_flag1(VALUE k, VALUE v)
 {
-    char *p, *q, buf[256];
+    char *p, *q, *r, buf[256];
+    long pn, vn, len;
     int ok;
 
     k = rb_funcall(k, rb_intern("to_s"), 0);
@@ -1538,12 +1557,40 @@ static int platform_set_flag1(VALUE k, VALUE v)
         Check_Type(v, T_STRING);
     }
     p = RSTRING_PTR(k);
-    if (!strncmp(p, "--", 2))
+    pn = RSTRING_LEN(k);
+    if (memchr(p, '\0', pn))
+        rb_raise(rb_eArgError, "flag contains NUL byte");
+    if (pn >= 2 && p[0] == '-' && p[1] == '-') {
         p += 2;
+        pn -= 2;
+    }
     if (NIL_P(v)) {
-        snprintf(buf, sizeof(buf), "--%s", p);
+        len = 2 + pn;
+        if (len >= (long)sizeof(buf))
+            rb_raise(rb_eArgError, "flag too long");
+        q = buf;
+        *q++ = '-';
+        *q++ = '-';
+        memcpy(q, p, pn);
+        q += pn;
+        *q = '\0';
     } else {
-        snprintf(buf, sizeof(buf), "--%s=%s", p, RSTRING_PTR(v));
+        q = RSTRING_PTR(v);
+        vn = RSTRING_LEN(v);
+        if (memchr(q, '\0', vn))
+            rb_raise(rb_eArgError, "flag contains NUL byte");
+        len = 3 + pn + vn;
+        if (len >= (long)sizeof(buf))
+            rb_raise(rb_eArgError, "flag too long");
+        r = buf;
+        *r++ = '-';
+        *r++ = '-';
+        memcpy(r, p, pn);
+        r += pn;
+        *r++ = '=';
+        memcpy(r, q, vn);
+        r += vn;
+        *r = '\0';
     }
     p = buf;
     pthread_mutex_lock(&flags_mtx);
@@ -1756,8 +1803,7 @@ static VALUE snapshot_initialize(int argc, VALUE *argv, VALUE self)
     a = rendezvous1(c, &s.b, &d);
     e = rb_ary_pop(a);
     context_dispose(cv);
-    if (*RSTRING_PTR(e))
-        rb_raise(snapshot_error, "%s", RSTRING_PTR(e)+1);
+    raise_exception_with_message(snapshot_error, e);
     ss->blob = rb_ary_pop(a);
     return Qnil;
 }
@@ -1787,8 +1833,7 @@ static VALUE snapshot_warmup(VALUE self, VALUE arg)
     a = rendezvous1(c, &s.b, &d);
     e = rb_ary_pop(a);
     context_dispose(cv);
-    if (*RSTRING_PTR(e))
-        rb_raise(snapshot_error, "%s", RSTRING_PTR(e)+1);
+    raise_exception_with_message(snapshot_error, e);
     ss->blob = rb_ary_pop(a);
     return self;
 }

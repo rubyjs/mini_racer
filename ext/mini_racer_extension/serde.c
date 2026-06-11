@@ -278,7 +278,7 @@ static void ser_int(Ser *s, int64_t v)
         if (v > INT64_MIN/1024)
             if (v <= INT64_MAX/1024)
                 return ser_num(s, v);
-        t = v < 0 ? -v : v;
+        t = v < 0 ? (uint64_t)(-(v + 1)) + 1 : (uint64_t)v;
         sign = v < 0 ? -1 : 1;
         ser_bigint(s, &t, sizeof(t), sign);
     } else {
