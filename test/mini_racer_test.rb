@@ -1337,6 +1337,7 @@ class MiniRacerTest < Minitest::Test
   def test_dates_from_active_support
     require "active_support"
     require "active_support/time"
+    ActiveSupport.to_time_preserves_timezone = :zone
     begin
       Time.zone = "UTC"
     rescue TZInfo::DataSourceNotFound
