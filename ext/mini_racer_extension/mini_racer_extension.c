@@ -1458,6 +1458,20 @@ static VALUE context_heap_stats(VALUE self)
     return h;
 }
 
+static VALUE buf_reset_ensure(VALUE arg)
+{
+    buf_reset((Buf *)arg);
+    return Qnil;
+}
+
+static VALUE heap_snapshot_to_str(VALUE arg)
+{
+    Buf *res;
+
+    res = (Buf *)arg;
+    return rb_utf8_str_new((char *)res->buf, res->len);
+}
+
 static VALUE context_heap_snapshot(VALUE self)
 {
     Buf req, res;
@@ -1467,7 +1481,8 @@ static VALUE context_heap_snapshot(VALUE self)
     buf_init(&req);
     buf_putc(&req, 'H');              // (H)eap snapshot, returns plain bytes
     rendezvous_no_des(c, &req, &res); // takes ownership of |req|
-    return rb_utf8_str_new((char *)res.buf, res.len);
+    return rb_ensure(heap_snapshot_to_str, (VALUE)&res,
+                     buf_reset_ensure, (VALUE)&res);
 }
 
 static VALUE context_perform_microtask_checkpoint(VALUE self)
@@ -1501,6 +1516,7 @@ static VALUE context_low_memory_notification(VALUE self)
     buf_init(&req);
     buf_putc(&req, 'L');              // (L)ow memory notification, returns nothing
     rendezvous_no_des(c, &req, &res); // takes ownership of |req|
+    buf_reset(&res);
     return Qnil;
 }
 

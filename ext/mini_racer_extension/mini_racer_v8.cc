@@ -659,6 +659,7 @@ extern "C" void v8_heap_snapshot(State *pst)
     auto snapshot = st.isolate->GetHeapProfiler()->TakeHeapSnapshot();
     OutputStream os;
     snapshot->Serialize(&os, v8::HeapSnapshot::kJSON);
+    const_cast<v8::HeapSnapshot*>(snapshot)->Delete();
     v8_reply(st.ruby_context, os.buf.data(), os.buf.size()); // not serialized because big
 }
 
