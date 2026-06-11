@@ -1,4 +1,4 @@
-- (Unreleased)
+- 0.21.2 - 11-06-2026
   - Add `Context#perform_microtask_checkpoint` to synchronously drain the V8 microtask queue, useful for spec-compliant `dispatchEvent` sequencing inside Ruby callbacks
   - Fix native memory leaks in `Context#heap_snapshot`/`Context#write_heap_snapshot`; thanks to Pranjali Thakur from depthfirst.com
   - Fix large integral JavaScript numbers wrapping to negative Ruby integers; thanks to Pranjali Thakur from depthfirst.com
