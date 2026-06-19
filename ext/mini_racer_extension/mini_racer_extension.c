@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <errno.h>
+#include <time.h>
 #include <math.h>
 
 #if defined(__linux__) && !defined(__GLIBC__)
@@ -191,6 +192,7 @@ static const rb_data_type_t snapshot_type = {
 
 static VALUE platform_init_error;
 static VALUE context_disposed_error;
+static VALUE pause_timeout_error;
 static VALUE parse_error;
 static VALUE memory_error;
 static VALUE script_error;
@@ -206,6 +208,219 @@ static VALUE js_function_class;
 
 static pthread_mutex_t flags_mtx = PTHREAD_MUTEX_INITIALIZER;
 static Buf flags; // protected by |flags_mtx|
+
+#if defined(__GNUC__) || defined(__clang__)
+static __thread int mini_racer_operation_depth;
+#else
+static _Thread_local int mini_racer_operation_depth;
+#endif
+
+#ifndef __APPLE__
+#define MINI_RACER_PAUSE_CLOCK CLOCK_MONOTONIC
+#else
+#define MINI_RACER_PAUSE_CLOCK CLOCK_REALTIME
+#endif
+
+#define MINI_RACER_MAX_PAUSE_TIMEOUT (10.0 * 365.0 * 24.0 * 60.0 * 60.0)
+
+typedef struct MiniRacerPauseState
+{
+    pthread_mutex_t mtx;
+    pthread_cond_t cv;
+    atomic_int pause_depth;
+    atomic_int active;
+    atomic_long pid;
+} MiniRacerPauseState;
+
+static MiniRacerPauseState pause_state = {
+    .mtx = PTHREAD_MUTEX_INITIALIZER,
+    .pause_depth = 0,
+    .active = 0,
+};
+
+struct mini_racer_gate_wait
+{
+    atomic_int cancel;
+    int *counted;
+};
+
+struct mini_racer_pause_wait
+{
+    atomic_int cancel;
+    int timed;
+    int active;
+    struct timespec deadline;
+};
+
+static void mini_racer_pause_state_init(int reset_mutex)
+{
+    pthread_condattr_t cattr;
+
+    if (reset_mutex) {
+        // Forked children inherit the bytes of parent pthread mutexes/conds,
+        // but not the parent threads that may have owned or waited on them.
+        // POSIX is not kind to reinitializing an already-initialized object;
+        // this mirrors Ruby's pragmatic atfork approach and avoids touching
+        // parent-owned synchronization state in the child.
+        pthread_mutex_init(&pause_state.mtx, NULL);
+    }
+    pthread_condattr_init(&cattr);
+#ifndef __APPLE__
+    pthread_condattr_setclock(&cattr, MINI_RACER_PAUSE_CLOCK);
+#endif
+    pthread_cond_init(&pause_state.cv, &cattr);
+    pthread_condattr_destroy(&cattr);
+    atomic_store(&pause_state.pause_depth, 0);
+    atomic_store(&pause_state.active, 0);
+    atomic_store(&pause_state.pid, (long)getpid());
+    mini_racer_operation_depth = 0;
+}
+
+static inline void mini_racer_pause_recover_after_fork(void)
+{
+    if (atomic_load(&pause_state.pid) != (long)getpid())
+        mini_racer_pause_state_init(1);
+}
+
+static void mini_racer_pause_wakeup_all(void)
+{
+    mini_racer_pause_recover_after_fork();
+    pthread_mutex_lock(&pause_state.mtx);
+    pthread_cond_broadcast(&pause_state.cv);
+    pthread_mutex_unlock(&pause_state.mtx);
+}
+
+static void mini_racer_timespec_from_timeout(struct timespec *ts, double timeout)
+{
+    double seconds;
+    long nsec;
+
+    clock_gettime(MINI_RACER_PAUSE_CLOCK, ts);
+    nsec = (long)(modf(timeout, &seconds) * 1000000000.0);
+    ts->tv_sec += (time_t)seconds;
+    ts->tv_nsec += nsec;
+    if (ts->tv_nsec >= 1000000000L) {
+        ts->tv_sec++;
+        ts->tv_nsec -= 1000000000L;
+    }
+}
+
+static const char *mini_racer_error_message(int r)
+{
+    if (r == ECANCELED)
+        return "MiniRacer operation was interrupted or canceled";
+    return strerror(r);
+}
+
+static int mini_racer_operation_wait_unpaused(atomic_int *cancel, atomic_int *interrupted)
+{
+    int r;
+
+    if ((r = pthread_mutex_lock(&pause_state.mtx)))
+        return r;
+    while (atomic_load(&pause_state.pause_depth) > 0 &&
+           !atomic_load(cancel) &&
+           !(interrupted && atomic_load(interrupted))) {
+        if ((r = pthread_cond_wait(&pause_state.cv, &pause_state.mtx))) {
+            pthread_mutex_unlock(&pause_state.mtx);
+            return r;
+        }
+    }
+    pthread_mutex_unlock(&pause_state.mtx);
+    if (atomic_load(cancel))
+        return ECANCELED;
+    if (interrupted && atomic_load(interrupted))
+        return EINTR;
+    return 0;
+}
+
+static void mini_racer_active_decrement(void)
+{
+    if (atomic_fetch_sub(&pause_state.active, 1) == 1 &&
+        atomic_load(&pause_state.pause_depth) > 0) {
+        pthread_mutex_lock(&pause_state.mtx);
+        pthread_cond_broadcast(&pause_state.cv);
+        pthread_mutex_unlock(&pause_state.mtx);
+    }
+}
+
+static int mini_racer_operation_enter_nogvl(atomic_int *cancel, atomic_int *interrupted, int *counted)
+{
+    int r;
+
+    *counted = 0;
+    if (mini_racer_operation_depth > 0) {
+        mini_racer_operation_depth++;
+        return 0;
+    }
+
+    mini_racer_pause_recover_after_fork();
+    for (;;) {
+        if (atomic_load(cancel))
+            return ECANCELED;
+        if (interrupted && atomic_load(interrupted))
+            return EINTR;
+        if (atomic_load(&pause_state.pause_depth) == 0) {
+            atomic_fetch_add(&pause_state.active, 1);
+            if (atomic_load(&pause_state.pause_depth) == 0) {
+                mini_racer_operation_depth = 1;
+                *counted = 1;
+                return 0;
+            }
+            mini_racer_active_decrement();
+        }
+        if ((r = mini_racer_operation_wait_unpaused(cancel, interrupted)))
+            return r;
+    }
+}
+
+static void mini_racer_operation_leave_nogvl(int counted)
+{
+    if (mini_racer_operation_depth > 0)
+        mini_racer_operation_depth--;
+    if (!counted || mini_racer_operation_depth > 0)
+        return;
+
+    mini_racer_pause_recover_after_fork();
+    mini_racer_active_decrement();
+}
+
+static void *mini_racer_operation_enter_nogvl_entry(void *arg)
+{
+    struct mini_racer_gate_wait *w;
+    int r;
+
+    w = arg;
+    r = mini_racer_operation_enter_nogvl(&w->cancel, NULL, w->counted);
+    return (void *)(intptr_t)r;
+}
+
+static void mini_racer_gate_wait_ubf(void *arg)
+{
+    struct mini_racer_gate_wait *w;
+
+    w = arg;
+    atomic_store(&w->cancel, 1);
+    mini_racer_pause_wakeup_all();
+}
+
+static int mini_racer_operation_enter_gvl(int *counted)
+{
+    struct mini_racer_gate_wait w;
+    void *r;
+
+    atomic_init(&w.cancel, 0);
+    *counted = 0;
+    w.counted = counted;
+    r = rb_nogvl(mini_racer_operation_enter_nogvl_entry, &w,
+                 mini_racer_gate_wait_ubf, &w, 0);
+    return (int)(intptr_t)r;
+}
+
+static void mini_racer_operation_leave_gvl(int counted)
+{
+    mini_racer_operation_leave_nogvl(counted);
+}
 
 // arg == &(struct rendezvous_nogvl){...}
 static void *rendezvous_callback(void *arg);
@@ -233,7 +448,8 @@ struct rendezvous_nogvl
     Buf *req, *res;
     atomic_int active;
     atomic_int interrupted;
-    int started, finished, has_rr_mtx;
+    atomic_int cancel;
+    int started, finished, has_rr_mtx, operation_entered, counted;
 };
 
 struct rendezvous_des
@@ -1062,6 +1278,11 @@ static int single_threaded_recover_after_fork(Context *c)
 #ifndef __APPLE__
     pthread_condattr_setclock(&cattr, CLOCK_MONOTONIC);
 #endif
+    // In a forked child, the runner thread and any waiters from the parent no
+    // longer exist. Reinitialize the inherited condition variable in place
+    // rather than destroying it; this is technically outside POSIX's happy path
+    // for already-initialized condvars, but it avoids touching parent-owned
+    // waiter state and matches Ruby's pragmatic atfork reset style.
     r = pthread_cond_init(&c->cv, &cattr);
     pthread_condattr_destroy(&cattr);
     if (r)
@@ -1093,12 +1314,17 @@ static void rendezvous_release(struct rendezvous_nogvl *a)
     Context *c;
 
     atomic_store(&a->active, 0);
-    if (!a->has_rr_mtx)
-        return;
-    c = a->context;
-    c->depth--;
-    a->has_rr_mtx = 0;
-    pthread_mutex_unlock(&c->rr_mtx);
+    if (a->has_rr_mtx) {
+        c = a->context;
+        c->depth--;
+        a->has_rr_mtx = 0;
+        pthread_mutex_unlock(&c->rr_mtx);
+    }
+    if (a->operation_entered) {
+        mini_racer_operation_leave_nogvl(a->counted);
+        a->operation_entered = 0;
+        a->counted = 0;
+    }
 }
 
 static inline void *rendezvous_nogvl(void *arg)
@@ -1109,10 +1335,22 @@ static inline void *rendezvous_nogvl(void *arg)
 
     a = arg;
     c = a->context;
-    if (!a->started) {
-        if (single_threaded && (r = single_threaded_recover_after_fork(c)))
+    if (!a->operation_entered) {
+        if ((r = mini_racer_operation_enter_nogvl(&a->cancel, &a->interrupted, &a->counted)))
             return (void *)(intptr_t)r;
+        a->operation_entered = 1;
+    }
+    if (!a->started) {
+        if (single_threaded && (r = single_threaded_recover_after_fork(c))) {
+            rendezvous_release(a);
+            return (void *)(intptr_t)r;
+        }
         pthread_mutex_lock(&c->rr_mtx);
+        if (atomic_load(&a->cancel)) {
+            pthread_mutex_unlock(&c->rr_mtx);
+            rendezvous_release(a);
+            return (void *)(intptr_t)ECANCELED;
+        }
         a->has_rr_mtx = 1;
         if (c->depth > 0 && c->depth%50 == 0) { // TODO stop steep recursion
             fprintf(stderr, "mini_racer: deep js->ruby->js recursion, depth=%d\n", c->depth);
@@ -1125,7 +1363,7 @@ static inline void *rendezvous_nogvl(void *arg)
 next:
     atomic_store(&a->active, 1);
     pthread_mutex_lock(&c->mtx);
-    if (atomic_load(&c->quit)) {
+    if (atomic_load(&c->quit) || atomic_load(&a->cancel)) {
         buf_reset(a->req);
         pthread_mutex_unlock(&c->mtx);
         a->finished = 1;
@@ -1148,14 +1386,18 @@ next:
         }
         pthread_cond_signal(&c->cv);
     }
-    while (!c->res_ready && !atomic_load(&a->interrupted) && !atomic_load(&c->quit))
+    while (!c->res_ready &&
+           !atomic_load(&a->interrupted) &&
+           !atomic_load(&a->cancel) &&
+           !atomic_load(&c->quit)) {
         pthread_cond_wait(&c->cv, &c->mtx);
+    }
     if (!c->res_ready && atomic_load(&a->interrupted)) {
         atomic_store(&a->active, 0);
         pthread_mutex_unlock(&c->mtx);
         return (void *)(intptr_t)EINTR;
     }
-    if (!c->res_ready && atomic_load(&c->quit)) {
+    if (!c->res_ready && (atomic_load(&c->quit) || atomic_load(&a->cancel))) {
         buf_reset(a->req);
         pthread_mutex_unlock(&c->mtx);
         a->finished = 1;
@@ -1170,7 +1412,7 @@ next:
     if (*a->res->buf == 'c') { // js -> ruby callback?
         rb_thread_call_with_gvl(rendezvous_callback, a);
         buf_reset(a->res);
-        if (atomic_load(&c->quit)) {
+        if (atomic_load(&c->quit) || atomic_load(&a->cancel)) {
             buf_reset(a->req);
             a->finished = 1;
             rendezvous_release(a);
@@ -1189,18 +1431,30 @@ static void rendezvous_ubf(void *arg)
     Context *c;
 
     a = arg;
+    atomic_store(&a->interrupted, 1);
+    mini_racer_pause_wakeup_all();
     if (!atomic_load(&a->active))
         return;
-    atomic_store(&a->interrupted, 1);
     c = a->context;
     pthread_cond_broadcast(&c->cv);
 }
 
+struct context_dispose_wait
+{
+    Context *context;
+    atomic_int cancel;
+    int counted;
+};
+
 static void terminate_ubf(void *arg)
 {
+    struct context_dispose_wait *a;
     Context *c;
 
-    c = arg;
+    a = arg;
+    atomic_store(&a->cancel, 1);
+    mini_racer_pause_wakeup_all();
+    c = a->context;
     if (c->pst)
         v8_terminate_execution(c->pst);
     pthread_cond_broadcast(&c->cv);
@@ -1215,6 +1469,8 @@ static void *rendezvous_cancel_nogvl(void *arg)
     Context *c;
 
     a = arg;
+    atomic_store(&a->cancel, 1);
+    mini_racer_pause_wakeup_all();
     c = a->context;
     atomic_store(&a->active, 0);
     if (c->pst)
@@ -1293,16 +1549,19 @@ static void rendezvous_no_des(Context *c, Buf *req, Buf *res)
     a.res = res;
     atomic_init(&a.active, 0);
     atomic_init(&a.interrupted, 0);
+    atomic_init(&a.cancel, 0);
     a.started = 0;
     a.finished = 0;
     a.has_rr_mtx = 0;
+    a.operation_entered = 0;
+    a.counted = 0;
     rv = rb_ensure(rendezvous_no_des_body, (VALUE)&a,
                    rendezvous_no_des_ensure, (VALUE)&a);
     r = (void *)(intptr_t)NUM2LONG(rv);
     if ((int)(intptr_t)r == ECANCELED)
         rb_raise(context_disposed_error, "disposed context");
     if (r)
-        rb_raise(runtime_error, "single-threaded runner: %s", strerror((int)(intptr_t)r));
+        rb_raise(runtime_error, "MiniRacer operation: %s", mini_racer_error_message((int)(intptr_t)r));
 }
 
 // send request to & receive reply from v8 thread; takes ownership of |req|
@@ -1586,30 +1845,50 @@ static VALUE context_attach(VALUE self, VALUE name, VALUE proc)
 
 static void *context_dispose_do(void *arg)
 {
+    struct context_dispose_wait *a;
     Context *c;
+    void *ret;
     int r;
 
-    c = arg;
+    a = arg;
+    c = a->context;
+    ret = NULL;
+    if ((r = mini_racer_operation_enter_nogvl(&a->cancel, NULL, &a->counted)))
+        return (void *)(intptr_t)r;
     if (single_threaded) {
-        if ((r = single_threaded_recover_after_fork(c)))
-            return (void *)(intptr_t)r;
+        if ((r = single_threaded_recover_after_fork(c))) {
+            ret = (void *)(intptr_t)r;
+            goto out;
+        }
+    }
+    if (atomic_load(&a->cancel)) {
+        ret = (void *)(intptr_t)ECANCELED;
+        goto out;
     }
     if (c->depth > 0) {
         r = pthread_mutex_trylock(&c->rr_mtx);
         if (!r) {
             pthread_mutex_unlock(&c->rr_mtx);
-            return (void *)(intptr_t)EBUSY;
+            ret = (void *)(intptr_t)EBUSY;
+            goto out;
         }
-        if (r != EBUSY)
-            return (void *)(intptr_t)r;
+        if (r != EBUSY) {
+            ret = (void *)(intptr_t)r;
+            goto out;
+        }
         if (c->pst)
             v8_terminate_execution(c->pst);
         pthread_cond_broadcast(&c->cv);
     }
     if (single_threaded) {
         pthread_mutex_lock(&c->mtx);
-        while (c->req.len || c->res.len)
+        while ((c->req.len || c->res.len) && !atomic_load(&a->cancel))
             pthread_cond_wait(&c->cv, &c->mtx);
+        if (atomic_load(&a->cancel)) {
+            pthread_mutex_unlock(&c->mtx);
+            ret = (void *)(intptr_t)ECANCELED;
+            goto out;
+        }
         atomic_store(&c->quit, 1);   // disposed
         if (c->single_threaded_thr_started && c->single_threaded_pid == getpid()) {
             pthread_cond_signal(&c->cv);
@@ -1621,24 +1900,35 @@ static void *context_dispose_do(void *arg)
         pthread_mutex_unlock(&c->mtx);
     } else {
         pthread_mutex_lock(&c->mtx);
-        while (c->req.len || c->res.len)
+        while ((c->req.len || c->res.len) && !atomic_load(&a->cancel))
             pthread_cond_wait(&c->cv, &c->mtx);
+        if (atomic_load(&a->cancel)) {
+            pthread_mutex_unlock(&c->mtx);
+            ret = (void *)(intptr_t)ECANCELED;
+            goto out;
+        }
         atomic_store(&c->quit, 1);   // disposed
         pthread_cond_signal(&c->cv); // wake up v8 thread
         pthread_mutex_unlock(&c->mtx);
     }
-    return NULL;
+out:
+    mini_racer_operation_leave_nogvl(a->counted);
+    return ret;
 }
 
 static VALUE context_dispose(VALUE self)
 {
     Context *c;
+    struct context_dispose_wait a;
     void *r;
 
     TypedData_Get_Struct(self, Context, &context_type, c);
-    r = rb_thread_call_without_gvl(context_dispose_do, c, terminate_ubf, c);
+    a.context = c;
+    a.counted = 0;
+    atomic_init(&a.cancel, 0);
+    r = rb_thread_call_without_gvl(context_dispose_do, &a, terminate_ubf, &a);
     if (r)
-        rb_raise(runtime_error, "context dispose: %s", strerror((int)(intptr_t)r));
+        rb_raise(runtime_error, "context dispose: %s", mini_racer_error_message((int)(intptr_t)r));
     return Qnil;
 }
 
@@ -1897,6 +2187,141 @@ fail:
     rb_raise(platform_init_error, "platform already initialized");
 }
 
+static void *mini_racer_pause_nogvl(void *arg)
+{
+    struct mini_racer_pause_wait *w;
+    int r;
+
+    w = arg;
+    mini_racer_pause_recover_after_fork();
+    if ((r = pthread_mutex_lock(&pause_state.mtx)))
+        return (void *)(intptr_t)r;
+    atomic_fetch_add(&pause_state.pause_depth, 1);
+    for (;;) {
+        if (atomic_load(&w->cancel)) {
+            r = ECANCELED;
+            goto fail;
+        }
+        if (atomic_load(&pause_state.active) == 0) {
+            pthread_mutex_unlock(&pause_state.mtx);
+            return NULL;
+        }
+        if (w->timed) {
+            r = pthread_cond_timedwait(&pause_state.cv, &pause_state.mtx, &w->deadline);
+            if (r == ETIMEDOUT && atomic_load(&pause_state.active) == 0)
+                continue;
+            if (r)
+                goto fail;
+        } else if ((r = pthread_cond_wait(&pause_state.cv, &pause_state.mtx))) {
+            goto fail;
+        }
+    }
+fail:
+    w->active = atomic_load(&pause_state.active);
+    if (atomic_fetch_sub(&pause_state.pause_depth, 1) == 1)
+        pthread_cond_broadcast(&pause_state.cv);
+    pthread_mutex_unlock(&pause_state.mtx);
+    return (void *)(intptr_t)r;
+}
+
+static void mini_racer_pause_ubf(void *arg)
+{
+    struct mini_racer_pause_wait *w;
+
+    w = arg;
+    atomic_store(&w->cancel, 1);
+    mini_racer_pause_wakeup_all();
+}
+
+static double mini_racer_parse_pause_timeout(int argc, VALUE *argv, int *timed)
+{
+    VALUE kwargs, vals[1];
+    ID keys[1];
+    double timeout;
+
+    rb_scan_args(argc, argv, ":", &kwargs);
+    *timed = 0;
+    if (NIL_P(kwargs))
+        return 0;
+    keys[0] = rb_intern("timeout");
+    rb_get_kwargs(kwargs, keys, 0, 1, vals);
+    if (vals[0] == Qundef || NIL_P(vals[0]))
+        return 0;
+    if (!RTEST(rb_obj_is_kind_of(vals[0], rb_cNumeric)))
+        rb_raise(rb_eArgError, "timeout must be a number");
+    timeout = NUM2DBL(vals[0]);
+    if (!isfinite(timeout) || timeout < 0 || timeout > MINI_RACER_MAX_PAUSE_TIMEOUT)
+        rb_raise(rb_eArgError, "timeout must be a finite number between 0 and 10 years");
+    *timed = 1;
+    return timeout;
+}
+
+static VALUE mini_racer_resume(VALUE self);
+
+static VALUE mini_racer_pause_yield(VALUE arg)
+{
+    (void)arg;
+    return rb_yield(Qnil);
+}
+
+static VALUE mini_racer_pause_ensure_resume(VALUE self)
+{
+    int status;
+
+    rb_protect(mini_racer_resume, self, &status);
+    if (status)
+        rb_set_errinfo(Qnil);
+    return Qnil;
+}
+
+static VALUE mini_racer_pause(int argc, VALUE *argv, VALUE self)
+{
+    struct mini_racer_pause_wait w;
+    double timeout;
+    void *r;
+
+    if (mini_racer_operation_depth > 0)
+        rb_raise(runtime_error, "cannot pause MiniRacer from inside an active MiniRacer operation");
+
+    timeout = mini_racer_parse_pause_timeout(argc, argv, &w.timed);
+    atomic_init(&w.cancel, 0);
+    w.active = 0;
+    if (w.timed)
+        mini_racer_timespec_from_timeout(&w.deadline, timeout);
+    r = rb_nogvl(mini_racer_pause_nogvl, &w, mini_racer_pause_ubf, &w, 0);
+    if (r) {
+        if ((int)(intptr_t)r == ETIMEDOUT)
+            rb_raise(pause_timeout_error, "MiniRacer.pause timed out waiting for %d active operation%s",
+                     w.active, w.active == 1 ? "" : "s");
+        rb_raise(runtime_error, "MiniRacer.pause: %s", mini_racer_error_message((int)(intptr_t)r));
+    }
+    if (rb_block_given_p())
+        return rb_ensure(mini_racer_pause_yield, Qnil, mini_racer_pause_ensure_resume, self);
+    return Qtrue;
+}
+
+static VALUE mini_racer_resume(VALUE self)
+{
+    int depth, empty;
+
+    (void)self;
+    if (atomic_load(&pause_state.pid) != (long)getpid()) {
+        mini_racer_pause_state_init(1);
+        return Qnil;
+    }
+    pthread_mutex_lock(&pause_state.mtx);
+    depth = atomic_load(&pause_state.pause_depth);
+    if (depth <= 0) {
+        pthread_mutex_unlock(&pause_state.mtx);
+        rb_raise(runtime_error, "MiniRacer.resume called without a matching pause");
+    }
+    empty = (atomic_fetch_sub(&pause_state.pause_depth, 1) == 1);
+    if (empty)
+        pthread_cond_broadcast(&pause_state.cv);
+    pthread_mutex_unlock(&pause_state.mtx);
+    return Qnil;
+}
+
 // called by v8_global_init; caller must free |*p| with free()
 void v8_get_flags(char **p, size_t *n)
 {
@@ -1919,16 +2344,68 @@ out:
         rb_thread_lock_native_thread();
 }
 
-static VALUE context_initialize(int argc, VALUE *argv, VALUE self)
+struct context_initialize_args
 {
-    VALUE kwargs, a, k, v;
+    Context *context;
+    int counted;
+};
+
+static VALUE context_initialize_do(VALUE arg)
+{
+    struct context_initialize_args *a;
     pthread_attr_t attr;
     const char *cause;
     pthread_t thr;
+    Context *c;
+    int r;
+
+    a = (struct context_initialize_args *)arg;
+    c = a->context;
+
+    cause = "MiniRacer operation";
+    if ((r = mini_racer_operation_enter_gvl(&a->counted)))
+        goto fail;
+    if (single_threaded) {
+        v8_once_init();
+        c->pst = v8_thread_init(c, c->snapshot.buf, c->snapshot.len, c->max_memory, c->verbose_exceptions);
+    } else {
+        cause = "pthread_attr_init";
+        if ((r = pthread_attr_init(&attr)))
+            goto fail;
+        pthread_attr_setstacksize(&attr, 2<<20); // 2 MiB
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        // v8 thread takes ownership of |c|
+        cause = "pthread_create";
+        r = pthread_create(&thr, &attr, v8_thread_start, c);
+        pthread_attr_destroy(&attr);
+        if (r)
+            goto fail;
+        barrier_wait(&c->early_init);
+        barrier_wait(&c->late_init);
+    }
+    return Qnil;
+fail:
+    rb_raise(runtime_error, "Context.initialize: %s: %s", cause, mini_racer_error_message(r));
+    return Qnil; // pacify compiler
+}
+
+static VALUE context_initialize_ensure(VALUE arg)
+{
+    struct context_initialize_args *a;
+
+    a = (struct context_initialize_args *)arg;
+    if (a->counted)
+        mini_racer_operation_leave_gvl(a->counted);
+    return Qnil;
+}
+
+static VALUE context_initialize(int argc, VALUE *argv, VALUE self)
+{
+    VALUE kwargs, a, k, v;
+    struct context_initialize_args init_args;
     Snapshot *ss;
     Context *c;
     char *s;
-    int r;
 
     TypedData_Get_Struct(self, Context, &context_type, c);
     rb_scan_args(argc, argv, ":", &kwargs);
@@ -1971,28 +2448,10 @@ static VALUE context_initialize(int argc, VALUE *argv, VALUE self)
         }
     }
 init:
-    if (single_threaded) {
-        v8_once_init();
-        c->pst = v8_thread_init(c, c->snapshot.buf, c->snapshot.len, c->max_memory, c->verbose_exceptions);
-    } else {
-        cause = "pthread_attr_init";
-        if ((r = pthread_attr_init(&attr)))
-            goto fail;
-        pthread_attr_setstacksize(&attr, 2<<20); // 2 MiB
-        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-        // v8 thread takes ownership of |c|
-        cause = "pthread_create";
-        r = pthread_create(&thr, &attr, v8_thread_start, c);
-        pthread_attr_destroy(&attr);
-        if (r)
-            goto fail;
-        barrier_wait(&c->early_init);
-        barrier_wait(&c->late_init);
-    }
-    return Qnil;
-fail:
-    rb_raise(runtime_error, "Context.initialize: %s: %s", cause, strerror(r));
-    return Qnil; // pacify compiler
+    init_args.context = c;
+    init_args.counted = 0;
+    return rb_ensure(context_initialize_do, (VALUE)&init_args,
+                     context_initialize_ensure, (VALUE)&init_args);
 }
 
 static VALUE snapshot_alloc(VALUE klass)
@@ -2126,10 +2585,15 @@ void Init_mini_racer_extension(void)
     VALUE c, m;
 
     m = rb_define_module("MiniRacer");
+    mini_racer_pause_state_init(0);
     c = rb_define_class_under(m, "Error", rb_eStandardError);
     snapshot_error = rb_define_class_under(m, "SnapshotError", c);
     platform_init_error = rb_define_class_under(m, "PlatformAlreadyInitialized", c);
     context_disposed_error = rb_define_class_under(m, "ContextDisposedError", c);
+    pause_timeout_error = rb_define_class_under(m, "PauseTimeoutError", c);
+
+    rb_define_singleton_method(m, "pause", mini_racer_pause, -1);
+    rb_define_singleton_method(m, "resume", mini_racer_resume, 0);
 
     c = rb_define_class_under(m, "EvalError", c);
     parse_error = rb_define_class_under(m, "ParseError", c);

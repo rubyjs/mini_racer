@@ -9,6 +9,7 @@
   - Avoid finalizer hangs when a forked child garbage-collects a non-idle inherited `:single_threaded` context
   - Allow Ruby thread interrupts, process shutdown, and cross-thread `Context#dispose` to terminate busy `:single_threaded` JavaScript execution instead of hanging
   - Make `Context#dispose` while an attached Ruby callback is active either terminate safely or raise instead of deadlocking
+  - Add `MiniRacer.pause(timeout:)` / `MiniRacer.resume` to quiesce MiniRacer globally, plus opt-in fork hooks built on that pause gate
 
 - 0.21.2 - 11-06-2026
   - Add `Context#perform_microtask_checkpoint` to synchronously drain the V8 microtask queue, useful for spec-compliant `dispatchEvent` sequencing inside Ruby callbacks
