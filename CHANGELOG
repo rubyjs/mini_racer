@@ -1,3 +1,10 @@
+- 0.21.3 - 18-06-2026
+  - Fix `:single_threaded` contexts inherited across `fork` by recovering idle reusable native runners in the child process without falling back to per-dispatch native thread spawning
+  - Avoid intermittent heap corruption during `:single_threaded` context finalization, especially when forked children exit normally after touching inherited contexts
+  - Avoid finalizer hangs when a forked child garbage-collects a non-idle inherited `:single_threaded` context
+  - Allow Ruby thread interrupts, process shutdown, and cross-thread `Context#dispose` to terminate busy `:single_threaded` JavaScript execution instead of hanging
+  - Make `Context#dispose` while an attached Ruby callback is active either terminate safely or raise instead of deadlocking
+
 - 0.21.2 - 11-06-2026
   - Add `Context#perform_microtask_checkpoint` to synchronously drain the V8 microtask queue, useful for spec-compliant `dispatchEvent` sequencing inside Ruby callbacks
   - Fix native memory leaks in `Context#heap_snapshot`/`Context#write_heap_snapshot`; thanks to Pranjali Thakur from depthfirst.com

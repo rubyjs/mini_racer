@@ -395,7 +395,7 @@ class MiniRacerTest < Minitest::Test
 
     # check that marshalling to JS creates a date object (getTime())
     assert_equal(
-      (test_time.to_f * 1000).to_i,
+      test_time.tv_sec * 1000 + test_time.tv_usec / 1000,
       context.eval("var result = test(); result.getTime();").to_i
     )
 
@@ -433,7 +433,7 @@ class MiniRacerTest < Minitest::Test
       context.attach("test", proc { test_time })
 
       assert_equal(
-        (test_time.to_f * 1000).to_i,
+        test_time.tv_sec * 1000 + test_time.tv_usec / 1000,
         context.eval("var result = test(); result.getTime();").to_i
       )
 
@@ -1263,6 +1263,66 @@ class MiniRacerTest < Minitest::Test
   def test_threading_safety
     Thread.new { MiniRacer::Context.new.eval("100") }.join
     GC.start
+  end
+
+  def test_thread_kill_waiting_thread_does_not_terminate_active_eval
+    context = MiniRacer::Context.new
+    old_report_on_exception = Thread.report_on_exception
+    Thread.report_on_exception = false
+    terminated = false
+
+    active = Thread.new do
+      begin
+        context.eval("while (true) {}")
+      rescue MiniRacer::ScriptTerminatedError
+        terminated = true
+      end
+    end
+    sleep 0.1
+
+    waiter = Thread.new { context.eval("1 + 1") rescue nil }
+    sleep 0.1
+    waiter.kill
+    sleep 0.2
+    assert_equal false, terminated
+
+    context.stop
+    assert active.join(3), "active thread did not stop"
+    assert waiter.join(3), "waiting thread did not stop"
+  ensure
+    Thread.report_on_exception = old_report_on_exception unless old_report_on_exception.nil?
+  end
+
+  def test_dispose_while_callback_is_running
+    context = MiniRacer::Context.new
+    started_r, started_w = IO.pipe
+    release_r, release_w = IO.pipe
+    old_report_on_exception = Thread.report_on_exception
+    Thread.report_on_exception = false
+
+    context.attach("block", proc do
+      started_w.write("x")
+      started_w.flush
+      release_r.read(1)
+      42
+    end)
+
+    eval_thread = Thread.new do
+      context.eval("block()")
+    rescue MiniRacer::RuntimeError
+    end
+
+    started_r.read(1)
+    dispose_thread = Thread.new { context.dispose }
+    sleep 0.1
+    release_w.write("x")
+    release_w.flush
+
+    assert eval_thread.join(3), "eval thread did not finish"
+    assert dispose_thread.join(3), "dispose thread did not finish"
+  ensure
+    Thread.report_on_exception = old_report_on_exception unless old_report_on_exception.nil?
+    [started_r, started_w, release_r, release_w].each { |io| io&.close rescue nil }
   end
 
   def test_forking

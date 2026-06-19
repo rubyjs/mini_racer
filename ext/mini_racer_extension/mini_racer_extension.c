@@ -5,6 +5,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <errno.h>
 #include <math.h>
 
 #if defined(__linux__) && !defined(__GLIBC__)
@@ -159,6 +160,7 @@ typedef struct Snapshot {
 } Snapshot;
 
 static void context_destroy(Context *c);
+static void context_abandon(Context *c);
 static void context_free(void *arg);
 static void context_mark(void *arg);
 static size_t context_size(const void *arg);
@@ -227,6 +229,7 @@ struct rendezvous_nogvl
 {
     Context *context;
     Buf *req, *res;
+    atomic_int active;
 };
 
 struct rendezvous_des
@@ -870,8 +873,14 @@ void v8_roundtrip(Context *c, const uint8_t **p, size_t *n)
 {
     buf_reset(&c->req);
     pthread_cond_signal(&c->cv);
-    while (!c->req.len)
+    while (!c->req.len && !atomic_load(&c->quit))
         pthread_cond_wait(&c->cv, &c->mtx);
+    if (!c->req.len && atomic_load(&c->quit)) {
+        static const uint8_t disposed[] = "edisposed context";
+        *p = disposed;
+        *n = sizeof(disposed) - 1;
+        return;
+    }
     buf_reset(&c->res);
     *p = c->req.buf;
     *n = c->req.len;
@@ -1007,6 +1016,33 @@ static void *single_threaded_runner(void *arg)
     return NULL;
 }
 
+static int single_threaded_recover_after_fork(Context *c)
+{
+    pthread_condattr_t cattr;
+    pid_t pid;
+    int r;
+
+    pid = getpid();
+    if (!c->single_threaded_thr_started || c->single_threaded_pid == pid)
+        return 0;
+    if (c->depth || c->req.len || c->res.len)
+        return EBUSY;
+
+    if ((r = pthread_condattr_init(&cattr)))
+        return r;
+#ifndef __APPLE__
+    pthread_condattr_setclock(&cattr, CLOCK_MONOTONIC);
+#endif
+    r = pthread_cond_init(&c->cv, &cattr);
+    pthread_condattr_destroy(&cattr);
+    if (r)
+        return r;
+
+    c->single_threaded_thr_started = 0;
+    c->single_threaded_pid = pid;
+    return 0;
+}
+
 static int single_threaded_runner_start(Context *c)
 {
     pid_t pid;
@@ -1031,7 +1067,10 @@ static inline void *rendezvous_nogvl(void *arg)
 
     a = arg;
     c = a->context;
+    if (single_threaded && (r = single_threaded_recover_after_fork(c)))
+        return (void *)(intptr_t)r;
     pthread_mutex_lock(&c->rr_mtx);
+    atomic_store(&a->active, 1);
     if (c->depth > 0 && c->depth%50 == 0) { // TODO stop steep recursion
         fprintf(stderr, "mini_racer: deep js->ruby->js recursion, depth=%d\n", c->depth);
         fflush(stderr);
@@ -1039,6 +1078,14 @@ static inline void *rendezvous_nogvl(void *arg)
     c->depth++;
 next:
     pthread_mutex_lock(&c->mtx);
+    if (atomic_load(&c->quit)) {
+        buf_reset(a->req);
+        pthread_mutex_unlock(&c->mtx);
+        c->depth--;
+        atomic_store(&a->active, 0);
+        pthread_mutex_unlock(&c->rr_mtx);
+        return (void *)(intptr_t)ECANCELED;
+    }
     assert(c->req.len == 0);
     assert(c->res.len == 0);
     buf_move(a->req, &c->req); // v8 thread takes ownership of req
@@ -1048,6 +1095,7 @@ next:
             buf_move(&c->req, a->req);
             pthread_mutex_unlock(&c->mtx);
             c->depth--;
+            atomic_store(&a->active, 0);
             pthread_mutex_unlock(&c->rr_mtx);
             return (void *)(intptr_t)r;
         }
@@ -1058,29 +1106,66 @@ next:
         do pthread_cond_wait(&c->cv, &c->mtx); while (!c->res.len);
     }
     buf_move(&c->res, a->res);
+    pthread_cond_broadcast(&c->cv);
     pthread_mutex_unlock(&c->mtx);
     if (*a->res->buf == 'c') { // js -> ruby callback?
         rb_thread_call_with_gvl(rendezvous_callback, a);
         buf_reset(a->res);
+        if (atomic_load(&c->quit)) {
+            buf_reset(a->req);
+            c->depth--;
+            atomic_store(&a->active, 0);
+            pthread_mutex_unlock(&c->rr_mtx);
+            return (void *)(intptr_t)ECANCELED;
+        }
         goto next;
     }
     c->depth--;
+    atomic_store(&a->active, 0);
     pthread_mutex_unlock(&c->rr_mtx);
     return NULL;
+}
+
+static void rendezvous_ubf(void *arg)
+{
+    struct rendezvous_nogvl *a;
+    Context *c;
+
+    a = arg;
+    if (!atomic_load(&a->active))
+        return;
+    c = a->context;
+    if (c->pst)
+        v8_terminate_execution(c->pst);
+    pthread_cond_broadcast(&c->cv);
+}
+
+static void terminate_ubf(void *arg)
+{
+    Context *c;
+
+    c = arg;
+    if (c->pst)
+        v8_terminate_execution(c->pst);
+    pthread_cond_broadcast(&c->cv);
 }
 
 static void rendezvous_no_des(Context *c, Buf *req, Buf *res)
 {
     void *r;
+    struct rendezvous_nogvl a;
 
     if (atomic_load(&c->quit)) {
         buf_reset(req);
         rb_raise(context_disposed_error, "disposed context");
     }
-    r = rb_nogvl(rendezvous_nogvl, &(struct rendezvous_nogvl){c, req, res},
-                 NULL, NULL, 0);
+    a.context = c;
+    a.req = req;
+    a.res = res;
+    atomic_init(&a.active, 0);
+    r = rb_nogvl(rendezvous_nogvl, &a, rendezvous_ubf, &a, 0);
     if (r)
-        rb_raise(runtime_error, "pthread_create: %s", strerror((int)(intptr_t)r));
+        rb_raise(runtime_error, "single-threaded runner: %s", strerror((int)(intptr_t)r));
 }
 
 // send request to & receive reply from v8 thread; takes ownership of |req|
@@ -1096,7 +1181,8 @@ static VALUE rendezvous1(Context *c, Buf *req, DesCtx *d)
     c->exception = Qnil;
     // if js land didn't handle exception from ruby callback, re-raise it now
     if (res.len == 1 && *res.buf == 'e') {
-        assert(!NIL_P(r));
+        if (NIL_P(r))
+            rb_raise(context_disposed_error, "disposed context");
         rb_exc_raise(r);
     }
     r = rb_protect(deserialize, (VALUE)&(struct rendezvous_des){d, &res}, &exc);
@@ -1251,11 +1337,19 @@ fail0:
     return Qnil; // pacify compiler
 }
 
-static void *context_free_thread_do(void *arg)
+static void *context_free_do(void *arg)
 {
     Context *c;
 
     c = arg;
+    if (single_threaded && single_threaded_recover_after_fork(c)) {
+        // The child forked while this inherited context was not idle. There is
+        // no live runner thread to join and the inherited V8/pthread state is
+        // not safe to tear down. A finalizer must not hang here; let the OS
+        // reclaim the abandoned V8 state when the child exits.
+        context_abandon(c);
+        return NULL;
+    }
     if (single_threaded && c->single_threaded_thr_started && c->single_threaded_pid == getpid()) {
         pthread_mutex_lock(&c->mtx);
         atomic_store(&c->quit, 2);
@@ -1270,37 +1364,30 @@ static void *context_free_thread_do(void *arg)
     return NULL;
 }
 
-static void context_free_thread(Context *c)
-{
-    pthread_t thr;
-    int r;
-
-    // dispose on another thread so we don't block when trying to
-    // enter an isolate that's in a stuck state; that *should* be
-    // impossible but apparently it happened regularly before the
-    // rewrite and I'm carrying it over out of an abundance of caution
-    if ((r = pthread_create(&thr, NULL, context_free_thread_do, c))) {
-        fprintf(stderr, "mini_racer: pthread_create: %s", strerror(r));
-        fflush(stderr);
-        context_free_thread_do(c);
-    } else {
-        pthread_detach(thr);
-    }
-}
-
 static void context_free(void *arg)
 {
     Context *c;
 
     c = arg;
     if (single_threaded) {
-        context_free_thread(c);
+        // Free synchronously. A detached cleanup thread can race normal Ruby
+        // process shutdown and trip glibc malloc corruption checks while V8 is
+        // tearing down single-threaded contexts.
+        context_free_do(c);
     } else {
         pthread_mutex_lock(&c->mtx);
         c->quit = 2; // 2 = v8 thread frees
         pthread_cond_signal(&c->cv);
         pthread_mutex_unlock(&c->mtx);
     }
+}
+
+static void context_abandon(Context *c)
+{
+    buf_reset(&c->snapshot);
+    buf_reset(&c->req);
+    buf_reset(&c->res);
+    ruby_xfree(c);
 }
 
 static void context_destroy(Context *c)
@@ -1360,8 +1447,25 @@ static VALUE context_attach(VALUE self, VALUE name, VALUE proc)
 static void *context_dispose_do(void *arg)
 {
     Context *c;
+    int r;
 
     c = arg;
+    if (single_threaded) {
+        if ((r = single_threaded_recover_after_fork(c)))
+            return (void *)(intptr_t)r;
+    }
+    if (c->depth > 0) {
+        r = pthread_mutex_trylock(&c->rr_mtx);
+        if (!r) {
+            pthread_mutex_unlock(&c->rr_mtx);
+            return (void *)(intptr_t)EBUSY;
+        }
+        if (r != EBUSY)
+            return (void *)(intptr_t)r;
+        if (c->pst)
+            v8_terminate_execution(c->pst);
+        pthread_cond_broadcast(&c->cv);
+    }
     if (single_threaded) {
         pthread_mutex_lock(&c->mtx);
         while (c->req.len || c->res.len)
@@ -1389,9 +1493,12 @@ static void *context_dispose_do(void *arg)
 static VALUE context_dispose(VALUE self)
 {
     Context *c;
+    void *r;
 
     TypedData_Get_Struct(self, Context, &context_type, c);
-    rb_thread_call_without_gvl(context_dispose_do, c, NULL, NULL);
+    r = rb_thread_call_without_gvl(context_dispose_do, c, terminate_ubf, c);
+    if (r)
+        rb_raise(runtime_error, "context dispose: %s", strerror((int)(intptr_t)r));
     return Qnil;
 }
 

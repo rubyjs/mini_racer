@@ -121,19 +121,252 @@ class MiniRacerSingleThreadedTest < Minitest::Test
     RUBY
   end
 
+  def test_busy_eval_thread_does_not_block_process_exit
+    assert_single_threaded_script <<~'RUBY'
+      Thread.report_on_exception = false
+      Thread.new do
+        sleep 3
+        warn "process timed out"
+        exit! 99
+      end
+
+      context = MiniRacer::Context.new
+      Thread.new { context.eval("while (true) {}") }
+      sleep 0.1
+      # Fall off the end. Ruby will interrupt the eval thread during VM shutdown.
+    RUBY
+  end
+
+  def test_thread_kill_interrupts_busy_eval
+    assert_single_threaded_script <<~'RUBY'
+      Thread.report_on_exception = false
+      context = MiniRacer::Context.new
+      thread = Thread.new { context.eval("while (true) {}") }
+      sleep 0.1
+      thread.kill
+      raise "thread did not stop" unless thread.join(3)
+      raise "context should still be usable" unless context.eval("1 + 1") == 2
+    RUBY
+  end
+
+  def test_thread_raise_interrupts_busy_eval
+    assert_single_threaded_script <<~'RUBY'
+      Thread.report_on_exception = false
+      context = MiniRacer::Context.new
+      thread = Thread.new do
+        begin
+          context.eval("while (true) {}")
+          raise "expected interrupt"
+        rescue RuntimeError => e
+          raise unless e.message == "interrupt"
+        end
+      end
+      sleep 0.1
+      thread.raise RuntimeError, "interrupt"
+      raise "thread did not stop" unless thread.join(3)
+      raise "context should still be usable" unless context.eval("1 + 1") == 2
+    RUBY
+  end
+
+  def test_thread_kill_waiting_thread_does_not_terminate_active_eval
+    assert_single_threaded_script <<~'RUBY'
+      Thread.report_on_exception = false
+      context = MiniRacer::Context.new
+      terminated = false
+      active = Thread.new do
+        begin
+          context.eval("while (true) {}")
+        rescue MiniRacer::ScriptTerminatedError
+          terminated = true
+        end
+      end
+      sleep 0.1
+
+      waiter = Thread.new { context.eval("1 + 1") rescue nil }
+      sleep 0.1
+      waiter.kill
+      sleep 0.2
+      raise "killing waiter terminated active eval" if terminated
+
+      context.stop
+      raise "active thread did not stop" unless active.join(3)
+      raise "waiting thread did not stop" unless waiter.join(3)
+    RUBY
+  end
+
+  def test_dispose_interrupts_busy_eval_from_another_thread
+    assert_single_threaded_script <<~'RUBY'
+      Thread.report_on_exception = false
+      context = MiniRacer::Context.new
+      thread = Thread.new do
+        begin
+          context.eval("while (true) {}")
+        rescue MiniRacer::ScriptTerminatedError, MiniRacer::ContextDisposedError
+        end
+      end
+      sleep 0.1
+      context.dispose
+      raise "thread did not stop" unless thread.join(3)
+    RUBY
+  end
+
+  def test_dispose_from_callback_raises_instead_of_hanging
+    assert_single_threaded_script <<~'RUBY'
+      context = MiniRacer::Context.new
+      context.attach("dispose_self", proc do
+        begin
+          context.dispose
+          "disposed"
+        rescue MiniRacer::RuntimeError => e
+          raise unless e.message.include?("busy") || e.message.include?("resource")
+          "busy"
+        end
+      end)
+
+      raise "bad callback result" unless context.eval("dispose_self()") == "busy"
+      raise "context should still be usable" unless context.eval("1 + 1") == 2
+    RUBY
+  end
+
+  def test_dispose_while_callback_is_running
+    assert_single_threaded_script <<~'RUBY'
+      Thread.report_on_exception = false
+      started_r, started_w = IO.pipe
+      release_r, release_w = IO.pipe
+      context = MiniRacer::Context.new
+      context.attach("block", proc do
+        started_w.write("x")
+        started_w.flush
+        release_r.read(1)
+        42
+      end)
+
+      eval_thread = Thread.new do
+        begin
+          context.eval("block()")
+        rescue MiniRacer::RuntimeError
+        end
+      end
+      started_r.read(1)
+
+      dispose_thread = Thread.new { context.dispose }
+      sleep 0.1
+      release_w.write("x")
+      release_w.flush
+
+      raise "eval thread did not finish" unless eval_thread.join(3)
+      raise "dispose thread did not finish" unless dispose_thread.join(3)
+    RUBY
+  end
+
   def test_fork_after_runner_started_and_idle
     assert_single_threaded_script <<~'RUBY'
       exit 0 unless Process.respond_to?(:fork)
 
       context = MiniRacer::Context.new
       context.eval("var answer = 41")
-      context.eval("answer += 1") # starts the reusable runner and leaves it idle
+      context.eval("answer += 1") # starts a runner and exercises the post-dispatch path
 
       pid = fork do
-        exit(context.eval("answer") == 42 ? 0 : 1)
+        Thread.new do
+          sleep 3
+          warn "child timed out"
+          exit! 99
+        end
+
+        exit!(context.eval("answer") == 42 ? 0 : 1)
       end
-      Process.wait(pid)
-      raise "child failed" unless $?.success?
+      _, status = Process.wait2(pid)
+      raise "child failed with status #{status.inspect}" unless status.success?
+    RUBY
+  end
+
+  def test_fork_child_normal_exit_after_using_inherited_context
+    assert_single_threaded_script <<~'RUBY'
+      exit 0 unless Process.respond_to?(:fork)
+
+      context = MiniRacer::Context.new
+      context.eval("var answer = 41")
+      context.eval("answer += 1")
+
+      pid = fork do
+        Thread.new do
+          sleep 3
+          warn "child timed out"
+          exit! 99
+        end
+
+        raise "bad child eval" unless context.eval("answer") == 42
+        context.dispose
+        # Intentionally fall off the end instead of exit!: this exercises
+        # normal child-process finalizers for an inherited context.
+      end
+      _, status = Process.wait2(pid)
+      raise "child failed with status #{status.inspect}" unless status.success?
+    RUBY
+  end
+
+  def test_fork_child_gc_after_non_idle_inherited_context
+    assert_single_threaded_script <<~'RUBY'
+      exit 0 unless Process.respond_to?(:fork)
+
+      started_r, started_w = IO.pipe
+      release_r, release_w = IO.pipe
+      context = MiniRacer::Context.new
+      context.attach("block", proc do
+        started_w.write("x")
+        started_w.flush
+        release_r.read(1)
+        42
+      end)
+
+      worker = Thread.new do
+        raise "bad callback result" unless context.eval("block()") == 42
+      end
+      started_r.read(1)
+
+      pid = fork do
+        Thread.new do
+          sleep 3
+          warn "child timed out"
+          exit! 99
+        end
+
+        context = nil
+        GC.start
+        GC.compact if GC.respond_to?(:compact)
+        exit! 0
+      end
+      _, status = Process.wait2(pid)
+      raise "child failed with status #{status.inspect}" unless status.success?
+
+      release_w.write("x")
+      release_w.flush
+      raise "worker did not finish" unless worker.join(3)
+    RUBY
+  end
+
+  def test_fork_after_low_memory_notification
+    assert_single_threaded_script <<~'RUBY'
+      exit 0 unless Process.respond_to?(:fork)
+
+      context = MiniRacer::Context.new
+      context.eval("var answer = 41")
+      context.eval("answer += 1")
+      context.low_memory_notification
+      Process.warmup if Process.respond_to?(:warmup)
+
+      pid = fork do
+        Thread.new do
+          sleep 3
+          warn "child timed out"
+          exit! 99
+        end
+
+        exit!(context.eval("answer") == 42 ? 0 : 1)
+      end
+      _, status = Process.wait2(pid)
+      raise "child failed with status #{status.inspect}" unless status.success?
     RUBY
   end
 end
