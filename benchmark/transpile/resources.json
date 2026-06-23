@@ -1,0 +1,20 @@
+{
+  "babel_standalone_7_26_10": {
+    "url": "https://unpkg.com/@babel/standalone@7.26.10/babel.min.js",
+    "sha256": "7acf405141ca9e611b6d40aeef52071432d5f387cf906fc3556fb9f0b1a28601",
+    "bytes": 3014882,
+    "description": "Babel standalone compiler used by the benchmark"
+  },
+  "pdfjs_worker_4_10_38": {
+    "url": "https://unpkg.com/pdfjs-dist@4.10.38/build/pdf.worker.mjs",
+    "sha256": "7c237f83fa56bce645d8af51d183c9c56ba7b2d2928ff42754dc7020bea36323",
+    "bytes": 2209730,
+    "description": "Real-world modern ES module from pdf.js; default transpilation input (~2.1 MiB)"
+  },
+  "pdfjs_api_4_10_38": {
+    "url": "https://unpkg.com/pdfjs-dist@4.10.38/build/pdf.mjs",
+    "sha256": "a209a2124baa35cbb9015b809926f1bcec9dd1c247296290e205dd9d76cb9128",
+    "bytes": 658371,
+    "description": "Smaller real-world modern ES module from pdf.js (~643 KiB)"
+  }
+}
