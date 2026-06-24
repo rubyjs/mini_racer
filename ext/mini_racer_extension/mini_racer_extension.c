@@ -676,7 +676,7 @@ static int serialize1(Ser *s, VALUE refs, VALUE v)
         if (sign < 0)
             v = rb_big_mul(v, LONG2FIX(-1));
         rb_big_pack(v, limbs, countof(limbs));
-        ser_bigint(s, limbs, countof(limbs), sign);
+        ser_bigint(s, limbs, sizeof(limbs), sign);
         break;
     case T_FIXNUM:
         ser_int(s, FIX2LONG(v));

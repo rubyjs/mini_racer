@@ -243,27 +243,31 @@ static void ser_num(Ser *s, double v)
     }
 }
 
-// ser_bigint: |n| is in bytes, not quadwords
-static void ser_bigint(Ser *s, const uint64_t *p, size_t n, int sign)
+// ser_bigint: |p| points to |n| bytes, interpreted as little-endian
+// 64-bit words. The buffer may be backed by Ruby's unsigned long limbs or
+// V8-style uint64_t words; keep the interface byte-oriented so callers don't
+// need to agree on the concrete typedef used for a 64-bit word.
+static void ser_bigint(Ser *s, const void *p, size_t n, int sign)
 {
+    const uint8_t *bytes;
+
     if (*s->err)
         return;
     if (n % 8) {
         snprintf(s->err, sizeof(s->err), "bad bigint");
         return;
     }
+    bytes = p;
     w_byte(s, 'Z');
     // chop off high all-zero words
-    n /= 8;
-    while (n--)
-        if (p[n])
-            break;
-    if (n == (size_t)-1) {
+    while (n > 0 && bytes[n-1] == 0)
+        n--;
+    if (n == 0) {
         w_byte(s, 0); // normalized zero
     } else {
-        n = 8*n + 8;
+        n = (n + 7) & ~(size_t)7;
         w_varint(s, 2*n + (sign < 0));
-        w(s, p, n);
+        w(s, bytes, n);
     }
 }
 

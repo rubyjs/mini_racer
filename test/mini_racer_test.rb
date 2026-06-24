@@ -1628,6 +1628,28 @@ class MiniRacerTest < Minitest::Test
     end
   end
 
+  def test_large_bigint_serialization_uses_all_packed_limbs
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    [
+      2**64,
+      -(2**64),
+      2**128 + 2**64 + 12_345,
+      -(2**128 + 2**64 + 12_345),
+      2**512,
+      -(2**512 + 1)
+    ].each do |big_int|
+      context = MiniRacer::Context.new
+      context.attach("test", proc { big_int })
+
+      assert_equal "bigint", context.eval("typeof test()")
+      assert_equal big_int.to_s, context.eval("test().toString()")
+      assert_equal big_int, context.eval("test()")
+    end
+  end
+
   def test_uint8array_is_converted_to_string
     context = MiniRacer::Context.new
     result = context.eval('new Uint8Array([0, 1, 2, 3])')
