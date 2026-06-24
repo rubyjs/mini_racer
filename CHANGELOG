@@ -1,3 +1,8 @@
+- 0.21.4 - 24-06-2026
+  - Fix stale V8 termination state after interrupts/timeouts so contexts remain usable after cancelled evaluations
+  - Let Ruby interrupts wake MiniRacer calls without immediately terminating V8, allowing signal traps and nested callbacks to unwind safely
+  - Add benchmark suite covering eval, serialization/deserialization, and transpilation workloads
+
 - 0.21.3 - 18-06-2026
   - Fix `:single_threaded` contexts inherited across `fork` by recovering idle reusable native runners in the child process without falling back to per-dispatch native thread spawning
   - Avoid intermittent heap corruption during `:single_threaded` context finalization, especially when forked children exit normally after touching inherited contexts
