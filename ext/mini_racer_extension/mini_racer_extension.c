@@ -200,6 +200,7 @@ static VALUE snapshot_error;
 static VALUE terminated_error;
 static VALUE context_class;
 static VALUE snapshot_class;
+static ID call_method_id;
 static VALUE date_time_class;
 static VALUE binary_class;
 static VALUE js_function_class;
@@ -241,6 +242,41 @@ struct rendezvous_des
     DesCtx *d;
     Buf *res;
 };
+
+// Fast callback protocol for the common JS -> Ruby -> JS integer case.
+// 'f' request: marker, argc, callback id, argc int32 arguments.
+// 'i' reply: marker, int32 return value. Anything outside that narrow shape
+// falls back to the regular V8 serializer/deserializer protocol.
+#define FAST_CALLBACK_MAX_ARGS 32
+#define FAST_CALLBACK_REQUEST_SIZE(argc) (2 + sizeof(int32_t) * (1 + (argc)))
+#define FAST_CALLBACK_REPLY_SIZE (1 + sizeof(int32_t))
+
+static int fast_read_i32(const uint8_t **p, const uint8_t *pe, int32_t *out)
+{
+    if ((size_t)(pe - *p) < sizeof(*out))
+        return -1;
+    memcpy(out, *p, sizeof(*out));
+    *p += sizeof(*out);
+    return 0;
+}
+
+static int fast_fixnum_to_i32(VALUE value, int32_t *out)
+{
+    long v;
+
+    if (TYPE(value) != T_FIXNUM)
+        return 0;
+    v = FIX2LONG(value);
+    if (v < INT32_MIN || v > INT32_MAX)
+        return 0;
+    *out = (int32_t)v;
+    return 1;
+}
+
+static int fast_callback_marker(uint8_t marker)
+{
+    return marker == 'c' || marker == 'f';
+}
 
 static void DesCtx_init(DesCtx *c)
 {
@@ -966,27 +1002,77 @@ static VALUE deserialize(VALUE arg)
 static VALUE rendezvous_callback_do(VALUE arg)
 {
     struct rendezvous_nogvl *a;
-    VALUE func, args;
+    VALUE func;
+    VALUE argv[FAST_CALLBACK_MAX_ARGS];
     Context *c;
-    DesCtx d;
     Buf *b;
+    const uint8_t *p, *pe;
+    int32_t id32, v32;
     long id;
+    uint8_t argc;
 
     a = (void *)arg;
     b = a->res;
     c = a->context;
     assert(b->len > 0);
-    assert(*b->buf == 'c');
-    DesCtx_init(&d);
-    args = deserialize1(&d, b->buf+1, b->len-1); // skip 'c' marker
-    func = rb_ary_pop(args); // callback id
-    if (!RB_INTEGER_TYPE_P(func))
-        rb_raise(runtime_error, "bad callback id");
-    id = NUM2LONG(func);
-    if (id < 0 || id >= RARRAY_LEN(c->procs))
-        rb_raise(runtime_error, "bad callback id");
-    func = rb_ary_entry(c->procs, id);
-    return rb_funcall2(func, rb_intern("call"), RARRAY_LENINT(args), RARRAY_PTR(args));
+    assert(fast_callback_marker(*b->buf));
+
+    if (*b->buf == 'f') {
+        if (b->len < 2)
+            rb_raise(runtime_error, "bad fast callback request");
+        argc = b->buf[1];
+        if (argc > FAST_CALLBACK_MAX_ARGS || b->len != FAST_CALLBACK_REQUEST_SIZE(argc))
+            rb_raise(runtime_error, "bad fast callback request");
+        p = b->buf + 2;
+        pe = b->buf + b->len;
+        if (fast_read_i32(&p, pe, &id32))
+            rb_raise(runtime_error, "bad fast callback id");
+        id = id32;
+        if (id < 0 || id >= RARRAY_LEN(c->procs))
+            rb_raise(runtime_error, "bad callback id");
+        for (uint8_t i = 0; i < argc; i++) {
+            if (fast_read_i32(&p, pe, &v32))
+                rb_raise(runtime_error, "bad fast callback argument");
+            argv[i] = INT2NUM(v32);
+        }
+        func = rb_ary_entry(c->procs, id);
+        return rb_funcall2(func, call_method_id, argc, argv);
+    }
+
+    {
+        VALUE args;
+        DesCtx d;
+
+        DesCtx_init(&d);
+        args = deserialize1(&d, b->buf+1, b->len-1); // skip 'c' marker
+        func = rb_ary_pop(args); // callback id
+        if (!RB_INTEGER_TYPE_P(func))
+            rb_raise(runtime_error, "bad callback id");
+        id = NUM2LONG(func);
+        if (id < 0 || id >= RARRAY_LEN(c->procs))
+            rb_raise(runtime_error, "bad callback id");
+        func = rb_ary_entry(c->procs, id);
+        return rb_funcall2(func, call_method_id, RARRAY_LENINT(args), RARRAY_PTR(args));
+    }
+}
+
+static int fast_callback_reply(struct rendezvous_nogvl *a, VALUE result)
+{
+    int32_t value;
+    uint8_t reply[FAST_CALLBACK_REPLY_SIZE];
+    Buf b;
+
+    if (*a->res->buf != 'f')
+        return 0;
+    if (!fast_fixnum_to_i32(result, &value))
+        return 0;
+
+    reply[0] = 'i';
+    memcpy(reply + 1, &value, sizeof(value));
+    buf_init(&b);
+    buf_put(&b, reply, sizeof(reply));
+    buf_move(&b, a->req);
+    return 1;
 }
 
 // called with |rr_mtx| and GVL held; |mtx| is unlocked
@@ -1008,6 +1094,8 @@ static void *rendezvous_callback(void *arg)
         rb_set_errinfo(Qnil);
         goto fail;
     }
+    if (fast_callback_reply(a, r))
+        return NULL;
     ser_init1(&s, 'c'); // callback reply
     if (serialize(&s, r)) { // should not happen
         c->exception = rb_exc_new_cstr(internal_error, s.err);
@@ -1167,7 +1255,7 @@ next:
     pthread_cond_broadcast(&c->cv);
     pthread_mutex_unlock(&c->mtx);
     atomic_store(&a->active, 0);
-    if (*a->res->buf == 'c') { // js -> ruby callback?
+    if (a->res->len && fast_callback_marker(*a->res->buf)) { // js -> ruby callback?
         rb_thread_call_with_gvl(rendezvous_callback, a);
         buf_reset(a->res);
         if (atomic_load(&c->quit)) {
@@ -1226,7 +1314,7 @@ static void *rendezvous_cancel_nogvl(void *arg)
             pthread_cond_wait(&c->cv, &c->mtx);
         if (!c->res_ready)
             break;
-        if (c->res.len && *c->res.buf != 'c')
+        if (c->res.len && !fast_callback_marker(*c->res.buf))
             break;
         buf_reset(&c->res);
         c->res_ready = 0;
@@ -2140,6 +2228,8 @@ void Init_mini_racer_extension(void)
     terminated_error = rb_define_class_under(m, "ScriptTerminatedError", c);
 
     rb_define_method(script_error, "cause", script_error_cause, 0);
+
+    call_method_id = rb_intern("call");
 
     c = context_class = rb_define_class_under(m, "Context", rb_cObject);
     rb_define_method(c, "initialize", context_initialize, -1);

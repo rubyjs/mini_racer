@@ -124,6 +124,55 @@ struct Serialized
     }
 };
 
+// Mirrors the fast callback protocol in mini_racer_extension.c. It only handles
+// primitive int32 arguments and fixnum int32 return values; all other cases keep
+// using V8's serializer, preserving the existing safety/filtering semantics.
+constexpr int kFastCallbackMaxArgs = 32;
+constexpr size_t kFastCallbackReplySize = 1 + sizeof(int32_t);
+
+bool read_fast_i32(const uint8_t **p, const uint8_t *pe, int32_t *out)
+{
+    if (static_cast<size_t>(pe - *p) < sizeof(*out)) return false;
+    memcpy(out, *p, sizeof(*out));
+    *p += sizeof(*out);
+    return true;
+}
+
+bool fast_callback_request(State& st, Callback *cb, const v8::FunctionCallbackInfo<v8::Value>& info)
+{
+    int argc = info.Length();
+    if (argc > kFastCallbackMaxArgs) return false;
+
+    uint8_t buf[2 + sizeof(int32_t) * (1 + kFastCallbackMaxArgs)];
+    uint8_t *p = buf;
+    *p++ = 'f';
+    *p++ = static_cast<uint8_t>(argc);
+    memcpy(p, &cb->id, sizeof(cb->id));
+    p += sizeof(cb->id);
+
+    for (int i = 0; i < argc; i++) {
+        if (!info[i]->IsInt32()) return false;
+        int32_t value = info[i].As<v8::Int32>()->Value();
+        memcpy(p, &value, sizeof(value));
+        p += sizeof(value);
+    }
+
+    v8_reply(st.ruby_context, buf, p - buf);
+    return true;
+}
+
+bool read_fast_callback_reply(v8::Isolate *isolate, const uint8_t *p, size_t n,
+                              v8::ReturnValue<v8::Value> out)
+{
+    if (n != kFastCallbackReplySize) return false;
+    int32_t value;
+    const uint8_t *cursor = p + 1;
+    const uint8_t *pe = p + n;
+    if (!read_fast_i32(&cursor, pe, &value)) return false;
+    out.Set(v8::Int32::New(isolate, value));
+    return true;
+}
+
 void append_bytes(std::vector<char>& out, const char *p, size_t n)
 {
     out.insert(out.end(), p, p + n);
@@ -486,22 +535,24 @@ void v8_api_callback(const v8::FunctionCallbackInfo<v8::Value>& info)
     auto ext = v8::External::Cast(*info.Data());
     Callback *cb = static_cast<Callback*>(ext->Value());
     State& st = *cb->st;
-    v8::Local<v8::Array> request;
-    {
-        v8::Context::Scope context_scope(st.safe_context);
-        request = v8::Array::New(st.isolate, 1 + info.Length());
-    }
-    for (int i = 0, n = info.Length(); i < n; i++) {
-        request->Set(st.context, i, sanitize(st, info[i])).Check();
-    }
-    auto id = v8::Int32::New(st.isolate, cb->id);
-    request->Set(st.context, info.Length(), id).Check(); // callback id
-    {
-        Serialized serialized(st, request);
-        if (!serialized.data) return; // exception pending
-        uint8_t marker = 'c'; // callback marker
-        v8_reply(st.ruby_context, &marker, 1);
-        v8_reply(st.ruby_context, serialized.data, serialized.size);
+    if (!fast_callback_request(st, cb, info)) {
+        v8::Local<v8::Array> request;
+        {
+            v8::Context::Scope context_scope(st.safe_context);
+            request = v8::Array::New(st.isolate, 1 + info.Length());
+        }
+        for (int i = 0, n = info.Length(); i < n; i++) {
+            request->Set(st.context, i, sanitize(st, info[i])).Check();
+        }
+        auto id = v8::Int32::New(st.isolate, cb->id);
+        request->Set(st.context, info.Length(), id).Check(); // callback id
+        {
+            Serialized serialized(st, request);
+            if (!serialized.data) return; // exception pending
+            uint8_t marker = 'c'; // callback marker
+            v8_reply(st.ruby_context, &marker, 1);
+            v8_reply(st.ruby_context, serialized.data, serialized.size);
+        }
     }
     const uint8_t *p;
     size_t n;
@@ -509,6 +560,15 @@ void v8_api_callback(const v8::FunctionCallbackInfo<v8::Value>& info)
         v8_roundtrip(st.ruby_context, &p, &n);
         if (*p == 'c') // callback reply
             break;
+        if (*p == 'i') { // fast int32 callback reply
+            if (read_fast_callback_reply(st.isolate, p, n, info.GetReturnValue()))
+                return;
+            auto message = v8::String::NewFromUtf8Literal(st.isolate, "bad fast callback reply");
+            auto exception = v8::Exception::Error(message);
+            st.ruby_exception.Reset(st.isolate, exception);
+            st.isolate->ThrowException(exception);
+            return;
+        }
         if (*p == 'e') { // ruby exception pending
             v8::Local<v8::String> message;
             auto type = v8::NewStringType::kNormal;
