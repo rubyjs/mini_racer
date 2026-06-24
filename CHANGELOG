@@ -1,3 +1,7 @@
+- vNext
+  - Fix building with Clang 22+ by making bigint serialization byte-oriented instead of relying on mismatched `uint64_t`/`unsigned long` pointer types
+  - Fix Ruby bigint serialization to consider all packed limbs instead of truncating values above 512 bits
+
 - 0.21.4 - 24-06-2026
   - Fix stale V8 termination state after interrupts/timeouts so contexts remain usable after cancelled evaluations
   - Let Ruby interrupts wake MiniRacer calls without immediately terminating V8, allowing signal traps and nested callbacks to unwind safely
