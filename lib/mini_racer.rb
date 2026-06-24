@@ -6,7 +6,9 @@ module MiniRacer
     attr_reader :data
 
     def initialize(data)
-      raise TypeError, "wrong argument type #{data.class} (expected String)" unless data.is_a?(String)
+      unless data.is_a?(String)
+        raise TypeError, "wrong argument type #{data.class} (expected String)"
+      end
       @data = data
     end
   end
@@ -34,20 +36,26 @@ else
   end
 end
 
-require "thread"
 require "json"
 require "io/wait"
 
 module MiniRacer
-  class Error < ::StandardError; end
+  class Error < ::StandardError
+  end
 
-  class ContextDisposedError < Error; end
-  class PlatformAlreadyInitialized < Error; end
+  class ContextDisposedError < Error
+  end
+  class PlatformAlreadyInitialized < Error
+  end
 
-  class EvalError < Error; end
-  class ParseError < EvalError; end
-  class ScriptTerminatedError < EvalError; end
-  class V8OutOfMemoryError < EvalError; end
+  class EvalError < Error
+  end
+  class ParseError < EvalError
+  end
+  class ScriptTerminatedError < EvalError
+  end
+  class V8OutOfMemoryError < EvalError
+  end
 
   class RuntimeError < EvalError
     def initialize(message)

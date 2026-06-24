@@ -7,9 +7,11 @@ require "tempfile"
 
 class MiniRacerSingleThreadedTest < Minitest::Test
   def assert_single_threaded_script(script)
-    skip "single-threaded V8 platform tests are only for CRuby" unless RUBY_ENGINE == "ruby"
+    unless RUBY_ENGINE == "ruby"
+      skip "single-threaded V8 platform tests are only for CRuby"
+    end
 
-    file = Tempfile.new(["mini_racer_single_threaded", ".rb"])
+    file = Tempfile.new(%w[mini_racer_single_threaded .rb])
     file.write(<<~RUBY)
       $LOAD_PATH.unshift #{File.expand_path("../lib", __dir__).inspect}
       require "mini_racer"

@@ -1,42 +1,43 @@
 # frozen_string_literal: true
 
-require_relative 'shared'
+require_relative "shared"
 
 module MiniRacer
-
   class Context
-
     class ExternalFunction
       private
 
       def notify_v8
         name = @name.encode(::Encoding::UTF_8)
-        wrapped = lambda do |*args|
-          converted = @parent.send(:convert_js_to_ruby, args)
-          begin
-            result = @callback.call(*converted)
-          rescue Polyglot::ForeignException => e
-            e = RuntimeError.new(e.message)
-            e.set_backtrace(e.backtrace)
-            @parent.instance_variable_set(:@current_exception, e)
-            raise e
-          rescue => e
-            @parent.instance_variable_set(:@current_exception, e)
-            raise e
+        wrapped =
+          lambda do |*args|
+            converted = @parent.send(:convert_js_to_ruby, args)
+            begin
+              result = @callback.call(*converted)
+            rescue Polyglot::ForeignException => e
+              e = RuntimeError.new(e.message)
+              e.set_backtrace(e.backtrace)
+              @parent.instance_variable_set(:@current_exception, e)
+              raise e
+            rescue => e
+              @parent.instance_variable_set(:@current_exception, e)
+              raise e
+            end
+            @parent.send(:convert_ruby_to_js, result)
           end
-          @parent.send(:convert_ruby_to_js, result)
-        end
 
         if @parent_object.nil?
           # set global name to proc
-          result = @parent.eval_in_context('this')
+          result = @parent.eval_in_context("this")
           result[name] = wrapped
         else
           parent_object_eval = @parent_object_eval.encode(::Encoding::UTF_8)
           begin
             result = @parent.eval_in_context(parent_object_eval)
           rescue Polyglot::ForeignException, StandardError => e
-            raise ParseError, "Was expecting #{@parent_object} to be an object", e.backtrace
+            raise ParseError,
+                  "Was expecting #{@parent_object} to be an object",
+                  e.backtrace
           end
           result[name] = wrapped
           # set evaluated object results name to proc
@@ -51,7 +52,7 @@ module MiniRacer
         total_heap_size_executable: 0,
         total_heap_size: 0,
         used_heap_size: 0,
-        heap_size_limit: 0,
+        heap_size_limit: 0
       }
     end
 
@@ -77,7 +78,6 @@ module MiniRacer
         raise "TruffleRuby #{RUBY_ENGINE_VERSION} does not have support for inner contexts, use a more recent version"
       end
 
-
       if TruffleRuby.native?
         raise "You need the TruffleRuby JVM Standalone for mini_racer because it is not possible to install the js component in the the Native standalone"
       end
@@ -86,19 +86,21 @@ module MiniRacer
         raise "The language 'js' is not available, you need to install the 'js' component.\nSee https://github.com/oracle/truffleruby/blob/master/doc/user/polyglot.md#installing-other-languages"
       end
 
-      @context = Polyglot::InnerContext.new(on_cancelled: -> { 
-        raise ScriptTerminatedError, 'JavaScript was terminated (either by timeout or explicitly)' 
-      })
+      @context =
+        Polyglot::InnerContext.new(
+          on_cancelled: -> do
+            raise ScriptTerminatedError,
+                  "JavaScript was terminated (either by timeout or explicitly)"
+          end
+        )
       Context.instance_variable_set(:@context_initialized, true)
-      @js_object = @context.eval('js', 'Object')
+      @js_object = @context.eval("js", "Object")
       @isolate_mutex = Mutex.new
       @stopped = false
       @entered = false
       @has_entered = false
       @current_exception = nil
-      if isolate && snapshot
-        isolate.instance_variable_set(:@snapshot, snapshot)
-      end
+      isolate.instance_variable_set(:@snapshot, snapshot) if isolate && snapshot
       if snapshot
         @snapshot = snapshot
       elsif isolate
@@ -107,15 +109,20 @@ module MiniRacer
         @snapshot = nil
       end
 
-      @is_object_or_array_func = eval_in_context "(x) => { return (x instanceof Object || x instanceof Array) && !(x instanceof Date) && !(x instanceof Function) }"
+      @is_object_or_array_func =
+        eval_in_context "(x) => { return (x instanceof Object || x instanceof Array) && !(x instanceof Date) && !(x instanceof Function) }"
       @is_map_func = eval_in_context "(x) => { return x instanceof Map }"
-      @is_map_iterator_func = eval_in_context "(x) => { return x[Symbol.toStringTag] === 'Map Iterator' }"
+      @is_map_iterator_func =
+        eval_in_context "(x) => { return x[Symbol.toStringTag] === 'Map Iterator' }"
       @is_time_func = eval_in_context "(x) => { return x instanceof Date }"
-      @is_symbol_func = eval_in_context "(x) => { return typeof x === 'symbol' }"
-      @is_uint8_array_func = eval_in_context "(x) => { return x instanceof Uint8Array }"
+      @is_symbol_func =
+        eval_in_context "(x) => { return typeof x === 'symbol' }"
+      @is_uint8_array_func =
+        eval_in_context "(x) => { return x instanceof Uint8Array }"
 
       @js_date_to_time_func = eval_in_context "(x) => { return x.getTime(x) }"
-      @js_symbol_to_symbol_func = eval_in_context "(x) => { var r = x.description; return r === undefined ? 'undefined' : r }"
+      @js_symbol_to_symbol_func =
+        eval_in_context "(x) => { var r = x.description; return r === undefined ? 'undefined' : r }"
       @js_new_date_func = eval_in_context "(x) => { return new Date(x) }"
       @js_new_array_func = eval_in_context "(x) => { return new Array(x) }"
       # looks up a (dotted) function name as properties from globalThis,
@@ -136,7 +143,8 @@ module MiniRacer
           return target;
         }
       JS
-      @js_new_uint8array_func = eval_in_context "(x) => { return new Uint8Array(x) }"
+      @js_new_uint8array_func =
+        eval_in_context "(x) => { return new Uint8Array(x) }"
     end
 
     def dispose_unsafe
@@ -154,15 +162,20 @@ module MiniRacer
         end
       end
       @has_entered = true
-      raise RuntimeError, "TruffleRuby does not support eval after stop" if @stopped
-      raise TypeError, "wrong type argument #{str.class} (should be a string)" unless str.is_a?(String)
-      raise TypeError, "wrong type argument #{filename.class} (should be a string)" unless filename.nil? || filename.is_a?(String)
+      if @stopped
+        raise RuntimeError, "TruffleRuby does not support eval after stop"
+      end
+      unless str.is_a?(String)
+        raise TypeError, "wrong type argument #{str.class} (should be a string)"
+      end
+      unless filename.nil? || filename.is_a?(String)
+        raise TypeError,
+              "wrong type argument #{filename.class} (should be a string)"
+      end
 
       str = encode(str)
       begin
-        translate do
-          eval_in_context(str, filename)
-        end
+        translate { eval_in_context(str, filename) }
       rescue Polyglot::ForeignException => e
         raise RuntimeError, e.message, e.backtrace
       rescue ::RuntimeError => e
@@ -189,10 +202,15 @@ module MiniRacer
         end
       end
       @has_entered = true
-      raise RuntimeError, "TruffleRuby does not support call after stop" if @stopped
+      if @stopped
+        raise RuntimeError, "TruffleRuby does not support call after stop"
+      end
       begin
         translate do
-          function = @js_lookup_call_target_func.call(convert_ruby_to_js(encode(function_name)))
+          function =
+            @js_lookup_call_target_func.call(
+              convert_ruby_to_js(encode(function_name))
+            )
           function.call(*convert_ruby_to_js(arguments))
         end
       rescue Polyglot::ForeignException => e
@@ -218,7 +236,7 @@ module MiniRacer
       message = e.message
       if @current_exception
         raise @current_exception
-      elsif e.message && e.message.start_with?('SyntaxError:')
+      elsif e.message && e.message.start_with?("SyntaxError:")
         error_class = MiniRacer::ParseError
       elsif e.is_a?(MiniRacer::ScriptTerminatedError)
         error_class = MiniRacer::ScriptTerminatedError
@@ -227,10 +245,14 @@ module MiniRacer
       end
 
       if error_class == MiniRacer::RuntimeError
-        bls = e.backtrace_locations&.select { |bl| bl&.source_location&.language == 'js' }
+        bls =
+          e.backtrace_locations&.select do |bl|
+            bl&.source_location&.language == "js"
+          end
         if bls && !bls.empty?
-          if '(eval)' != bls[0].path
-            message = "#{e.message}\n at #{bls[0]}\n" + bls[1..].map(&:to_s).join("\n")
+          if "(eval)" != bls[0].path
+            message =
+              "#{e.message}\n at #{bls[0]}\n" + bls[1..].map(&:to_s).join("\n")
           else
             message = "#{e.message}\n" + bls.map(&:to_s).join("\n")
           end
@@ -256,16 +278,10 @@ module MiniRacer
         elsif value.respond_to?(:to_str)
           value.to_str.dup
         elsif value.respond_to?(:to_ary)
-          if uint8_array?(value)
-            return value.to_a.pack('C*')
-          end
+          return value.to_a.pack("C*") if uint8_array?(value)
 
           value.to_ary.map do |e|
-            if e.respond_to?(:call)
-              nil
-            else
-              convert_js_to_ruby(e)
-            end
+            e.respond_to?(:call) ? nil : convert_js_to_ruby(e)
           end
         elsif time?(value)
           js_date_to_time(value)
@@ -284,9 +300,7 @@ module MiniRacer
           h = {}
           object.instance_variables.each do |member|
             v = object[member]
-            unless v.respond_to?(:call)
-              h[member.to_s] = convert_js_to_ruby(v)
-            end
+            h[member.to_s] = convert_js_to_ruby(v) unless v.respond_to?(:call)
           end
           h
         end
@@ -346,9 +360,7 @@ module MiniRacer
         value
       when Array
         ary = js_new_array(value.size)
-        value.each_with_index do |v, i|
-          ary[i] = convert_ruby_to_js(v)
-        end
+        value.each_with_index { |v, i| ary[i] = convert_ruby_to_js(v) }
         ary
       when Hash
         h = @js_object.new
@@ -377,7 +389,6 @@ module MiniRacer
     class_eval <<-'RUBY', "(mini_racer)", 1
         def eval_in_context(code, file = nil); code = ('"use strict";' + code) if Context.instance_variable_get(:@use_strict); @context.eval('js', code, file || '(mini_racer)'); end
     RUBY
-
   end
 
   class Isolate
@@ -390,24 +401,36 @@ module MiniRacer
 
   class Platform
     def self.set_flag_as_str!(flag)
-      raise TypeError, "wrong type argument #{flag.class} (should be a string)" unless flag.is_a?(String)
+      unless flag.is_a?(String)
+        raise TypeError,
+              "wrong type argument #{flag.class} (should be a string)"
+      end
       raise ArgumentError, "flag contains NUL byte" if flag.include?("\0")
       # the C extension normalizes flags into a 256 byte "--flag" buffer
       normalized = flag.start_with?("--") ? flag : "--#{flag}"
       raise ArgumentError, "flag too long" if normalized.bytesize >= 256
-      raise MiniRacer::PlatformAlreadyInitialized, "The platform is already initialized." if Context.instance_variable_get(:@context_initialized)
-      Context.instance_variable_set(:@use_strict, true) if "--use_strict" == flag
+      if Context.instance_variable_get(:@context_initialized)
+        raise MiniRacer::PlatformAlreadyInitialized,
+              "The platform is already initialized."
+      end
+      if "--use_strict" == flag
+        Context.instance_variable_set(:@use_strict, true)
+      end
     end
   end
 
   class Snapshot
     def load(str)
-      raise TypeError, "wrong type argument #{str.class} (should be a string)" unless str.is_a?(String)
+      unless str.is_a?(String)
+        raise TypeError, "wrong type argument #{str.class} (should be a string)"
+      end
       # Intentionally noop since TruffleRuby mocks the snapshot API
     end
 
     def warmup_unsafe!(src)
-      raise TypeError, "wrong type argument #{src.class} (should be a string)" unless src.is_a?(String)
+      unless src.is_a?(String)
+        raise TypeError, "wrong type argument #{src.class} (should be a string)"
+      end
       # Intentionally noop since TruffleRuby mocks the snapshot API
       # by replaying snapshot source before the first eval/call
       self

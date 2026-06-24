@@ -1,6 +1,6 @@
 # use bundle exec to run this script
 #
-require 'mini_racer'
+require "mini_racer"
 
 MiniRacer::Platform.set_flags! :single_threaded
 
@@ -11,7 +11,7 @@ def trigger_gc
   puts "a"
   ctx = MiniRacer::Context.new
   puts "b"
-  ctx.eval("var a = #{('x' * 100000).inspect}")
+  ctx.eval("var a = #{("x" * 100_000).inspect}")
   puts "c"
   ctx.eval("a = undefined")
   puts "d"
@@ -25,6 +25,14 @@ trigger_gc
 MiniRacer::Context.new.dispose
 
 if Process.respond_to?(:fork)
-  Process.wait fork { puts @ctx.eval("a"); @ctx.dispose; puts Process.pid; trigger_gc; puts "done #{Process.pid}" }
+  Process.wait(
+    fork do
+      puts @ctx.eval("a")
+      @ctx.dispose
+      puts Process.pid
+      trigger_gc
+      puts "done #{Process.pid}"
+    end
+  )
   exit $?.exitstatus || 1
 end

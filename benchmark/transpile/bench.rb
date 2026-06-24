@@ -19,23 +19,24 @@ DEFAULT_SOURCE = "pdfjs_worker_4_10_38"
 
 DEFAULT_STABLE_ROUNDS = 7
 
-CaseResult = Struct.new(:name, :iterations, :samples, keyword_init: true) do
-  def median_seconds
-    samples.sort[samples.length / 2]
-  end
+CaseResult =
+  Struct.new(:name, :iterations, :samples, keyword_init: true) do
+    def median_seconds
+      samples.sort[samples.length / 2]
+    end
 
-  def to_h
-    elapsed = median_seconds
-    {
-      name: name,
-      iterations: iterations,
-      rounds: samples.length,
-      total_ms: elapsed * 1000.0,
-      ms_per_iter: elapsed * 1000.0 / iterations,
-      samples_ms: samples.map { |sample| sample * 1000.0 }
-    }
+    def to_h
+      elapsed = median_seconds
+      {
+        name: name,
+        iterations: iterations,
+        rounds: samples.length,
+        total_ms: elapsed * 1000.0,
+        ms_per_iter: elapsed * 1000.0 / iterations,
+        samples_ms: samples.map { |sample| sample * 1000.0 }
+      }
+    end
   end
-end
 
 options = {
   cache_dir: File.join(ROOT, "tmp", "benchmark", "transpile"),
@@ -52,62 +53,79 @@ options = {
   single_threaded: ENV["BENCH_SINGLE_THREADED"] == "1"
 }
 
-OptionParser.new do |parser|
-  parser.banner = "Usage: bundle exec ruby benchmark/transpile/bench.rb [options]"
+OptionParser
+  .new do |parser|
+    parser.banner =
+      "Usage: bundle exec ruby benchmark/transpile/bench.rb [options]"
 
-  parser.on("--source NAME", "Input resource from resources.json; default: #{DEFAULT_SOURCE}") do |value|
-    options[:source] = value
-  end
+    parser.on(
+      "--source NAME",
+      "Input resource from resources.json; default: #{DEFAULT_SOURCE}"
+    ) { |value| options[:source] = value }
 
-  parser.on("--iterations COUNT", Integer, "Iterations per timed sample; default: BENCH_ITERATIONS or 3") do |value|
-    options[:iterations] = value
-  end
+    parser.on(
+      "--iterations COUNT",
+      Integer,
+      "Iterations per timed sample; default: BENCH_ITERATIONS or 3"
+    ) { |value| options[:iterations] = value }
 
-  parser.on("--rounds COUNT", Integer, "Timed samples per case; default: BENCH_ROUNDS or #{DEFAULT_STABLE_ROUNDS}") do |value|
-    options[:rounds] = value
-  end
+    parser.on(
+      "--rounds COUNT",
+      Integer,
+      "Timed samples per case; default: BENCH_ROUNDS or #{DEFAULT_STABLE_ROUNDS}"
+    ) { |value| options[:rounds] = value }
 
-  parser.on("--warmup COUNT", Integer, "Untimed warmup iterations before timed samples; default: BENCH_WARMUP or 5") do |value|
-    options[:warmup] = value
-  end
+    parser.on(
+      "--warmup COUNT",
+      Integer,
+      "Untimed warmup iterations before timed samples; default: BENCH_WARMUP or 5"
+    ) { |value| options[:warmup] = value }
 
-  parser.on("--timeout MS", Integer, "MiniRacer timeout in milliseconds; default: BENCH_TIMEOUT or 300000") do |value|
-    options[:timeout] = value
-  end
+    parser.on(
+      "--timeout MS",
+      Integer,
+      "MiniRacer timeout in milliseconds; default: BENCH_TIMEOUT or 300000"
+    ) { |value| options[:timeout] = value }
 
-  parser.on("--only REGEX", "Run only benchmark names matching REGEX") do |value|
-    options[:only] = Regexp.new(value)
-  end
+    parser.on(
+      "--only REGEX",
+      "Run only benchmark names matching REGEX"
+    ) { |value| options[:only] = Regexp.new(value) }
 
-  parser.on("--cache-dir PATH", "Resource cache directory; default: tmp/benchmark/transpile") do |value|
-    options[:cache_dir] = value
-  end
+    parser.on(
+      "--cache-dir PATH",
+      "Resource cache directory; default: tmp/benchmark/transpile"
+    ) { |value| options[:cache_dir] = value }
 
-  parser.on("--list-resources", "List downloadable resources and exit") do
-    options[:list_resources] = true
-  end
+    parser.on("--list-resources", "List downloadable resources and exit") do
+      options[:list_resources] = true
+    end
 
-  parser.on("--fetch-only", "Download/verify resources and exit") do
-    options[:fetch_only] = true
-  end
+    parser.on("--fetch-only", "Download/verify resources and exit") do
+      options[:fetch_only] = true
+    end
 
-  parser.on("--single-threaded", "Run V8 on MiniRacer's single-threaded platform") do
-    options[:single_threaded] = true
-  end
+    parser.on(
+      "--single-threaded",
+      "Run V8 on MiniRacer's single-threaded platform"
+    ) { options[:single_threaded] = true }
 
-  parser.on("--json", "Print JSON instead of human-readable output") do
-    options[:json] = true
-  end
+    parser.on("--json", "Print JSON instead of human-readable output") do
+      options[:json] = true
+    end
 
-  parser.on("--output PATH", "Write JSON results to PATH") do |value|
-    options[:output] = value
+    parser.on("--output PATH", "Write JSON results to PATH") do |value|
+      options[:output] = value
+    end
   end
-end.parse!
+  .parse!
 
 abort "--iterations must be positive" if options[:iterations] < 1
 abort "--rounds must be positive" if options[:rounds] < 1
 abort "--warmup must be non-negative" if options[:warmup] < 0
-abort "unknown source resource: #{options[:source]}" unless RESOURCES.key?(options[:source])
+unless RESOURCES.key?(options[:source])
+  abort "unknown source resource: #{options[:source]}"
+end
 
 MiniRacer::Platform.set_flags!(:single_threaded) if options[:single_threaded]
 
@@ -143,7 +161,9 @@ def fetch_resource(cache_dir, name)
 
   FileUtils.mkdir_p(cache_dir)
   tmp_path = "#{path}.#{$$}.tmp"
-  warn "fetching #{name} from #{resource.fetch("url")}" unless ENV["QUIET_FETCH"]
+  unless ENV["QUIET_FETCH"]
+    warn "fetching #{name} from #{resource.fetch("url")}"
+  end
   URI.open(resource.fetch("url"), "rb", read_timeout: 120) do |input|
     File.binwrite(tmp_path, input.read)
   end
@@ -247,9 +267,10 @@ cases = [
   BenchmarkCase.new(
     name: "babel/load_standalone",
     iterations: options[:iterations],
-    block: lambda do
-      MiniRacer::Context.new(timeout: options[:timeout]).eval(babel_source)
-    end
+    block:
+      lambda do
+        MiniRacer::Context.new(timeout: options[:timeout]).eval(babel_source)
+      end
   ),
   BenchmarkCase.new(
     name: "babel/transpile_cached_source_to_es6_length",
@@ -264,29 +285,39 @@ cases = [
   BenchmarkCase.new(
     name: "babel/transpile_call_source_to_es6_code",
     iterations: options[:iterations],
-    block: -> { ctx.call("__miniRacerTransformCode", transpile_source).bytesize }
+    block: -> do
+      ctx.call("__miniRacerTransformCode", transpile_source).bytesize
+    end
   )
 ]
 
-selected = if options[:only]
-  cases.select { |bench| bench.name.match?(options[:only]) }
-else
-  cases
-end
+selected =
+  if options[:only]
+    cases.select { |bench| bench.name.match?(options[:only]) }
+  else
+    cases
+  end
 abort "No benchmarks matched" if selected.empty?
 
 results = []
 selected.each do |bench|
-  samples = measure_case(bench, warmup: options[:warmup], rounds: options[:rounds])
-  result = CaseResult.new(name: bench.name, iterations: bench.iterations, samples: samples).to_h
+  samples =
+    measure_case(bench, warmup: options[:warmup], rounds: options[:rounds])
+  result =
+    CaseResult.new(
+      name: bench.name,
+      iterations: bench.iterations,
+      samples: samples
+    ).to_h
   results << result
   unless options[:json]
-    puts "%-48s n=%-4d total=%10.3fms per=%10.3fms" % [
-      result.fetch(:name),
-      result.fetch(:iterations),
-      result.fetch(:total_ms),
-      result.fetch(:ms_per_iter)
-    ]
+    puts "%-48s n=%-4d total=%10.3fms per=%10.3fms" %
+           [
+             result.fetch(:name),
+             result.fetch(:iterations),
+             result.fetch(:total_ms),
+             result.fetch(:ms_per_iter)
+           ]
   end
 end
 

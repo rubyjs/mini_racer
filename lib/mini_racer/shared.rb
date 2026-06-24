@@ -4,9 +4,8 @@
 # Maybe one day it can be actually shared again between both backends.
 
 module MiniRacer
-
-  MARSHAL_STACKDEPTH_DEFAULT = 2**9-2
-  MARSHAL_STACKDEPTH_MAX_VALUE = 2**10-2
+  MARSHAL_STACKDEPTH_DEFAULT = (2**9) - 2
+  MARSHAL_STACKDEPTH_MAX_VALUE = (2**10) - 2
 
   class FailedV8Conversion
     attr_reader :info
@@ -25,7 +24,8 @@ module MiniRacer
   class Isolate
     def initialize(snapshot = nil)
       unless snapshot.nil? || snapshot.is_a?(Snapshot)
-        raise ArgumentError, "snapshot must be a Snapshot object, passed a #{snapshot.inspect}"
+        raise ArgumentError,
+              "snapshot must be a Snapshot object, passed a #{snapshot.inspect}"
       end
 
       # defined in the C class
@@ -51,12 +51,10 @@ module MiniRacer
       # normalize flags to strings, and adds leading dashes if needed
       def flag_to_string(flag)
         if flag.is_a?(Hash)
-          flag.map do |key, value|
-            "#{flag_to_string(key)} #{value}"
-          end
+          flag.map { |key, value| "#{flag_to_string(key)} #{value}" }
         else
           str = flag.to_s
-          str = "--#{str}" unless str.start_with?('--')
+          str = "--#{str}" unless str.start_with?("--")
           str
         end
       end
@@ -65,13 +63,12 @@ module MiniRacer
 
   # eval is defined in the C class
   class Context
-
     class ExternalFunction
       def initialize(name, callback, parent)
         unless String === name
           raise ArgumentError, "parent_object must be a String"
         end
-        parent_object, _ , @name = name.rpartition(".")
+        parent_object, _, @name = name.rpartition(".")
         @callback = callback
         @parent = parent
         @parent_object_eval = nil
@@ -83,26 +80,40 @@ module MiniRacer
           @parent_object_eval = ""
           prev = ""
           first = true
-          parent_object.split(".").each do |obj|
-            prev << obj
-            if first
-              @parent_object_eval << "if (typeof #{prev} !== 'object' || typeof #{prev} !== 'function') { #{prev} = {} };\n"
-            else
-              @parent_object_eval << "#{prev} = #{prev} || {};\n"
+          parent_object
+            .split(".")
+            .each do |obj|
+              prev << obj
+              if first
+                @parent_object_eval << "if (typeof #{prev} !== 'object' || typeof #{prev} !== 'function') { #{prev} = {} };\n"
+              else
+                @parent_object_eval << "#{prev} = #{prev} || {};\n"
+              end
+              prev << "."
+              first = false
             end
-            prev << "."
-            first = false
-          end
           @parent_object_eval << "#{parent_object};"
         end
         notify_v8
       end
     end
 
-    def initialize(max_memory: nil, timeout: nil, isolate: nil, ensure_gc_after_idle: nil, snapshot: nil, marshal_stack_depth: nil)
-      options ||= {}
-
-      check_init_options!(isolate: isolate, snapshot: snapshot, max_memory: max_memory, marshal_stack_depth: marshal_stack_depth, ensure_gc_after_idle: ensure_gc_after_idle, timeout: timeout)
+    def initialize(
+      max_memory: nil,
+      timeout: nil,
+      isolate: nil,
+      ensure_gc_after_idle: nil,
+      snapshot: nil,
+      marshal_stack_depth: nil
+    )
+      check_init_options!(
+        isolate: isolate,
+        snapshot: snapshot,
+        max_memory: max_memory,
+        marshal_stack_depth: marshal_stack_depth,
+        ensure_gc_after_idle: ensure_gc_after_idle,
+        timeout: timeout
+      )
 
       @functions = {}
       @timeout = nil
@@ -140,17 +151,20 @@ module MiniRacer
       @isolate = create_isolate_value
     end
 
-    def eval(str, options=nil)
-      raise(ContextDisposedError, 'attempted to call eval on a disposed context!') if @disposed
+    def eval(str, options = nil)
+      if @disposed
+        raise(
+          ContextDisposedError,
+          "attempted to call eval on a disposed context!"
+        )
+      end
 
       filename = options && options[:filename].to_s
 
       @eval_thread = Thread.current
       isolate_mutex.synchronize do
         @current_exception = nil
-        timeout do
-          eval_unsafe(str, filename)
-        end
+        timeout { eval_unsafe(str, filename) }
       end
     ensure
       @eval_thread = nil
@@ -158,13 +172,16 @@ module MiniRacer
     end
 
     def call(function_name, *arguments)
-      raise(ContextDisposedError, 'attempted to call function on a disposed context!') if @disposed
+      if @disposed
+        raise(
+          ContextDisposedError,
+          "attempted to call function on a disposed context!"
+        )
+      end
 
       @eval_thread = Thread.current
       isolate_mutex.synchronize do
-        timeout do
-          call_unsafe(function_name, *arguments)
-        end
+        timeout { call_unsafe(function_name, *arguments) }
       end
     ensure
       @eval_thread = nil
@@ -181,43 +198,36 @@ module MiniRacer
       end
     end
 
-
     def attach(name, callback)
-      raise(ContextDisposedError, 'attempted to call function on a disposed context!') if @disposed
-
-      wrapped = lambda do |*args|
-        begin
-
-          r = nil
-
-          begin
-            @callback_mutex.synchronize{
-              @callback_running = true
-            }
-            r = callback.call(*args)
-          ensure
-            @callback_mutex.synchronize{
-              @callback_running = false
-            }
-          end
-
-          # wait up to 2 seconds for this to be interrupted
-          # will very rarely be called cause #raise is called
-          # in another mutex
-          @callback_mutex.synchronize {
-            if @thread_raise_called
-              sleep 2
-            end
-          }
-
-          r
-
-        ensure
-          @callback_mutex.synchronize {
-            @thread_raise_called = false
-          }
-        end
+      if @disposed
+        raise(
+          ContextDisposedError,
+          "attempted to call function on a disposed context!"
+        )
       end
+
+      wrapped =
+        lambda do |*args|
+          begin
+            r = nil
+
+            begin
+              @callback_mutex.synchronize { @callback_running = true }
+              r = callback.call(*args)
+            ensure
+              @callback_mutex.synchronize { @callback_running = false }
+            end
+
+            # wait up to 2 seconds for this to be interrupted
+            # will very rarely be called cause #raise is called
+            # in another mutex
+            @callback_mutex.synchronize { sleep 2 if @thread_raise_called }
+
+            r
+          ensure
+            @callback_mutex.synchronize { @thread_raise_called = false }
+          end
+        end
 
       isolate_mutex.synchronize do
         external = ExternalFunction.new(name, wrapped, self)
@@ -232,41 +242,43 @@ module MiniRacer
       @ensure_gc_mutex.synchronize do
         @ensure_gc_thread = nil if !@ensure_gc_thread&.alive?
         return if !Thread.main.alive? # avoid "can't alloc thread" exception
-        @ensure_gc_thread ||= Thread.new do
-          ensure_gc_after_idle_seconds = @ensure_gc_after_idle / 1000.0
-          done = false
-          while !done
-            now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        @ensure_gc_thread ||=
+          Thread.new do
+            ensure_gc_after_idle_seconds = @ensure_gc_after_idle / 1000.0
+            done = false
+            while !done
+              now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
-            if @disposed
-              @ensure_gc_thread = nil
-              break
-            end
+              if @disposed
+                @ensure_gc_thread = nil
+                break
+              end
 
-            if !@eval_thread && ensure_gc_after_idle_seconds < now - @last_eval
-              @ensure_gc_mutex.synchronize do
-                isolate_mutex.synchronize do
-                  if !@eval_thread
-                    low_memory_notification if !@disposed
-                    @ensure_gc_thread = nil
-                    done = true
+              if !@eval_thread &&
+                   ensure_gc_after_idle_seconds < now - @last_eval
+                @ensure_gc_mutex.synchronize do
+                  isolate_mutex.synchronize do
+                    if !@eval_thread
+                      low_memory_notification if !@disposed
+                      @ensure_gc_thread = nil
+                      done = true
+                    end
                   end
                 end
               end
+              sleep ensure_gc_after_idle_seconds if !done
             end
-            sleep ensure_gc_after_idle_seconds if !done
           end
-        end
       end
     end
 
     def stop_attached
-      @callback_mutex.synchronize{
+      @callback_mutex.synchronize do
         if @callback_running
           @eval_thread.raise ScriptTerminatedError, "Terminated during callback"
           @thread_raise_called = true
         end
-      }
+      end
     end
 
     def timeout(&blk)
@@ -275,26 +287,21 @@ module MiniRacer
       mutex = Mutex.new
       done = false
 
-      rp,wp = IO.pipe
+      rp, wp = IO.pipe
 
-      t = Thread.new do
-        begin
-          result = rp.wait_readable(@timeout/1000.0)
-          if !result
-            mutex.synchronize do
-              stop unless done
-            end
+      t =
+        Thread.new do
+          begin
+            result = rp.wait_readable(@timeout / 1000.0)
+            mutex.synchronize { stop unless done } if !result
+          rescue => e
+            STDERR.puts e
+            STDERR.puts "FAILED TO TERMINATE DUE TO TIMEOUT"
           end
-        rescue => e
-          STDERR.puts e
-          STDERR.puts "FAILED TO TERMINATE DUE TO TIMEOUT"
         end
-      end
 
       rval = blk.call
-      mutex.synchronize do
-        done = true
-      end
+      mutex.synchronize { done = true }
 
       wp.close
 
@@ -310,44 +317,69 @@ module MiniRacer
       rp&.close
     end
 
-    def check_init_options!(isolate:, snapshot:, max_memory:, marshal_stack_depth:, ensure_gc_after_idle:, timeout:)
-      assert_option_is_nil_or_a('isolate', isolate, Isolate)
-      assert_option_is_nil_or_a('snapshot', snapshot, Snapshot)
+    def check_init_options!(
+      isolate:,
+      snapshot:,
+      max_memory:,
+      marshal_stack_depth:,
+      ensure_gc_after_idle:,
+      timeout:
+    )
+      assert_option_is_nil_or_a("isolate", isolate, Isolate)
+      assert_option_is_nil_or_a("snapshot", snapshot, Snapshot)
 
-      assert_numeric_or_nil('max_memory', max_memory, min_value: 10_000, max_value: 2**32-1)
-      assert_numeric_or_nil('marshal_stack_depth', marshal_stack_depth, min_value: 1, max_value: MARSHAL_STACKDEPTH_MAX_VALUE)
-      assert_numeric_or_nil('ensure_gc_after_idle', ensure_gc_after_idle, min_value: 1)
-      assert_numeric_or_nil('timeout', timeout, min_value: 1)
+      assert_numeric_or_nil(
+        "max_memory",
+        max_memory,
+        min_value: 10_000,
+        max_value: (2**32) - 1
+      )
+      assert_numeric_or_nil(
+        "marshal_stack_depth",
+        marshal_stack_depth,
+        min_value: 1,
+        max_value: MARSHAL_STACKDEPTH_MAX_VALUE
+      )
+      assert_numeric_or_nil(
+        "ensure_gc_after_idle",
+        ensure_gc_after_idle,
+        min_value: 1
+      )
+      assert_numeric_or_nil("timeout", timeout, min_value: 1)
 
       if isolate && snapshot
-        raise ArgumentError, 'can only pass one of isolate and snapshot options'
+        raise ArgumentError, "can only pass one of isolate and snapshot options"
       end
     end
 
     def assert_numeric_or_nil(option_name, object, min_value:, max_value: nil)
       if max_value && object.is_a?(Numeric) && object > max_value
-        raise ArgumentError, "#{option_name} must be less than or equal to #{max_value}"
+        raise ArgumentError,
+              "#{option_name} must be less than or equal to #{max_value}"
       end
 
       if object.is_a?(Numeric) && object < min_value
-        raise ArgumentError, "#{option_name} must be larger than or equal to #{min_value}"
+        raise ArgumentError,
+              "#{option_name} must be larger than or equal to #{min_value}"
       end
 
       if !object.nil? && !object.is_a?(Numeric)
-        raise ArgumentError, "#{option_name} must be a number, passed a #{object.inspect}"
+        raise ArgumentError,
+              "#{option_name} must be a number, passed a #{object.inspect}"
       end
     end
 
     def assert_option_is_nil_or_a(option_name, object, klass)
       unless object.nil? || object.is_a?(klass)
-        raise ArgumentError, "#{option_name} must be a #{klass} object, passed a #{object.inspect}"
+        raise ArgumentError,
+              "#{option_name} must be a #{klass} object, passed a #{object.inspect}"
       end
     end
   end
 
   # `size` and `warmup!` public methods are defined in the C class
   class Snapshot
-    def initialize(str = '')
+    def initialize(str = "")
       # ensure it first can load
       begin
         ctx = MiniRacer::Context.new

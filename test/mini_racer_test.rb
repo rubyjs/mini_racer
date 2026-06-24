@@ -19,7 +19,7 @@ class MiniRacerTest < Minitest::Test
   MiniRacer::Platform.set_flags! :stress_snapshot
 
   def assert_ruby_script(script)
-    file = Tempfile.new(["mini_racer_test", ".rb"])
+    file = Tempfile.new(%w[mini_racer_test .rb])
     file.write(<<~RUBY)
       $LOAD_PATH.unshift #{File.expand_path("../lib", __dir__).inspect}
       require "mini_racer"
@@ -199,7 +199,10 @@ class MiniRacerTest < Minitest::Test
       end
     end
 
-    assert_operator timeouts, :>, 0, "Timeout.timeout never interrupted a MiniRacer call"
+    assert_operator timeouts,
+                    :>,
+                    0,
+                    "Timeout.timeout never interrupted a MiniRacer call"
   end
 
   def test_ruby_timeout_during_nested_callback_does_not_poison_context
@@ -330,9 +333,6 @@ class MiniRacerTest < Minitest::Test
   end
 
   class FooError < StandardError
-    def initialize(message)
-      super(message)
-    end
   end
 
   def test_attached_exceptions
@@ -340,7 +340,6 @@ class MiniRacerTest < Minitest::Test
     context.attach("adder", proc { raise FooError, "I like foos" })
     assert_raises do
       begin
-        raise FooError, "I like foos"
         context.eval("adder()")
       rescue => e
         assert_equal FooError, e.class
@@ -420,12 +419,13 @@ class MiniRacerTest < Minitest::Test
       assert_reusable(context, "cross-thread")
     RUBY
 
-    stdout, stderr, status = Open3.capture3(
-      RbConfig.ruby,
-      "-I#{File.expand_path("../lib", __dir__)}",
-      "-e",
-      script
-    )
+    stdout, stderr, status =
+      Open3.capture3(
+        RbConfig.ruby,
+        "-I#{File.expand_path("../lib", __dir__)}",
+        "-e",
+        script
+      )
 
     assert status.success?, <<~MSG
       NUL callback exception script failed with status #{status.exitstatus || "signal #{status.termsig}"}
@@ -439,9 +439,10 @@ class MiniRacerTest < Minitest::Test
   def test_javascript_exception_with_nul_message_preserves_message
     context = MiniRacer::Context.new
 
-    error = assert_raises(MiniRacer::RuntimeError) do
-      context.eval("throw new Error('a\\0b')")
-    end
+    error =
+      assert_raises(MiniRacer::RuntimeError) do
+        context.eval("throw new Error('a\\0b')")
+      end
 
     assert_equal "Error: a\x00b", error.message
     assert_equal 42, context.eval("40 + 2")
@@ -452,9 +453,10 @@ class MiniRacerTest < Minitest::Test
       skip "TruffleRuby does not yet implement snapshots"
     end
 
-    error = assert_raises(MiniRacer::SnapshotError) do
-      MiniRacer::Snapshot.new("throw new Error('a\\0b')")
-    end
+    error =
+      assert_raises(MiniRacer::SnapshotError) do
+        MiniRacer::Snapshot.new("throw new Error('a\\0b')")
+      end
 
     assert_equal "Uncaught Error: a\x00b", error.message
   end
@@ -464,9 +466,12 @@ class MiniRacerTest < Minitest::Test
 
     context.attach("with_nul\x00suffix", proc { "attached" })
     assert_equal "undefined", context.eval("typeof globalThis.with_nul")
-    assert_equal "attached", context.eval("globalThis['with_nul\\u0000suffix']()")
+    assert_equal "attached",
+                 context.eval("globalThis['with_nul\\u0000suffix']()")
 
-    context.eval("globalThis['call_nul\\u0000suffix'] = function() { return 'called'; }")
+    context.eval(
+      "globalThis['call_nul\\u0000suffix'] = function() { return 'called'; }"
+    )
     assert_equal "called", context.call("call_nul\x00suffix")
   end
 
@@ -520,7 +525,7 @@ class MiniRacerTest < Minitest::Test
 
     # check that marshalling to JS creates a date object (getTime())
     assert_equal(
-      test_time.tv_sec * 1000 + test_time.tv_usec / 1000,
+      (test_time.tv_sec * 1000) + (test_time.tv_usec / 1000),
       context.eval("var result = test(); result.getTime();").to_i
     )
 
@@ -558,7 +563,7 @@ class MiniRacerTest < Minitest::Test
       context.attach("test", proc { test_time })
 
       assert_equal(
-        test_time.tv_sec * 1000 + test_time.tv_usec / 1000,
+        (test_time.tv_sec * 1000) + (test_time.tv_usec / 1000),
         context.eval("var result = test(); result.getTime();").to_i
       )
 
@@ -585,7 +590,7 @@ class MiniRacerTest < Minitest::Test
 
   def test_return_int_max
     context = MiniRacer::Context.new
-    test_num = 2**(31) - 1 #last int32 number
+    test_num = (2**(31)) - 1 #last int32 number
     context.attach("test", proc { test_num })
 
     assert_equal(true, context.eval("test() === 2147483647"))
@@ -599,7 +604,7 @@ class MiniRacerTest < Minitest::Test
     assert_equal("Undefined Conversion", context.eval("test()"))
 
     # clean up and start up a new context
-    context = nil
+    context = nil # rubocop:disable Lint/UselessAssignment
     GC.start
 
     context = MiniRacer::Context.new
@@ -690,7 +695,7 @@ class MiniRacerTest < Minitest::Test
     context = MiniRacer::Context.new
     context.eval 'var hello = "world";'
 
-    context = nil
+    nil
     GC.start
   end
 
@@ -733,14 +738,20 @@ class MiniRacerTest < Minitest::Test
     if RUBY_ENGINE == "truffleruby"
       skip "TruffleRuby does not yet implement snapshots"
     end
-    snapshot = MiniRacer::Snapshot.new('var foo = "bar"; function hello() { return "world"; }')
+    snapshot =
+      MiniRacer::Snapshot.new(
+        'var foo = "bar"; function hello() { return "world"; }'
+      )
     blob = snapshot.dump
 
     restored = MiniRacer::Snapshot.load(blob)
 
     assert_equal(snapshot.size, restored.size)
     assert_equal(Encoding::ASCII_8BIT, restored.dump.encoding)
-    assert(restored.dump.valid_encoding?, "restored snapshot dump should have valid encoding")
+    assert(
+      restored.dump.valid_encoding?,
+      "restored snapshot dump should have valid encoding"
+    )
     ctx = MiniRacer::Context.new(snapshot: restored)
     assert_equal("bar", ctx.eval("foo"))
     assert_equal("world", ctx.eval("hello()"))
@@ -755,12 +766,18 @@ class MiniRacerTest < Minitest::Test
     # Binary data interpreted as UTF-8 will have broken encoding.
     blob = snapshot.dump.dup.force_encoding("UTF-8")
     assert_equal(Encoding::UTF_8, blob.encoding)
-    assert(!blob.valid_encoding?, "test precondition: blob should have broken UTF-8 encoding")
+    assert(
+      !blob.valid_encoding?,
+      "test precondition: blob should have broken UTF-8 encoding"
+    )
 
     restored = MiniRacer::Snapshot.load(blob)
 
     assert_equal(Encoding::ASCII_8BIT, restored.dump.encoding)
-    assert(restored.dump.valid_encoding?, "restored snapshot should have valid binary encoding")
+    assert(
+      restored.dump.valid_encoding?,
+      "restored snapshot should have valid binary encoding"
+    )
     ctx = MiniRacer::Context.new(snapshot: restored)
     assert_equal("bar", ctx.eval("foo"))
   end
@@ -837,7 +854,7 @@ class MiniRacerTest < Minitest::Test
     context = MiniRacer::Context.new(snapshot: snapshot)
 
     # force the snapshot to be GC'ed
-    snapshot = nil
+    nil
     GC.start
 
     # the context should still work fine
@@ -898,14 +915,16 @@ class MiniRacerTest < Minitest::Test
       exit!(1)
     RUBY
 
-    _stdout, stderr, status = Open3.capture3(
-      RbConfig.ruby,
-      "-I#{File.expand_path("../lib", __dir__)}",
-      "-e",
-      script
-    )
+    _stdout, stderr, status =
+      Open3.capture3(
+        RbConfig.ruby,
+        "-I#{File.expand_path("../lib", __dir__)}",
+        "-e",
+        script
+      )
 
-    assert status.success?, "expected NUL flag rejection, got status #{status.exitstatus}: #{stderr}"
+    assert status.success?,
+           "expected NUL flag rejection, got status #{status.exitstatus}: #{stderr}"
   end
 
   def test_platform_set_flags_rejects_overly_long_flags
@@ -922,14 +941,16 @@ class MiniRacerTest < Minitest::Test
       exit!(1)
     RUBY
 
-    _stdout, stderr, status = Open3.capture3(
-      RbConfig.ruby,
-      "-I#{File.expand_path("../lib", __dir__)}",
-      "-e",
-      script
-    )
+    _stdout, stderr, status =
+      Open3.capture3(
+        RbConfig.ruby,
+        "-I#{File.expand_path("../lib", __dir__)}",
+        "-e",
+        script
+      )
 
-    assert status.success?, "expected long flag rejection, got status #{status.exitstatus}: #{stderr}"
+    assert status.success?,
+           "expected long flag rejection, got status #{status.exitstatus}: #{stderr}"
   end
 
   def test_platform_set_flags_works
@@ -1169,7 +1190,7 @@ class MiniRacerTest < Minitest::Test
     # make sure that we clean up early so pipe file
     # descriptors are not kept around
     context = MiniRacer::Context.new(timeout: 1000)
-    10_000.times { |i| context.eval("'hello'") }
+    10_000.times { |_i| context.eval("'hello'") }
   end
 
   def test_symbol_support
@@ -1295,10 +1316,10 @@ class MiniRacerTest < Minitest::Test
       skip "TruffleRuby does not implement perform_microtask_checkpoint (V8-only)"
     end
     context = MiniRacer::Context.new
-    seen    = []
+    seen = []
 
-    context.attach('note',  ->(s) { seen << s })
-    context.attach('drain', -> { context.perform_microtask_checkpoint })
+    context.attach("note", ->(s) { seen << s })
+    context.attach("drain", -> { context.perform_microtask_checkpoint })
 
     context.eval <<~JS
       Promise.resolve().then(() => note('microtask-fired'));
@@ -1317,7 +1338,7 @@ class MiniRacerTest < Minitest::Test
     context = MiniRacer::Context.new()
     context.eval("let instance = null;")
     filename = File.expand_path("../support/add.wasm", __FILE__)
-    context.attach("loadwasm", proc { |f| File.read(filename).each_byte.to_a })
+    context.attach("loadwasm", proc { |_f| File.read(filename).each_byte.to_a })
     context.attach("print", proc { |f| puts f })
 
     context.eval <<~JS
@@ -1396,16 +1417,24 @@ class MiniRacerTest < Minitest::Test
     Thread.report_on_exception = false
     terminated = false
 
-    active = Thread.new do
-      begin
-        context.eval("while (true) {}")
-      rescue MiniRacer::ScriptTerminatedError
-        terminated = true
+    active =
+      Thread.new do
+        begin
+          context.eval("while (true) {}")
+        rescue MiniRacer::ScriptTerminatedError
+          terminated = true
+        end
       end
-    end
     sleep 0.1
 
-    waiter = Thread.new { context.eval("1 + 1") rescue nil }
+    waiter =
+      Thread.new do
+        begin
+          context.eval("1 + 1")
+        rescue StandardError
+          nil
+        end
+      end
     sleep 0.1
     waiter.kill
     sleep 0.2
@@ -1415,7 +1444,8 @@ class MiniRacerTest < Minitest::Test
     assert active.join(3), "active thread did not stop"
     assert waiter.join(3), "waiting thread did not stop"
   ensure
-    Thread.report_on_exception = old_report_on_exception unless old_report_on_exception.nil?
+    Thread.report_on_exception =
+      old_report_on_exception unless old_report_on_exception.nil?
   end
 
   def test_dispose_while_callback_is_running
@@ -1425,17 +1455,22 @@ class MiniRacerTest < Minitest::Test
     old_report_on_exception = Thread.report_on_exception
     Thread.report_on_exception = false
 
-    context.attach("block", proc do
-      started_w.write("x")
-      started_w.flush
-      release_r.read(1)
-      42
-    end)
+    context.attach(
+      "block",
+      proc do
+        started_w.write("x")
+        started_w.flush
+        release_r.read(1)
+        42
+      end
+    )
 
-    eval_thread = Thread.new do
-      context.eval("block()")
-    rescue MiniRacer::RuntimeError, MiniRacer::ContextDisposedError
-    end
+    eval_thread =
+      Thread.new do
+        context.eval("block()")
+      rescue MiniRacer::RuntimeError, MiniRacer::ContextDisposedError
+        nil
+      end
 
     started_r.read(1)
     dispose_thread = Thread.new { context.dispose }
@@ -1446,8 +1481,15 @@ class MiniRacerTest < Minitest::Test
     assert eval_thread.join(3), "eval thread did not finish"
     assert dispose_thread.join(3), "dispose thread did not finish"
   ensure
-    Thread.report_on_exception = old_report_on_exception unless old_report_on_exception.nil?
-    [started_r, started_w, release_r, release_w].each { |io| io&.close rescue nil }
+    Thread.report_on_exception =
+      old_report_on_exception unless old_report_on_exception.nil?
+    [started_r, started_w, release_r, release_w].each do |io|
+      begin
+        io&.close
+      rescue StandardError
+        nil
+      end
+    end
   end
 
   def test_forking
@@ -1579,9 +1621,15 @@ class MiniRacerTest < Minitest::Test
     assert_equal(actual.message, "boom")
     if RUBY_ENGINE == "truffleruby"
       assert_includes(actual.backtrace[0], "#{__FILE__}:#{line}")
-      assert_includes(actual.backtrace[0], "block in MiniRacerTest#test_ruby_exception")
+      assert_includes(
+        actual.backtrace[0],
+        "block in MiniRacerTest#test_ruby_exception"
+      )
     else
-      assert_equal(actual.backtrace, ["JavaScript Error: boom", "JavaScript at <eval>:1:7"])
+      assert_equal(
+        actual.backtrace,
+        ["JavaScript Error: boom", "JavaScript at <eval>:1:7"]
+      )
     end
   end
 
@@ -1589,10 +1637,10 @@ class MiniRacerTest < Minitest::Test
     context = MiniRacer::Context.new
 
     {
-      "Number.MAX_SAFE_INTEGER" => 2**53 - 1,
+      "Number.MAX_SAFE_INTEGER" => (2**53) - 1,
       "2**62" => 2**62,
       "2**63" => 2**63,
-      "-(2**62) - 1024" => -(2**62) - 1024,
+      "-(2**62) - 1024" => -(2**62) - 1024
     }.each do |source, expected|
       result = context.eval(source)
       assert_kind_of Integer, result
@@ -1605,22 +1653,27 @@ class MiniRacerTest < Minitest::Test
   end
 
   def test_large_integer
-    [10_000_000_001, -(2**62), -2**63, 2**63-1].each { |big_int|
+    [10_000_000_001, -(2**62), -2**63, (2**63) - 1].each do |big_int|
       context = MiniRacer::Context.new
       context.attach("test", proc { big_int })
       result = context.eval("test()")
       assert_equal(result.class, big_int.class)
       assert_equal(result, big_int)
-    }
+    end
     types = []
-    [2**63/1024-1, 2**63/1024, -2**63/1024+1, -2**63/1024].each { |big_int|
+    [
+      ((2**63) / 1024) - 1,
+      (2**63) / 1024,
+      (-2**63 / 1024) + 1,
+      -2**63 / 1024
+    ].each do |big_int|
       context = MiniRacer::Context.new
       context.attach("test", proc { big_int })
       context.attach("type", proc { |arg| types.push(arg) })
       result = context.eval("const t = test(); type(typeof t); t")
       assert_equal(result.class, big_int.class)
       assert_equal(result, big_int)
-    }
+    end
     if RUBY_ENGINE == "truffleruby"
       assert_equal(types, %w[number number number number])
     else
@@ -1630,15 +1683,16 @@ class MiniRacerTest < Minitest::Test
 
   def test_uint8array_is_converted_to_string
     context = MiniRacer::Context.new
-    result = context.eval('new Uint8Array([0, 1, 2, 3])')
+    result = context.eval("new Uint8Array([0, 1, 2, 3])")
     assert_equal "\x00\x01\x02\x03".b, result
   end
 
   def test_binary_returns_uint8array
     context = MiniRacer::Context.new
-    context.attach("create_uint8_array", -> {
-      MiniRacer::Binary.new([1, 2, 3, 4].pack("C*"))
-    })
+    context.attach(
+      "create_uint8_array",
+      -> { MiniRacer::Binary.new([1, 2, 3, 4].pack("C*")) }
+    )
 
     result = context.eval <<~JS
       var output = create_uint8_array();
