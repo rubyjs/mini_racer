@@ -1014,6 +1014,14 @@ extern "C" void v8_terminate_execution(State *pst)
     pst->isolate->TerminateExecution();
 }
 
+// called from ruby thread
+extern "C" void v8_cancel_terminate_execution(State *pst)
+{
+    // TerminateExecution can race with V8 completing and queue a termination
+    // for the next entry without IsExecutionTerminating() becoming true.
+    pst->isolate->CancelTerminateExecution();
+}
+
 extern "C" void v8_single_threaded_enter(State *pst, Context *c, void (*f)(Context *c))
 {
     State& st = *pst;

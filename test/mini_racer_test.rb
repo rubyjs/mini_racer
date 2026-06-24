@@ -2,6 +2,9 @@
 
 require "securerandom"
 require "date"
+require "open3"
+require "rbconfig"
+require "tempfile"
 require "test_helper"
 
 class MiniRacerTest < Minitest::Test
@@ -14,6 +17,28 @@ class MiniRacerTest < Minitest::Test
   # Fatal error in ../deps/v8/src/heap/read-only-spaces.cc, line 70
   # Check failed: read_only_blob_checksum_ == snapshot_checksum (<unprintable> vs. 1099685679).
   MiniRacer::Platform.set_flags! :stress_snapshot
+
+  def assert_ruby_script(script)
+    file = Tempfile.new(["mini_racer_test", ".rb"])
+    file.write(<<~RUBY)
+      $LOAD_PATH.unshift #{File.expand_path("../lib", __dir__).inspect}
+      require "mini_racer"
+
+      #{script}
+    RUBY
+    file.close
+
+    stdout, stderr, status = Open3.capture3(RbConfig.ruby, file.path)
+    assert status.success?, <<~MSG
+      script failed with status #{status.exitstatus}
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+  ensure
+    file&.unlink
+  end
 
   def test_locale_mx
     if RUBY_ENGINE == "truffleruby"
@@ -149,6 +174,106 @@ class MiniRacerTest < Minitest::Test
     # 2 millisecs is a very short timeout but we don't want test running forever
     context = MiniRacer::Context.new(timeout: 2)
     assert_raises { context.eval("while(true){}") }
+  end
+
+  def test_ruby_timeout_does_not_leave_stale_termination
+    if RUBY_ENGINE == "truffleruby"
+      skip "TruffleRuby does not use the native rb_nogvl unblock path"
+    end
+
+    require "timeout"
+
+    context = MiniRacer::Context.new
+    timeouts = 0
+
+    # Timeout.timeout interrupts the eval thread via rb_nogvl's UBF. If that
+    # happens after V8 has replied, the next call must not inherit a stale
+    # V8 termination request.
+    100_000.times do
+      begin
+        Timeout.timeout(0.00001) { context.eval("1 + 1") }
+      rescue Timeout::Error
+        timeouts += 1
+        assert_equal 4, context.eval("2 + 2")
+        break if timeouts >= 100
+      end
+    end
+
+    assert_operator timeouts, :>, 0, "Timeout.timeout never interrupted a MiniRacer call"
+  end
+
+  def test_ruby_timeout_during_nested_callback_does_not_poison_context
+    skip "Signal/UBF behavior is CRuby-specific" unless RUBY_ENGINE == "ruby"
+
+    require "timeout"
+
+    context = MiniRacer::Context.new
+    context.attach("nested", proc { context.eval("while (true) {}") })
+
+    assert_raises(Timeout::Error) do
+      Timeout.timeout(0.05) { context.eval("nested()") }
+    end
+
+    assert_equal 2, context.eval("1 + 1")
+  end
+
+  def test_ruby_signal_handler_does_not_terminate_running_javascript
+    skip "Signal/UBF behavior is CRuby-specific" unless RUBY_ENGINE == "ruby"
+
+    assert_ruby_script <<~'RUBY'
+      Thread.report_on_exception = false
+
+      handled_usr1 = false
+      Signal.trap("USR1") { handled_usr1 = true }
+
+      context = MiniRacer::Context.new
+      sender = Thread.new do
+        sleep 0.05
+        Process.kill("USR1", Process.pid)
+      end
+
+      result = context.eval(<<~JS)
+        const deadline = Date.now() + 250;
+        while (Date.now() < deadline) {}
+        42;
+      JS
+
+      sender.join
+      raise "USR1 handler did not run" unless handled_usr1
+      raise "bad eval result: #{result.inspect}" unless result == 42
+    RUBY
+  end
+
+  def test_ruby_signal_handler_during_nested_callback_does_not_terminate_javascript
+    skip "Signal/UBF behavior is CRuby-specific" unless RUBY_ENGINE == "ruby"
+
+    assert_ruby_script <<~'RUBY'
+      Thread.report_on_exception = false
+
+      handled_usr1 = false
+      Signal.trap("USR1") { handled_usr1 = true }
+
+      context = MiniRacer::Context.new
+      context.attach("nested", proc do
+        sender = Thread.new do
+          sleep 0.05
+          Process.kill("USR1", Process.pid)
+        end
+
+        result = context.eval(<<~JS)
+          const deadline = Date.now() + 250;
+          while (Date.now() < deadline) {}
+          41;
+        JS
+
+        sender.join
+        result + 1
+      end)
+
+      result = context.eval("nested()")
+      raise "USR1 handler did not run" unless handled_usr1
+      raise "bad eval result: #{result.inspect}" unless result == 42
+    RUBY
   end
 
   def test_returns_javascript_function
@@ -1309,7 +1434,7 @@ class MiniRacerTest < Minitest::Test
 
     eval_thread = Thread.new do
       context.eval("block()")
-    rescue MiniRacer::RuntimeError
+    rescue MiniRacer::RuntimeError, MiniRacer::ContextDisposedError
     end
 
     started_r.read(1)

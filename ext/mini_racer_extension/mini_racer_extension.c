@@ -137,6 +137,8 @@ typedef struct Context
     VALUE procs;       // array of js -> ruby callbacks
     VALUE exception;   // pending exception or Qnil
     Buf req, res;      // ruby->v8 request/response, mediated by |mtx| and |cv|
+    Buf v8_req;        // stable v8-side copy of a request returned by v8_roundtrip
+    int res_ready;     // protected by |mtx|; response may be filled before ready
     Buf snapshot;
     pthread_t single_threaded_thr;
     pid_t single_threaded_pid;
@@ -230,6 +232,8 @@ struct rendezvous_nogvl
     Context *context;
     Buf *req, *res;
     atomic_int active;
+    atomic_int interrupted;
+    int started, finished, has_rr_mtx;
 };
 
 struct rendezvous_des
@@ -822,11 +826,28 @@ static void dispatch1(Context *c, const uint8_t *p, size_t n)
     fflush(stderr);
 }
 
+static void dispatch_buf(Context *c, Buf *req)
+{
+    Buf local_req;
+
+    // Called with Context.mtx held. Release it while V8 runs so an rb_nogvl
+    // UBF can wake the Ruby thread to process interrupts with
+    // rb_thread_check_ints(), without forcing termination first. Move the
+    // request out first so cancellation cannot free a buffer V8 is reading.
+    buf_move(req, &local_req);
+    buf_reset(&c->res);
+    c->res_ready = 0;
+    pthread_mutex_unlock(&c->mtx);
+    dispatch1(c, local_req.buf, local_req.len);
+    pthread_mutex_lock(&c->mtx);
+    buf_reset(&local_req);
+    c->res_ready = 1;
+    pthread_cond_signal(&c->cv);
+}
+
 static void dispatch(Context *c)
 {
-    buf_reset(&c->res);
-    dispatch1(c, c->req.buf, c->req.len);
-    buf_reset(&c->req);
+    dispatch_buf(c, &c->req);
 }
 
 // called by v8_isolate_and_context
@@ -859,19 +880,22 @@ void v8_thread_main(Context *c, struct State *pst)
     }
 }
 
-// called by v8_thread_main and from mini_racer_v8.cc,
-// in all cases with Context.mtx held
+// called by v8_thread_main and from mini_racer_v8.cc
 void v8_dispatch(Context *c)
 {
-    dispatch1(c, c->req.buf, c->req.len);
-    buf_reset(&c->req);
+    pthread_mutex_lock(&c->mtx);
+    dispatch_buf(c, &c->v8_req);
+    pthread_mutex_unlock(&c->mtx);
 }
 
-// called from mini_racer_v8.cc with Context.mtx held
 // only called when inside v8_call, v8_eval, or v8_pump_message_loop
 void v8_roundtrip(Context *c, const uint8_t **p, size_t *n)
 {
+    pthread_mutex_lock(&c->mtx);
+    buf_reset(&c->v8_req);
     buf_reset(&c->req);
+    if (c->res.len)
+        c->res_ready = 1;
     pthread_cond_signal(&c->cv);
     while (!c->req.len && !atomic_load(&c->quit))
         pthread_cond_wait(&c->cv, &c->mtx);
@@ -879,17 +903,22 @@ void v8_roundtrip(Context *c, const uint8_t **p, size_t *n)
         static const uint8_t disposed[] = "edisposed context";
         *p = disposed;
         *n = sizeof(disposed) - 1;
+        pthread_mutex_unlock(&c->mtx);
         return;
     }
     buf_reset(&c->res);
-    *p = c->req.buf;
-    *n = c->req.len;
+    c->res_ready = 0;
+    buf_move(&c->req, &c->v8_req);
+    *p = c->v8_req.buf;
+    *n = c->v8_req.len;
+    pthread_mutex_unlock(&c->mtx);
 }
 
-// called from mini_racer_v8.cc with Context.mtx held
 void v8_reply(Context *c, const uint8_t *p, size_t n)
 {
+    pthread_mutex_lock(&c->mtx);
     buf_put(&c->res, p, n);
+    pthread_mutex_unlock(&c->mtx);
 }
 
 static void v8_once_init(void)
@@ -1059,6 +1088,19 @@ static int single_threaded_runner_start(Context *c)
     return r;
 }
 
+static void rendezvous_release(struct rendezvous_nogvl *a)
+{
+    Context *c;
+
+    atomic_store(&a->active, 0);
+    if (!a->has_rr_mtx)
+        return;
+    c = a->context;
+    c->depth--;
+    a->has_rr_mtx = 0;
+    pthread_mutex_unlock(&c->rr_mtx);
+}
+
 static inline void *rendezvous_nogvl(void *arg)
 {
     struct rendezvous_nogvl *a;
@@ -1067,62 +1109,77 @@ static inline void *rendezvous_nogvl(void *arg)
 
     a = arg;
     c = a->context;
-    if (single_threaded && (r = single_threaded_recover_after_fork(c)))
-        return (void *)(intptr_t)r;
-    pthread_mutex_lock(&c->rr_mtx);
-    atomic_store(&a->active, 1);
-    if (c->depth > 0 && c->depth%50 == 0) { // TODO stop steep recursion
-        fprintf(stderr, "mini_racer: deep js->ruby->js recursion, depth=%d\n", c->depth);
-        fflush(stderr);
+    if (!a->started) {
+        if (single_threaded && (r = single_threaded_recover_after_fork(c)))
+            return (void *)(intptr_t)r;
+        pthread_mutex_lock(&c->rr_mtx);
+        a->has_rr_mtx = 1;
+        if (c->depth > 0 && c->depth%50 == 0) { // TODO stop steep recursion
+            fprintf(stderr, "mini_racer: deep js->ruby->js recursion, depth=%d\n", c->depth);
+            fflush(stderr);
+        }
+        c->depth++;
+        a->started = 1;
     }
-    c->depth++;
+
 next:
+    atomic_store(&a->active, 1);
     pthread_mutex_lock(&c->mtx);
     if (atomic_load(&c->quit)) {
         buf_reset(a->req);
         pthread_mutex_unlock(&c->mtx);
-        c->depth--;
-        atomic_store(&a->active, 0);
-        pthread_mutex_unlock(&c->rr_mtx);
+        a->finished = 1;
+        rendezvous_release(a);
         return (void *)(intptr_t)ECANCELED;
     }
-    assert(c->req.len == 0);
-    assert(c->res.len == 0);
-    buf_move(a->req, &c->req); // v8 thread takes ownership of req
-    if (single_threaded) {
-        r = single_threaded_runner_start(c);
-        if (r) {
-            buf_move(&c->req, a->req);
-            pthread_mutex_unlock(&c->mtx);
-            c->depth--;
-            atomic_store(&a->active, 0);
-            pthread_mutex_unlock(&c->rr_mtx);
-            return (void *)(intptr_t)r;
+    if (a->req->len) {
+        assert(c->req.len == 0);
+        assert(!c->res_ready);
+        buf_move(a->req, &c->req); // v8 thread takes ownership of req
+        if (single_threaded) {
+            r = single_threaded_runner_start(c);
+            if (r) {
+                buf_move(&c->req, a->req);
+                pthread_mutex_unlock(&c->mtx);
+                a->finished = 1;
+                rendezvous_release(a);
+                return (void *)(intptr_t)r;
+            }
         }
         pthread_cond_signal(&c->cv);
-        do pthread_cond_wait(&c->cv, &c->mtx); while (!c->res.len);
-    } else {
-        pthread_cond_signal(&c->cv);
-        do pthread_cond_wait(&c->cv, &c->mtx); while (!c->res.len);
+    }
+    while (!c->res_ready && !atomic_load(&a->interrupted) && !atomic_load(&c->quit))
+        pthread_cond_wait(&c->cv, &c->mtx);
+    if (!c->res_ready && atomic_load(&a->interrupted)) {
+        atomic_store(&a->active, 0);
+        pthread_mutex_unlock(&c->mtx);
+        return (void *)(intptr_t)EINTR;
+    }
+    if (!c->res_ready && atomic_load(&c->quit)) {
+        buf_reset(a->req);
+        pthread_mutex_unlock(&c->mtx);
+        a->finished = 1;
+        rendezvous_release(a);
+        return (void *)(intptr_t)ECANCELED;
     }
     buf_move(&c->res, a->res);
+    c->res_ready = 0;
     pthread_cond_broadcast(&c->cv);
     pthread_mutex_unlock(&c->mtx);
+    atomic_store(&a->active, 0);
     if (*a->res->buf == 'c') { // js -> ruby callback?
         rb_thread_call_with_gvl(rendezvous_callback, a);
         buf_reset(a->res);
         if (atomic_load(&c->quit)) {
             buf_reset(a->req);
-            c->depth--;
-            atomic_store(&a->active, 0);
-            pthread_mutex_unlock(&c->rr_mtx);
+            a->finished = 1;
+            rendezvous_release(a);
             return (void *)(intptr_t)ECANCELED;
         }
         goto next;
     }
-    c->depth--;
-    atomic_store(&a->active, 0);
-    pthread_mutex_unlock(&c->rr_mtx);
+    a->finished = 1;
+    rendezvous_release(a);
     return NULL;
 }
 
@@ -1134,9 +1191,8 @@ static void rendezvous_ubf(void *arg)
     a = arg;
     if (!atomic_load(&a->active))
         return;
+    atomic_store(&a->interrupted, 1);
     c = a->context;
-    if (c->pst)
-        v8_terminate_execution(c->pst);
     pthread_cond_broadcast(&c->cv);
 }
 
@@ -1150,9 +1206,82 @@ static void terminate_ubf(void *arg)
     pthread_cond_broadcast(&c->cv);
 }
 
+static void *rendezvous_cancel_nogvl(void *arg)
+{
+    // Reply to any pending JS->Ruby callback with an 'e' marker plus message
+    // so V8 throws, unwinds, and reaches its normal termination cleanup.
+    static const uint8_t terminated[] = "eterminated";
+    struct rendezvous_nogvl *a;
+    Context *c;
+
+    a = arg;
+    c = a->context;
+    atomic_store(&a->active, 0);
+    if (c->pst)
+        v8_terminate_execution(c->pst);
+    pthread_mutex_lock(&c->mtx);
+    pthread_cond_broadcast(&c->cv);
+    while (!atomic_load(&c->quit)) {
+        while (!c->res_ready && !atomic_load(&c->quit))
+            pthread_cond_wait(&c->cv, &c->mtx);
+        if (!c->res_ready)
+            break;
+        if (c->res.len && *c->res.buf != 'c')
+            break;
+        buf_reset(&c->res);
+        c->res_ready = 0;
+        buf_reset(&c->req);
+        buf_put(&c->req, terminated, sizeof(terminated) - 1);
+        pthread_cond_signal(&c->cv);
+    }
+    buf_reset(&c->req);
+    buf_reset(&c->res);
+    buf_reset(&c->v8_req);
+    c->res_ready = 0;
+    pthread_cond_broadcast(&c->cv);
+    pthread_mutex_unlock(&c->mtx);
+    if (c->pst)
+        v8_cancel_terminate_execution(c->pst);
+    a->finished = 1;
+    rendezvous_release(a);
+    return NULL;
+}
+
+static VALUE rendezvous_no_des_body(VALUE arg)
+{
+    struct rendezvous_nogvl *a;
+    void *r;
+
+    a = (void *)arg;
+    for (;;) {
+        // Let the UBF wake this wait without deciding why Ruby interrupted it.
+        // Back under the GVL, rb_thread_check_ints() runs signal traps and
+        // raises real asynchronous exceptions (Timeout, Thread#raise, kill).
+        atomic_store(&a->interrupted, 0);
+        atomic_store(&a->active, 1);
+        r = rb_nogvl(rendezvous_nogvl, a, rendezvous_ubf, a, RB_NOGVL_INTR_FAIL);
+        atomic_store(&a->active, 0);
+        if (a->finished || (r && (int)(intptr_t)r != EINTR))
+            return LONG2NUM((long)(intptr_t)r);
+        rb_thread_check_ints();
+    }
+}
+
+static VALUE rendezvous_no_des_ensure(VALUE arg)
+{
+    struct rendezvous_nogvl *a;
+
+    a = (void *)arg;
+    if (a->started && !a->finished)
+        rb_nogvl(rendezvous_cancel_nogvl, a, NULL, NULL, 0);
+    buf_reset(a->req);
+    return Qnil;
+}
+
 static void rendezvous_no_des(Context *c, Buf *req, Buf *res)
 {
     void *r;
+    VALUE rv;
     struct rendezvous_nogvl a;
 
     if (atomic_load(&c->quit)) {
@@ -1163,7 +1292,15 @@ static void rendezvous_no_des(Context *c, Buf *req, Buf *res)
     a.req = req;
     a.res = res;
     atomic_init(&a.active, 0);
-    r = rb_nogvl(rendezvous_nogvl, &a, rendezvous_ubf, &a, 0);
+    atomic_init(&a.interrupted, 0);
+    a.started = 0;
+    a.finished = 0;
+    a.has_rr_mtx = 0;
+    rv = rb_ensure(rendezvous_no_des_body, (VALUE)&a,
+                   rendezvous_no_des_ensure, (VALUE)&a);
+    r = (void *)(intptr_t)NUM2LONG(rv);
+    if ((int)(intptr_t)r == ECANCELED)
+        rb_raise(context_disposed_error, "disposed context");
     if (r)
         rb_raise(runtime_error, "single-threaded runner: %s", strerror((int)(intptr_t)r));
 }
@@ -1283,6 +1420,7 @@ static VALUE context_alloc(VALUE klass)
     buf_init(&c->snapshot);
     buf_init(&c->req);
     buf_init(&c->res);
+    buf_init(&c->v8_req);
     cause = "pthread_condattr_init";
     if ((r = pthread_condattr_init(&cattr)))
         goto fail0;
@@ -1387,6 +1525,7 @@ static void context_abandon(Context *c)
     buf_reset(&c->snapshot);
     buf_reset(&c->req);
     buf_reset(&c->res);
+    buf_reset(&c->v8_req);
     ruby_xfree(c);
 }
 
@@ -1402,6 +1541,7 @@ static void context_destroy(Context *c)
     buf_reset(&c->snapshot);
     buf_reset(&c->req);
     buf_reset(&c->res);
+    buf_reset(&c->v8_req);
     ruby_xfree(c);
 }
 

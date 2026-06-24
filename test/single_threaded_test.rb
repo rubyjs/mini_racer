@@ -244,7 +244,7 @@ class MiniRacerSingleThreadedTest < Minitest::Test
       eval_thread = Thread.new do
         begin
           context.eval("block()")
-        rescue MiniRacer::RuntimeError
+        rescue MiniRacer::RuntimeError, MiniRacer::ContextDisposedError
         end
       end
       started_r.read(1)
