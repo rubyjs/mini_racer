@@ -35,8 +35,9 @@ bundle exec ruby benchmark/transpile/bench.rb --list-resources
 # Download and checksum resources without running the benchmark
 bundle exec ruby benchmark/transpile/bench.rb --fetch-only
 
-# Quick one-iteration run
-BENCH_ITERATIONS=1 bundle exec ruby benchmark/transpile/bench.rb
+# Quick one-iteration smoke run; use rounds=1 to opt out of the stable-sample
+# floor used for multi-round transpile runs.
+BENCH_ITERATIONS=1 BENCH_ROUNDS=1 BENCH_WARMUP=1 bundle exec ruby benchmark/transpile/bench.rb
 
 # Run on MiniRacer's single-threaded platform
 BENCH_SINGLE_THREADED=1 bundle exec ruby benchmark/transpile/bench.rb
@@ -52,6 +53,12 @@ bundle exec ruby benchmark/transpile/bench.rb --only 'transpile_call_source_to_e
 # Machine-readable output
 bundle exec ruby benchmark/transpile/bench.rb --json --output /tmp/mini_racer-transpile.json
 ```
+
+Before timing each benchmark case, the suite performs untimed warmup iterations.
+Multi-round runs collect at least seven timed samples because Babel/pdf.js
+transpilation has regular V8 GC outliers; with only two or three samples, the
+median can report an arbitrary GC phase instead of a stable center. Use
+`--rounds 1` only for smoke runs.
 
 Benchmark cases:
 

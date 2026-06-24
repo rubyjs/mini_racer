@@ -41,7 +41,7 @@ bundle exec ruby benchmark/run.rb \
   --git-tags v0.21.0,v0.21.3,working \
   --tags transpile,single-threaded \
   --transpile-iterations 1 \
-  --rounds 3
+  --rounds 7
 
 # Only single-threaded jobs
 bundle exec ruby benchmark/run.rb --tags single-threaded
@@ -52,7 +52,7 @@ bundle exec ruby benchmark/run.rb --tags serde,single-threaded
 # Only real-world transpile on the default platform
 bundle exec ruby benchmark/run.rb --tags transpile,default
 
-# Quick smoke run
+# Quick smoke run (reduced serde scale, one transpile iteration, one round, one warmup)
 bundle exec ruby benchmark/run.rb --tags all --quick
 
 # Save machine-readable results
@@ -70,7 +70,7 @@ Useful shared options:
 --git-tags REFS             Comma-separated git tags/refs to run; use `working` for this checkout
 --worktree-root PATH        Temporary worktree root for --git-tags
 --no-setup-git-refs         Skip bundle install + rake compile for git refs
---rounds N                  Timed samples per case
+--rounds N                  Timed samples per case; transpile multi-round runs floor this to 7
 --warmup N                  Warmup iterations per case
 --only REGEX                Run matching case names inside selected suites
 --serde-scale SCALE         Scale serde iteration counts

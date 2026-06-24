@@ -17,6 +17,8 @@ RESOURCES = JSON.parse(File.read(RESOURCE_FILE))
 DEFAULT_BABEL = "babel_standalone_7_26_10"
 DEFAULT_SOURCE = "pdfjs_worker_4_10_38"
 
+DEFAULT_STABLE_ROUNDS = 7
+
 CaseResult = Struct.new(:name, :iterations, :samples, keyword_init: true) do
   def median_seconds
     samples.sort[samples.length / 2]
@@ -39,8 +41,8 @@ options = {
   cache_dir: File.join(ROOT, "tmp", "benchmark", "transpile"),
   source: DEFAULT_SOURCE,
   iterations: Integer(ENV.fetch("BENCH_ITERATIONS", "3")),
-  rounds: Integer(ENV.fetch("BENCH_ROUNDS", "1")),
-  warmup: Integer(ENV.fetch("BENCH_WARMUP", "1")),
+  rounds: Integer(ENV.fetch("BENCH_ROUNDS", DEFAULT_STABLE_ROUNDS.to_s)),
+  warmup: Integer(ENV.fetch("BENCH_WARMUP", "5")),
   timeout: Integer(ENV.fetch("BENCH_TIMEOUT", "300000")),
   only: nil,
   json: false,
@@ -61,11 +63,11 @@ OptionParser.new do |parser|
     options[:iterations] = value
   end
 
-  parser.on("--rounds COUNT", Integer, "Timed samples per case; default: BENCH_ROUNDS or 1") do |value|
+  parser.on("--rounds COUNT", Integer, "Timed samples per case; default: BENCH_ROUNDS or #{DEFAULT_STABLE_ROUNDS}") do |value|
     options[:rounds] = value
   end
 
-  parser.on("--warmup COUNT", Integer, "Warmup iterations before each timed sample; default: BENCH_WARMUP or 1") do |value|
+  parser.on("--warmup COUNT", Integer, "Untimed warmup iterations before timed samples; default: BENCH_WARMUP or 5") do |value|
     options[:warmup] = value
   end
 
@@ -162,6 +164,12 @@ babel_path = fetch_resource(options[:cache_dir], DEFAULT_BABEL)
 source_path = fetch_resource(options[:cache_dir], options[:source])
 exit if options[:fetch_only]
 
+requested_rounds = options[:rounds]
+if options[:rounds] > 1 && options[:rounds] < DEFAULT_STABLE_ROUNDS
+  warn "raising transpile --rounds from #{options[:rounds]} to #{DEFAULT_STABLE_ROUNDS} for stable medians; use --rounds 1 for smoke runs"
+  options[:rounds] = DEFAULT_STABLE_ROUNDS
+end
+
 babel_source = File.binread(babel_path)
 transpile_source = File.binread(source_path)
 source_resource = RESOURCES.fetch(options[:source])
@@ -208,48 +216,69 @@ def new_context(timeout, babel_source, source = nil)
   ctx
 end
 
-ctx = new_context(options[:timeout], babel_source, transpile_source)
+BenchmarkCase = Struct.new(:name, :iterations, :block, keyword_init: true)
 
-cases = {
-  "babel/load_standalone" => proc do
-    MiniRacer::Context.new(timeout: options[:timeout]).eval(babel_source)
-  end,
-  "babel/transpile_cached_source_to_es6_length" => proc do
-    ctx.call("__miniRacerTransformCachedLength")
-  end,
-  "babel/transpile_call_source_to_es6_length" => proc do
-    ctx.call("__miniRacerTransformLength", transpile_source)
-  end,
-  "babel/transpile_call_source_to_es6_code" => proc do
-    ctx.call("__miniRacerTransformCode", transpile_source).bytesize
-  end
-}
-
-selected = if options[:only]
-  cases.select { |name, _| name.match?(options[:only]) }
-else
-  cases
-end
-abort "No benchmarks matched" if selected.empty?
-
-results = []
-selected.each do |name, block|
+def measure_case(bench, warmup:, rounds:)
   samples = []
 
-  options[:rounds].times do
+  warmup.times do
+    GC.start
+    bench.block.call
+  end
+
+  rounds.times do
     begin
       GC.start
       GC.disable
-      options[:warmup].times { block.call }
       started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      options[:iterations].times { block.call }
+      bench.iterations.times { bench.block.call }
       samples << (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at)
     ensure
       GC.enable
     end
   end
 
-  result = CaseResult.new(name: name, iterations: options[:iterations], samples: samples).to_h
+  samples
+end
+
+ctx = new_context(options[:timeout], babel_source, transpile_source)
+
+cases = [
+  BenchmarkCase.new(
+    name: "babel/load_standalone",
+    iterations: options[:iterations],
+    block: lambda do
+      MiniRacer::Context.new(timeout: options[:timeout]).eval(babel_source)
+    end
+  ),
+  BenchmarkCase.new(
+    name: "babel/transpile_cached_source_to_es6_length",
+    iterations: options[:iterations],
+    block: -> { ctx.call("__miniRacerTransformCachedLength") }
+  ),
+  BenchmarkCase.new(
+    name: "babel/transpile_call_source_to_es6_length",
+    iterations: options[:iterations],
+    block: -> { ctx.call("__miniRacerTransformLength", transpile_source) }
+  ),
+  BenchmarkCase.new(
+    name: "babel/transpile_call_source_to_es6_code",
+    iterations: options[:iterations],
+    block: -> { ctx.call("__miniRacerTransformCode", transpile_source).bytesize }
+  )
+]
+
+selected = if options[:only]
+  cases.select { |bench| bench.name.match?(options[:only]) }
+else
+  cases
+end
+abort "No benchmarks matched" if selected.empty?
+
+results = []
+selected.each do |bench|
+  samples = measure_case(bench, warmup: options[:warmup], rounds: options[:rounds])
+  result = CaseResult.new(name: bench.name, iterations: bench.iterations, samples: samples).to_h
   results << result
   unless options[:json]
     puts "%-48s n=%-4d total=%10.3fms per=%10.3fms" % [
@@ -275,6 +304,7 @@ payload = {
     target: "Babel preset-env to Chrome 51 / ES2015-ish, modules preserved",
     single_threaded: options[:single_threaded],
     iterations: options[:iterations],
+    requested_rounds: requested_rounds,
     rounds: options[:rounds],
     warmup: options[:warmup]
   },

@@ -68,6 +68,7 @@ if options[:quick]
   options[:serde_scale] ||= 0.1
   options[:transpile_iterations] ||= 1
   options[:rounds] ||= 1
+  options[:warmup] ||= 1
 end
 
 unknown_tags = options[:tags] - ALL_TAGS
