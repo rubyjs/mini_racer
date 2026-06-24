@@ -1,3 +1,7 @@
+- vNext
+  - Fix building with Clang 22+ by making bigint serialization byte-oriented instead of relying on mismatched `uint64_t`/`unsigned long` pointer types
+  - Fix Ruby bigint serialization to consider all packed limbs instead of truncating values above 512 bits
+
 - 0.22.0 - 12-08-2026
   - Add `Context#call_await` and `Context#eval_await`: like `call`/`eval` but block until a returned Promise settles and return the settled value; rejections raise `MiniRacer::RuntimeError`
   - Fix a `call` or `eval` made from a Ruby callback taking the timeout or `stop` meant for the evaluation around it, which then kept running
