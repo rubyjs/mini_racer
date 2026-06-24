@@ -49,6 +49,63 @@ class MiniRacerSingleThreadedTest < Minitest::Test
     RUBY
   end
 
+  def test_int_callback_falls_back_for_non_int_return
+    assert_single_threaded_script <<~'RUBY'
+      context = MiniRacer::Context.new
+      context.attach("wide", proc { |value| value + 2**40 })
+      context.attach("stringify", proc { |value| "v#{value}" })
+      context.attach("arrayify", proc { |value| [value, value + 1] })
+
+      raise "bad wide result" unless context.eval("wide(7)") == 2**40 + 7
+      raise "bad string result" unless context.eval("stringify(7)") == "v7"
+      raise "bad array result" unless context.eval("arrayify(7)") == [7, 8]
+    RUBY
+  end
+
+  def test_int_callback_exception_propagates
+    assert_single_threaded_script <<~'RUBY'
+      context = MiniRacer::Context.new
+      context.attach("boom", proc { |value| raise "boom #{value}" })
+
+      begin
+        context.eval("boom(7)")
+        raise "expected callback exception"
+      rescue RuntimeError => e
+        raise "wrong exception: #{e.class}: #{e.message}" unless e.message.include?("boom 7")
+      end
+    RUBY
+  end
+
+  def test_int_callback_can_make_nested_js_call
+    assert_single_threaded_script <<~'RUBY'
+      context = MiniRacer::Context.new
+      context.eval("function js_add(a, b) { return a + b }")
+      context.attach("ruby_calls_js", proc { |value| context.call("js_add", value, 1) })
+
+      raise "bad nested callback result" unless context.eval("ruby_calls_js(41)") == 42
+    RUBY
+  end
+
+  def test_callback_with_many_int_args_uses_general_path
+    assert_single_threaded_script <<~'RUBY'
+      context = MiniRacer::Context.new
+      context.attach("count_args", proc { |*args| args.length })
+      args = Array.new(33) { |i| i }.join(",")
+
+      raise "bad many-args callback result" unless context.eval("count_args(#{args})") == 33
+    RUBY
+  end
+
+  def test_callback_preserves_minus_zero_normalization
+    assert_single_threaded_script <<~'RUBY'
+      context = MiniRacer::Context.new
+      context.attach("describe", proc { |value| [value.class.name, 1.0 / value] })
+
+      raise "bad minus zero callback result" unless context.eval("describe(-0)") == ["Integer", Float::INFINITY]
+      raise "bad slow minus zero callback result" unless context.eval('describe(-0, "force slow path")') == ["Integer", Float::INFINITY]
+    RUBY
+  end
+
   def test_nested_javascript_ruby_javascript_call
     assert_single_threaded_script <<~'RUBY'
       context = MiniRacer::Context.new
