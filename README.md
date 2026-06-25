@@ -143,10 +143,41 @@ When using pre-fork `MiniRacer::Context` objects in `:single_threaded` mode,
 ensure the process only forks while MiniRacer is quiescent: no thread may be
 evaluating JavaScript, calling into a context, disposing/freeing a context,
 running a Ruby callback from JavaScript, or otherwise using MiniRacer at the
-instant of `fork`. In multi-threaded applications, guard all MiniRacer context
-operations and the `fork` itself with the same application-level lock. Forking
-while a MiniRacer operation is in progress can leave inherited pthread mutexes
-in an unusable state in the child process.
+instant of `fork`. Forking while a MiniRacer operation is in progress can leave
+inherited pthread mutexes in an unusable state in the child process.
+
+`MiniRacer.pause(timeout:)` is a process-global quiesce gate. It prevents new
+MiniRacer operations from starting, waits for operations already in progress to
+finish, and then keeps MiniRacer paused until `MiniRacer.resume` is called.
+`timeout:` is in seconds; if MiniRacer cannot drain in time,
+`MiniRacer::PauseTimeoutError` is raised and the pause is rolled back. Omitting
+`timeout:` waits indefinitely, which is useful only when the caller knows active
+JavaScript cannot get stuck.
+
+```ruby
+MiniRacer.pause(timeout: 5)
+begin
+  pid = fork do
+    MiniRacer.resume # child: reset inherited pause state
+    # child process work
+  end
+ensure
+  MiniRacer.resume # parent: release the pause
+end
+```
+
+For normal Ruby forks you can install an opt-in `Process._fork` hook which uses
+that same pause gate automatically:
+
+```ruby
+MiniRacer.install_fork_hooks!(timeout: 5)
+```
+
+The hook covers `Kernel#fork`, `Process.fork`, and `IO.popen("-")` on Rubies
+that expose `Process._fork`. It intentionally does not cover `Process.daemon` or
+raw native `fork(2)` calls from other C extensions. When the hook is installed,
+do not call `MiniRacer.resume` again in the child block; the hook already resumes
+in both parent and child before user child code runs.
 
 If you want to ensure your application does not leak memory after fork either:
 

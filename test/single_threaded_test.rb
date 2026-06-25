@@ -371,4 +371,113 @@ class MiniRacerSingleThreadedTest < Minitest::Test
       raise "child failed with status #{status.inspect}" unless status.success?
     RUBY
   end
+
+  def test_fork_hook_pauses_and_recovers_child
+    assert_single_threaded_script <<~'RUBY'
+      exit 0 unless Process.respond_to?(:fork)
+
+      MiniRacer.install_fork_hooks!(timeout: 1)
+
+      context = MiniRacer::Context.new
+      context.eval("var answer = 41")
+      context.eval("answer += 1")
+
+      pid = fork do
+        Thread.new do
+          sleep 3
+          warn "child timed out"
+          exit! 99
+        end
+
+        exit!(context.eval("answer") == 42 ? 0 : 1)
+      end
+      _, status = Process.wait2(pid)
+      raise "child failed with status #{status.inspect}" unless status.success?
+      raise "parent context broke" unless context.eval("answer") == 42
+    RUBY
+  end
+
+  def test_manual_pause_resume_around_fork
+    assert_single_threaded_script <<~'RUBY'
+      exit 0 unless Process.respond_to?(:fork)
+
+      context = MiniRacer::Context.new
+      context.eval("var answer = 41")
+      context.eval("answer += 1")
+
+      MiniRacer.pause(timeout: 1)
+      begin
+        pid = fork do
+          Thread.new do
+            sleep 3
+            warn "child timed out"
+            exit! 99
+          end
+
+          MiniRacer.resume
+          exit!(context.eval("answer") == 42 ? 0 : 1)
+        end
+      ensure
+        MiniRacer.resume
+      end
+
+      _, status = Process.wait2(pid)
+      raise "child failed with status #{status.inspect}" unless status.success?
+      raise "parent context broke" unless context.eval("answer") == 42
+    RUBY
+  end
+
+  def test_fork_hook_times_out_instead_of_forking_while_busy
+    assert_single_threaded_script <<~'RUBY'
+      exit 0 unless Process.respond_to?(:fork)
+
+      MiniRacer.install_fork_hooks!(timeout: 0.05)
+
+      started_r, started_w = IO.pipe
+      release_r, release_w = IO.pipe
+      context = MiniRacer::Context.new
+      context.attach("block", proc do
+        started_w.write("x")
+        started_w.flush
+        release_r.read(1)
+        42
+      end)
+
+      worker = Thread.new { context.eval("block()") }
+      started_r.read(1)
+
+      begin
+        fork { exit! 88 }
+        raise "expected pause timeout"
+      rescue MiniRacer::PauseTimeoutError
+      end
+
+      release_w.write("x")
+      release_w.flush
+      raise "worker did not finish" unless worker.join(3)
+      raise "context should still be usable" unless context.eval("1 + 1") == 2
+    RUBY
+  end
+
+  def test_fork_hook_rejects_fork_from_active_callback
+    assert_single_threaded_script <<~'RUBY'
+      exit 0 unless Process.respond_to?(:fork)
+
+      MiniRacer.install_fork_hooks!(timeout: 1)
+
+      context = MiniRacer::Context.new
+      context.attach("try_fork", proc do
+        begin
+          fork { exit! 88 }
+          "forked"
+        rescue MiniRacer::RuntimeError => e
+          raise unless e.message.include?("cannot pause")
+          "rejected"
+        end
+      end)
+
+      raise "fork was not rejected" unless context.eval("try_fork()") == "rejected"
+      raise "context should still be usable" unless context.eval("1 + 1") == 2
+    RUBY
+  end
 end

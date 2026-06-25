@@ -31,13 +31,16 @@ jobs:
       matrix:
         os:
           - "macos-latest"
-          - "ubuntu-latest"
+          - "ubuntu-24.04"
         ruby:
           - "truffleruby+graalvm"
 
     name: ${{ matrix.os }} - ${{ matrix.ruby }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
+
+    env:
+      TRUFFLERUBYOPT: "--jvm --polyglot"
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
