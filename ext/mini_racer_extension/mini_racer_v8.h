@@ -39,7 +39,9 @@ struct State *v8_thread_init(struct Context *c, const uint8_t *snapshot_buf,
                              int verbose_exceptions); // calls v8_thread_main
 void v8_attach(struct State *pst, const uint8_t *p, size_t n);
 void v8_call(struct State *pst, const uint8_t *p, size_t n);
+void v8_call_async(struct State *pst, const uint8_t *p, size_t n);
 void v8_eval(struct State *pst, const uint8_t *p, size_t n);
+void v8_eval_async(struct State *pst, const uint8_t *p, size_t n);
 void v8_heap_stats(struct State *pst);
 void v8_heap_snapshot(struct State *pst);
 void v8_perform_microtask_checkpoint(struct State *pst);

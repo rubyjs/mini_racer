@@ -810,7 +810,9 @@ static void dispatch1(Context *c, const uint8_t *p, size_t n)
     switch (*p) {
     case 'A': return v8_attach(c->pst, p+1, n-1);
     case 'C': return v8_timedwait(c, p+1, n-1, v8_call);
+    case 'D': return v8_timedwait(c, p+1, n-1, v8_call_async);
     case 'E': return v8_timedwait(c, p+1, n-1, v8_eval);
+    case 'F': return v8_timedwait(c, p+1, n-1, v8_eval_async);
     case 'H': return v8_heap_snapshot(c->pst);
     case 'M': return v8_perform_microtask_checkpoint(c->pst);
     case 'P': return v8_pump_message_loop(c->pst);
@@ -888,7 +890,8 @@ void v8_dispatch(Context *c)
     pthread_mutex_unlock(&c->mtx);
 }
 
-// only called when inside v8_call, v8_eval, or v8_pump_message_loop
+// only called when inside v8_call, v8_eval (and their async variants),
+// or v8_pump_message_loop
 void v8_roundtrip(Context *c, const uint8_t **p, size_t *n)
 {
     pthread_mutex_lock(&c->mtx);
@@ -1654,7 +1657,7 @@ static VALUE context_stop(VALUE self)
     return Qnil;
 }
 
-static VALUE context_call(int argc, VALUE *argv, VALUE self)
+static VALUE context_call_common(int argc, VALUE *argv, VALUE self, char op)
 {
     VALUE name, args;
     VALUE a, e;
@@ -1665,8 +1668,8 @@ static VALUE context_call(int argc, VALUE *argv, VALUE self)
     rb_scan_args(argc, argv, "1*", &name, &args);
     Check_Type(name, T_STRING);
     rb_ary_unshift(args, name);
-    // request is (C)all, [name, args...] array
-    ser_init1(&s, 'C');
+    // request is (C)all or async (D) call, [name, args...] array
+    ser_init1(&s, op);
     if (serialize(&s, args)) {
         ser_reset(&s);
         rb_raise(runtime_error, "Context.call: %s", s.err);
@@ -1678,7 +1681,17 @@ static VALUE context_call(int argc, VALUE *argv, VALUE self)
     return rb_ary_pop(a);
 }
 
-static VALUE context_eval(int argc, VALUE *argv, VALUE self)
+static VALUE context_call(int argc, VALUE *argv, VALUE self)
+{
+    return context_call_common(argc, argv, self, 'C');
+}
+
+static VALUE context_call_async(int argc, VALUE *argv, VALUE self)
+{
+    return context_call_common(argc, argv, self, 'D');
+}
+
+static VALUE context_eval_common(int argc, VALUE *argv, VALUE self, char op)
 {
     VALUE a, e, source, filename, kwargs;
     Context *c;
@@ -1693,8 +1706,8 @@ static VALUE context_eval(int argc, VALUE *argv, VALUE self)
     if (NIL_P(filename))
         filename = rb_str_new_cstr("<eval>");
     Check_Type(filename, T_STRING);
-    // request is (E)val, [filename, source] array
-    ser_init1(&s, 'E');
+    // request is (E)val or async (F) eval, [filename, source] array
+    ser_init1(&s, op);
     ser_array_begin(&s, 2);
     add_string(&s, filename);
     add_string(&s, source);
@@ -1704,6 +1717,16 @@ static VALUE context_eval(int argc, VALUE *argv, VALUE self)
     e = rb_ary_pop(a);
     handle_exception(e);
     return rb_ary_pop(a);
+}
+
+static VALUE context_eval(int argc, VALUE *argv, VALUE self)
+{
+    return context_eval_common(argc, argv, self, 'E');
+}
+
+static VALUE context_eval_async(int argc, VALUE *argv, VALUE self)
+{
+    return context_eval_common(argc, argv, self, 'F');
 }
 
 static VALUE context_heap_stats(VALUE self)
@@ -2146,7 +2169,9 @@ void Init_mini_racer_extension(void)
     rb_define_method(c, "dispose", context_dispose, 0);
     rb_define_method(c, "stop", context_stop, 0);
     rb_define_method(c, "call", context_call, -1);
+    rb_define_method(c, "call_async", context_call_async, -1);
     rb_define_method(c, "eval", context_eval, -1);
+    rb_define_method(c, "eval_async", context_eval_async, -1);
     rb_define_method(c, "heap_stats", context_heap_stats, 0);
     rb_define_method(c, "heap_snapshot", context_heap_snapshot, 0);
     rb_define_method(c, "perform_microtask_checkpoint", context_perform_microtask_checkpoint, 0);

@@ -1,4 +1,5 @@
 - Unreleased
+  - Add `Context#call_async` and `Context#eval_async`: like `call`/`eval` but block until a returned Promise settles and return the settled value; rejections raise `MiniRacer::RuntimeError`
   - Fix a race introduced in 0.21.4 where a request sent right after a nested dispatch (e.g. `perform_microtask_checkpoint` or a nested `call` from an attached callback) could be dropped, deadlocking the context
 
 - 0.21.4 - 24-06-2026

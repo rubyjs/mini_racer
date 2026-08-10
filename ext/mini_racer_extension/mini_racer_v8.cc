@@ -2,6 +2,7 @@
 #include "v8-profiler.h"
 #include "libplatform/libplatform.h"
 #include "mini_racer_v8.h"
+#include <atomic>
 #include <memory>
 #include <vector>
 #include <cassert>
@@ -91,6 +92,8 @@ struct State
     Context *ruby_context;
     int64_t max_memory;
     int err_reason;
+    // TerminateExecution() while idle doesn't make IsExecutionTerminating() true
+    std::atomic<bool> terminate_requested;
     bool verbose_exceptions;
     std::vector<Callback*> callbacks;
     std::unique_ptr<v8::ArrayBuffer::Allocator> allocator;
@@ -586,8 +589,35 @@ fail:
     reply_retry(st, err);
 }
 
+// awaits |*result| if it's a promise; false means an exception is pending
+bool await_promise(State& st, v8::Local<v8::Value> *result)
+{
+    if (!(*result)->IsPromise()) return true;
+    auto promise = result->As<v8::Promise>();
+    for (;;) {
+        v8::MicrotasksScope::PerformCheckpoint(st.isolate);
+        switch (promise->State()) {
+        case v8::Promise::kFulfilled:
+            *result = promise->Result();
+            return true;
+        case v8::Promise::kRejected:
+            st.isolate->ThrowException(promise->Result());
+            return false;
+        case v8::Promise::kPending:
+            break;
+        }
+        if (st.terminate_requested.load() || st.isolate->IsExecutionTerminating())
+            return false;
+        // blocks until the next task; v8_terminate_execution posts one to
+        // end the wait on timeout/stop/interrupt
+        v8::platform::PumpMessageLoop(
+            platform, st.isolate,
+            v8::platform::MessageLoopBehavior::kWaitForWork);
+    }
+}
+
 // response is errback [result, err] array
-extern "C" void v8_call(State *pst, const uint8_t *p, size_t n)
+void v8_call_impl(State *pst, const uint8_t *p, size_t n, bool await)
 {
     State& st = *pst;
     v8::TryCatch try_catch(st.isolate);
@@ -645,11 +675,13 @@ extern "C" void v8_call(State *pst, const uint8_t *p, size_t n)
         auto maybe_result_v = function->Call(st.context, obj, args.size(), args.data());
         v8::Local<v8::Value> result_v;
         if (!maybe_result_v.ToLocal(&result_v)) goto fail;
+        if (await && !await_promise(st, &result_v)) goto fail;
         result = sanitize(st, result_v);
     }
     cause = NO_ERROR;
 fail:
-    if (st.isolate->IsExecutionTerminating()) {
+    if (st.terminate_requested.exchange(false) ||
+        st.isolate->IsExecutionTerminating()) {
         st.isolate->CancelTerminateExecution();
         cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
         st.err_reason = NO_ERROR;
@@ -664,8 +696,18 @@ fail:
     }
 }
 
+extern "C" void v8_call(State *pst, const uint8_t *p, size_t n)
+{
+    v8_call_impl(pst, p, n, false);
+}
+
+extern "C" void v8_call_async(State *pst, const uint8_t *p, size_t n)
+{
+    v8_call_impl(pst, p, n, true);
+}
+
 // response is errback [result, err] array
-extern "C" void v8_eval(State *pst, const uint8_t *p, size_t n)
+void v8_eval_impl(State *pst, const uint8_t *p, size_t n, bool await)
 {
     State& st = *pst;
     v8::TryCatch try_catch(st.isolate);
@@ -694,11 +736,13 @@ extern "C" void v8_eval(State *pst, const uint8_t *p, size_t n)
         cause = RUNTIME_ERROR;
         auto maybe_result_v = script->Run(st.context);
         if (!maybe_result_v.ToLocal(&result_v)) goto fail;
+        if (await && !await_promise(st, &result_v)) goto fail;
         result = sanitize(st, result_v);
     }
     cause = NO_ERROR;
 fail:
-    if (st.isolate->IsExecutionTerminating()) {
+    if (st.terminate_requested.exchange(false) ||
+        st.isolate->IsExecutionTerminating()) {
         st.isolate->CancelTerminateExecution();
         cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
         st.err_reason = NO_ERROR;
@@ -711,6 +755,16 @@ fail:
         assert(try_catch.HasCaught());
         goto fail; // retry; can be termination exception
     }
+}
+
+extern "C" void v8_eval(State *pst, const uint8_t *p, size_t n)
+{
+    v8_eval_impl(pst, p, n, false);
+}
+
+extern "C" void v8_eval_async(State *pst, const uint8_t *p, size_t n)
+{
+    v8_eval_impl(pst, p, n, true);
 }
 
 extern "C" void v8_heap_stats(State *pst)
@@ -800,7 +854,8 @@ extern "C" void v8_pump_message_loop(State *pst)
         if (try_catch.HasCaught()) goto fail;
     }
 fail:
-    if (st.isolate->IsExecutionTerminating()) {
+    if (st.terminate_requested.exchange(false) ||
+        st.isolate->IsExecutionTerminating()) {
         st.isolate->CancelTerminateExecution();
         st.err_reason = NO_ERROR;
     }
@@ -914,7 +969,8 @@ extern "C" void v8_snapshot(State *pst, const uint8_t *p, size_t n)
     }
     cause = NO_ERROR;
 fail:
-    if (st.isolate->IsExecutionTerminating()) {
+    if (st.terminate_requested.exchange(false) ||
+        st.isolate->IsExecutionTerminating()) {
         st.isolate->CancelTerminateExecution();
         cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
         st.err_reason = NO_ERROR;
@@ -984,7 +1040,8 @@ extern "C" void v8_warmup(State *pst, const uint8_t *p, size_t n)
     }
     cause = NO_ERROR;
 fail:
-    if (st.isolate->IsExecutionTerminating()) {
+    if (st.terminate_requested.exchange(false) ||
+        st.isolate->IsExecutionTerminating()) {
         st.isolate->CancelTerminateExecution();
         cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
         st.err_reason = NO_ERROR;
@@ -1008,10 +1065,19 @@ extern "C" void v8_low_memory_notification(State *pst)
     pst->isolate->LowMemoryNotification();
 }
 
-// called from ruby thread
+struct WakeupTask : public v8::Task
+{
+    void Run() final {}
+};
+
+// called from ruby or watchdog thread
 extern "C" void v8_terminate_execution(State *pst)
 {
+    pst->terminate_requested.store(true);
     pst->isolate->TerminateExecution();
+    // wake await_promise's message loop pump
+    platform->GetForegroundTaskRunner(pst->isolate)
+        ->PostTask(std::make_unique<WakeupTask>());
 }
 
 // called from ruby thread
@@ -1019,6 +1085,7 @@ extern "C" void v8_cancel_terminate_execution(State *pst)
 {
     // TerminateExecution can race with V8 completing and queue a termination
     // for the next entry without IsExecutionTerminating() becoming true.
+    pst->terminate_requested.store(false);
     pst->isolate->CancelTerminateExecution();
 }
 
