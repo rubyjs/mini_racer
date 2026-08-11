@@ -4,6 +4,7 @@
 #include "mini_racer_v8.h"
 #include <atomic>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 #include <cassert>
 #include <cstdarg>
@@ -98,6 +99,10 @@ struct State
     // instead of deadlocking in V8's non-reentrant microtask processing.
     int javascript_call_depth;
     bool verbose_exceptions;
+    // promises handed to Ruby as MiniRacer::Promise handles; entries are
+    // erased when Ruby GC releases a handle or when the isolate goes away
+    std::unordered_map<uint32_t, v8::Global<v8::Promise>> promises;
+    uint32_t next_promise_id;
     std::vector<Callback*> callbacks;
     std::unique_ptr<v8::ArrayBuffer::Allocator> allocator;
     inline ~State();
@@ -637,6 +642,21 @@ bool await_promise(State& st, v8::Local<v8::Value> *result)
     }
 }
 
+// retains |promise| and returns a marker string carrying the handle id;
+// the ruby side turns it into a MiniRacer::Promise
+v8::Local<v8::Value> register_promise(State& st, v8::Local<v8::Promise> promise)
+{
+    const size_t nmarker = sizeof(js_promise_marker) / sizeof(*js_promise_marker);
+    uint32_t id = ++st.next_promise_id;
+    st.promises[id].Reset(st.isolate, promise);
+    uint16_t buf[nmarker + 2];
+    memcpy(buf, js_promise_marker, sizeof(js_promise_marker));
+    buf[nmarker+0] = id & 0xFFFF;
+    buf[nmarker+1] = id >> 16;
+    auto type = v8::NewStringType::kNormal;
+    return v8::String::NewFromTwoByte(st.isolate, buf, type, nmarker + 2).ToLocalChecked();
+}
+
 // response is errback [result, err] array
 void v8_call_impl(State *pst, const uint8_t *p, size_t n, bool await)
 {
@@ -704,7 +724,11 @@ void v8_call_impl(State *pst, const uint8_t *p, size_t n, bool await)
         v8::Local<v8::Value> result_v;
         if (!maybe_result_v.ToLocal(&result_v)) goto fail;
         if (await && !await_promise(st, &result_v)) goto fail;
-        result = sanitize(st, result_v);
+        if (!await && result_v->IsPromise()) {
+            result = register_promise(st, result_v.As<v8::Promise>());
+        } else {
+            result = sanitize(st, result_v);
+        }
     }
     cause = NO_ERROR;
 fail:
@@ -772,7 +796,11 @@ void v8_eval_impl(State *pst, const uint8_t *p, size_t n, bool await)
         auto maybe_result_v = script->Run(st.context);
         if (!maybe_result_v.ToLocal(&result_v)) goto fail;
         if (await && !await_promise(st, &result_v)) goto fail;
-        result = sanitize(st, result_v);
+        if (!await && result_v->IsPromise()) {
+            result = register_promise(st, result_v.As<v8::Promise>());
+        } else {
+            result = sanitize(st, result_v);
+        }
     }
     cause = NO_ERROR;
 fail:
@@ -800,6 +828,69 @@ extern "C" void v8_eval(State *pst, const uint8_t *p, size_t n)
 extern "C" void v8_eval_async(State *pst, const uint8_t *p, size_t n)
 {
     v8_eval_impl(pst, p, n, true);
+}
+
+// request is a promise handle id, response is errback [result, err] array
+extern "C" void v8_await(State *pst, const uint8_t *p, size_t n)
+{
+    State& st = *pst;
+    v8::TryCatch try_catch(st.isolate);
+    try_catch.SetVerbose(st.verbose_exceptions);
+    v8::HandleScope handle_scope(st.isolate);
+    v8::ValueDeserializer des(st.isolate, p, n);
+    des.ReadHeader(st.context).Check();
+    v8::Local<v8::Value> result;
+    int cause = INTERNAL_ERROR;
+    bool nested = st.javascript_call_depth > 0;
+    JavascriptCallScope call_scope(st.javascript_call_depth);
+    if (nested) {
+        throw_nested_async_call(st);
+        cause = RUNTIME_ERROR;
+        goto fail;
+    }
+    {
+        v8::Local<v8::Value> id_v;
+        if (!des.ReadValue(st.context).ToLocal(&id_v)) goto fail;
+        if (!id_v->IsNumber()) goto fail;
+        uint32_t id = id_v->Uint32Value(st.context).FromMaybe(0);
+        auto it = st.promises.find(id);
+        cause = RUNTIME_ERROR;
+        if (it == st.promises.end()) {
+            auto message = v8::String::NewFromUtf8Literal(st.isolate, "stale promise handle");
+            st.isolate->ThrowException(v8::Exception::Error(message));
+            goto fail;
+        }
+        v8::Local<v8::Value> result_v = it->second.Get(st.isolate);
+        if (!await_promise(st, &result_v)) goto fail;
+        result = sanitize(st, result_v);
+    }
+    cause = NO_ERROR;
+fail:
+    if (st.terminate_requested.exchange(false) ||
+        st.isolate->IsExecutionTerminating()) {
+        st.isolate->CancelTerminateExecution();
+        cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
+        st.err_reason = NO_ERROR;
+    }
+    if (bubble_up_ruby_exception(st, &try_catch)) return;
+    if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
+    if (cause) result = v8::Undefined(st.isolate);
+    auto err = to_error(st, &try_catch, cause);
+    if (!reply(st, result, err)) {
+        assert(try_catch.HasCaught());
+        goto fail; // retry; can be termination exception
+    }
+}
+
+// |p| is an array of uint32 handle ids; called on the v8 thread
+extern "C" void v8_release_promises(State *pst, const uint8_t *p, size_t n)
+{
+    uint32_t id;
+
+    for (; n >= sizeof(id); p += sizeof(id), n -= sizeof(id)) {
+        memcpy(&id, p, sizeof(id));
+        pst->promises.erase(id);
+    }
 }
 
 extern "C" void v8_heap_stats(State *pst)
@@ -1158,6 +1249,7 @@ State::~State()
         persistent_safe_context.Reset();
         persistent_context.Reset();
         ruby_exception.Reset();
+        promises.clear(); // globals must go before the isolate does
     }
     isolate->Dispose();
     for (Callback *cb : callbacks)

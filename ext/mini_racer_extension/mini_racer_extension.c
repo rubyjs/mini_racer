@@ -120,6 +120,53 @@ static inline int barrier_wait(Barrier *b)
     return last;
 }
 
+// shared by a context and its MiniRacer::Promise handles; refcounted so
+// ruby GC may free the handles and the context in either order
+typedef struct PromiseQueue
+{
+    pthread_mutex_t mtx;
+    Buf ids; // uint32 handle ids of GC'd promises, drained by the v8 thread
+    int refs;
+} PromiseQueue;
+
+static PromiseQueue *promise_queue_new(void)
+{
+    PromiseQueue *q;
+
+    q = malloc(sizeof(*q));
+    if (!q)
+        return NULL;
+    if (pthread_mutex_init(&q->mtx, NULL)) {
+        free(q);
+        return NULL;
+    }
+    buf_init(&q->ids);
+    q->refs = 1;
+    return q;
+}
+
+static PromiseQueue *promise_queue_ref(PromiseQueue *q)
+{
+    pthread_mutex_lock(&q->mtx);
+    q->refs++;
+    pthread_mutex_unlock(&q->mtx);
+    return q;
+}
+
+static void promise_queue_unref(PromiseQueue *q)
+{
+    int refs;
+
+    pthread_mutex_lock(&q->mtx);
+    refs = --q->refs;
+    pthread_mutex_unlock(&q->mtx);
+    if (refs)
+        return;
+    buf_reset(&q->ids);
+    pthread_mutex_destroy(&q->mtx);
+    free(q);
+}
+
 typedef struct Context
 {
     int depth;     // call depth, protected by |rr_mtx|
@@ -138,6 +185,7 @@ typedef struct Context
     VALUE exception;   // pending exception or Qnil
     Buf req, res;      // ruby->v8 request/response, mediated by |mtx| and |cv|
     Buf v8_req;        // stable v8-side copy of a request returned by v8_roundtrip
+    PromiseQueue *promise_queue;
     int res_ready;     // protected by |mtx|; response may be filled before ready
     Buf snapshot;
     pthread_t single_threaded_thr;
@@ -160,6 +208,15 @@ typedef struct Context
 typedef struct Snapshot {
     VALUE blob;
 } Snapshot;
+
+typedef struct Promise
+{
+    VALUE context; // keeps the Context object alive while the handle exists
+    PromiseQueue *queue;
+    uint32_t id;
+} Promise;
+
+static VALUE promise_new(VALUE ctx, uint32_t id);
 
 static void context_destroy(Context *c);
 static void context_abandon(Context *c);
@@ -189,6 +246,19 @@ static const rb_data_type_t snapshot_type = {
     },
 };
 
+static void promise_free(void *arg);
+static void promise_mark(void *arg);
+static size_t promise_dsize(const void *arg);
+
+static const rb_data_type_t promise_type = {
+    .wrap_struct_name   =  "mini_racer/promise",
+    .function           = {
+        .dfree = promise_free,
+        .dmark = promise_mark,
+        .dsize = promise_dsize,
+    },
+};
+
 static VALUE platform_init_error;
 static VALUE context_disposed_error;
 static VALUE parse_error;
@@ -200,6 +270,7 @@ static VALUE snapshot_error;
 static VALUE terminated_error;
 static VALUE context_class;
 static VALUE snapshot_class;
+static VALUE promise_class;
 static VALUE date_time_class;
 static VALUE binary_class;
 static VALUE js_function_class;
@@ -222,6 +293,7 @@ typedef struct DesCtx
 {
     State   *tos;
     VALUE   refs; // object refs array
+    VALUE   ctx;  // context for promise handles, or Qnil
     uint8_t transcode_latin1:1;
     char    err[64];
     State   stack[512];
@@ -246,6 +318,7 @@ static void DesCtx_init(DesCtx *c)
 {
     c->tos  = c->stack;
     c->refs = rb_ary_new();
+    c->ctx  = Qnil;
     *c->tos = (State){Qundef, Qundef, /*verbatim_keys*/0};
     *c->err = '\0';
     c->transcode_latin1 = 1; // convert to utf8
@@ -431,6 +504,13 @@ static void des_string16(void *arg, const void *s, size_t n)
     // TODO(bnoordhuis) replace this hack with something more principled
     if (n == sizeof(js_function_marker) && !memcmp(js_function_marker, s, n))
         return put(c, rb_funcall(js_function_class, rb_intern("new"), 0));
+    if (n == sizeof(js_promise_marker) + 4 &&
+        !memcmp(js_promise_marker, s, sizeof(js_promise_marker)) &&
+        !NIL_P(c->ctx)) {
+        uint16_t units[2];
+        memcpy(units, (const char *)s + sizeof(js_promise_marker), sizeof(units));
+        return put(c, promise_new(c->ctx, units[0] | (uint32_t)units[1] << 16));
+    }
     e = rb_enc_find("UTF-16LE"); // TODO cache?
     if (!e) {
         snprintf(c->err, sizeof(c->err), "no UTF16-LE encoding");
@@ -802,17 +882,37 @@ static void v8_timedwait(Context *c, const uint8_t *p, size_t n,
     c->wd.cancel = 0;
 }
 
+// runs on the v8 thread; frees the v8 globals of GC'd promise handles
+static void drain_released_promises(Context *c)
+{
+    PromiseQueue *q;
+    Buf ids;
+
+    q = c->promise_queue;
+    pthread_mutex_lock(&q->mtx);
+    if (!q->ids.len) {
+        pthread_mutex_unlock(&q->mtx);
+        return;
+    }
+    buf_move(&q->ids, &ids);
+    pthread_mutex_unlock(&q->mtx);
+    v8_release_promises(c->pst, ids.buf, ids.len);
+    buf_reset(&ids);
+}
+
 static void dispatch1(Context *c, const uint8_t *p, size_t n)
 {
     uint8_t b;
 
     assert(n > 0);
+    drain_released_promises(c);
     switch (*p) {
     case 'A': return v8_attach(c->pst, p+1, n-1);
     case 'C': return v8_timedwait(c, p+1, n-1, v8_call);
     case 'D': return v8_timedwait(c, p+1, n-1, v8_call_async);
     case 'E': return v8_timedwait(c, p+1, n-1, v8_eval);
     case 'F': return v8_timedwait(c, p+1, n-1, v8_eval_async);
+    case 'G': return v8_timedwait(c, p+1, n-1, v8_await);
     case 'H': return v8_heap_snapshot(c->pst);
     case 'M': return v8_perform_microtask_checkpoint(c->pst);
     case 'P': return v8_pump_message_loop(c->pst);
@@ -891,7 +991,7 @@ void v8_dispatch(Context *c)
 }
 
 // only called when inside v8_call, v8_eval (and their async variants),
-// or v8_pump_message_loop
+// v8_await, or v8_pump_message_loop
 void v8_roundtrip(Context *c, const uint8_t **p, size_t *n)
 {
     pthread_mutex_lock(&c->mtx);
@@ -1455,8 +1555,16 @@ static VALUE context_alloc(VALUE klass)
     cause = "barrier_init";
     if ((r = barrier_init(&c->late_init, 2)))
         goto fail7;
+    cause = "promise_queue_new";
+    c->promise_queue = promise_queue_new();
+    if (!c->promise_queue) {
+        r = ENOMEM;
+        goto fail8;
+    }
     pthread_condattr_destroy(&cattr);
     return TypedData_Wrap_Struct(klass, &context_type, c);
+fail8:
+    barrier_destroy(&c->late_init);
 fail7:
     barrier_destroy(&c->early_init);
 fail6:
@@ -1528,6 +1636,7 @@ static void context_abandon(Context *c)
     buf_reset(&c->req);
     buf_reset(&c->res);
     buf_reset(&c->v8_req);
+    promise_queue_unref(c->promise_queue);
     ruby_xfree(c);
 }
 
@@ -1544,6 +1653,7 @@ static void context_destroy(Context *c)
     buf_reset(&c->req);
     buf_reset(&c->res);
     buf_reset(&c->v8_req);
+    promise_queue_unref(c->promise_queue);
     ruby_xfree(c);
 }
 
@@ -1657,11 +1767,70 @@ static VALUE context_stop(VALUE self)
     return Qnil;
 }
 
+static VALUE promise_new(VALUE ctx, uint32_t id)
+{
+    Context *c;
+    Promise *p;
+    VALUE v;
+
+    TypedData_Get_Struct(ctx, Context, &context_type, c);
+    v = TypedData_Make_Struct(promise_class, Promise, &promise_type, p);
+    p->context = ctx;
+    p->queue = promise_queue_ref(c->promise_queue);
+    p->id = id;
+    return v;
+}
+
+static void promise_free(void *arg)
+{
+    Promise *p;
+
+    p = arg;
+    pthread_mutex_lock(&p->queue->mtx);
+    buf_put(&p->queue->ids, &p->id, sizeof(p->id));
+    pthread_mutex_unlock(&p->queue->mtx);
+    promise_queue_unref(p->queue);
+    ruby_xfree(p);
+}
+
+static void promise_mark(void *arg)
+{
+    Promise *p;
+
+    p = arg;
+    rb_gc_mark(p->context);
+}
+
+static size_t promise_dsize(const void *arg)
+{
+    return sizeof(Promise);
+}
+
+static VALUE promise_await(VALUE self)
+{
+    VALUE a, e;
+    Promise *p;
+    Context *c;
+    Ser s;
+
+    TypedData_Get_Struct(self, Promise, &promise_type, p);
+    TypedData_Get_Struct(p->context, Context, &context_type, c);
+    // request is await ((G)et), promise handle id
+    ser_init1(&s, 'G');
+    ser_int(&s, p->id);
+    // response is [result, err] array
+    a = rendezvous(c, &s.b); // takes ownership of |s.b|
+    e = rb_ary_pop(a);
+    handle_exception(e);
+    return rb_ary_pop(a);
+}
+
 static VALUE context_call_common(int argc, VALUE *argv, VALUE self, char op)
 {
     VALUE name, args;
     VALUE a, e;
     Context *c;
+    DesCtx d;
     Ser s;
 
     TypedData_Get_Struct(self, Context, &context_type, c);
@@ -1674,8 +1843,10 @@ static VALUE context_call_common(int argc, VALUE *argv, VALUE self, char op)
         ser_reset(&s);
         rb_raise(runtime_error, "Context.call: %s", s.err);
     }
-    // response is [result, err] array
-    a = rendezvous(c, &s.b); // takes ownership of |s.b|
+    // response is [result, err] array; result may be a promise handle
+    DesCtx_init(&d);
+    d.ctx = self;
+    a = rendezvous1(c, &s.b, &d); // takes ownership of |s.b|
     e = rb_ary_pop(a);
     handle_exception(e);
     return rb_ary_pop(a);
@@ -1695,6 +1866,7 @@ static VALUE context_eval_common(int argc, VALUE *argv, VALUE self, char op)
 {
     VALUE a, e, source, filename, kwargs;
     Context *c;
+    DesCtx d;
     Ser s;
 
     TypedData_Get_Struct(self, Context, &context_type, c);
@@ -1712,8 +1884,10 @@ static VALUE context_eval_common(int argc, VALUE *argv, VALUE self, char op)
     add_string(&s, filename);
     add_string(&s, source);
     ser_array_end(&s, 2);
-    // response is [result, errname] array
-    a = rendezvous(c, &s.b); // takes ownership of |s.b|
+    // response is [result, errname] array; result may be a promise handle
+    DesCtx_init(&d);
+    d.ctx = self;
+    a = rendezvous1(c, &s.b, &d); // takes ownership of |s.b|
     e = rb_ary_pop(a);
     handle_exception(e);
     return rb_ary_pop(a);
@@ -2186,6 +2360,10 @@ void Init_mini_racer_extension(void)
     rb_define_method(c, "size", snapshot_size0, 0);
     rb_define_singleton_method(c, "load", snapshot_load, 1);
     rb_define_alloc_func(c, snapshot_alloc);
+
+    c = promise_class = rb_define_class_under(m, "Promise", rb_cObject);
+    rb_undef_alloc_func(c);
+    rb_define_method(c, "await", promise_await, 0);
 
     c = rb_define_class_under(m, "Platform", rb_cObject);
     rb_define_singleton_method(c, "set_flags!", platform_set_flags, -1);

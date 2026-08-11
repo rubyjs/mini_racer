@@ -17,6 +17,8 @@ enum
 };
 
 static const uint16_t js_function_marker[] = {0xBFF,'J','a','v','a','S','c','r','i','p','t','F','u','n','c','t','i','o','n'};
+// followed by two uint16s encoding the promise handle id (lo, hi)
+static const uint16_t js_promise_marker[] = {0xBFF,'M','i','n','i','R','a','c','e','r','P','r','o','m','i','s','e'};
 
 // defined in mini_racer_extension.c, opaque to mini_racer_v8.cc
 struct Context;
@@ -38,6 +40,8 @@ struct State *v8_thread_init(struct Context *c, const uint8_t *snapshot_buf,
                              size_t snapshot_len, int64_t max_memory,
                              int verbose_exceptions); // calls v8_thread_main
 void v8_attach(struct State *pst, const uint8_t *p, size_t n);
+void v8_await(struct State *pst, const uint8_t *p, size_t n);
+void v8_release_promises(struct State *pst, const uint8_t *p, size_t n);
 void v8_call(struct State *pst, const uint8_t *p, size_t n);
 void v8_call_async(struct State *pst, const uint8_t *p, size_t n);
 void v8_eval(struct State *pst, const uint8_t *p, size_t n);

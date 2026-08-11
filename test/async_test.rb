@@ -136,7 +136,9 @@ class MiniRacerAsyncTest < Minitest::Test
     context.attach(
       "rubyEvalsAsync",
       proc do
-        context.eval_async("(async () => { await Promise.resolve(); return 42 })()")
+        context.eval_async(
+          "(async () => { await Promise.resolve(); return 42 })()"
+        )
       end
     )
     context.eval(<<~JS)
@@ -207,7 +209,7 @@ class MiniRacerAsyncTest < Minitest::Test
   def test_call_sync_does_not_await
     context = MiniRacer::Context.new
     context.eval("async function f() { return 42 }")
-    assert_equal({}, context.call("f"))
+    assert_instance_of MiniRacer::Promise, context.call("f")
   end
 
   def test_dispose_after_call_async
