@@ -893,7 +893,6 @@ void v8_roundtrip(Context *c, const uint8_t **p, size_t *n)
 {
     pthread_mutex_lock(&c->mtx);
     buf_reset(&c->v8_req);
-    buf_reset(&c->req);
     if (c->res.len)
         c->res_ready = 1;
     pthread_cond_signal(&c->cv);
