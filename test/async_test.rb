@@ -1,4 +1,5 @@
 require "test_helper"
+require "timeout"
 
 class MiniRacerAsyncTest < Minitest::Test
   def setup
@@ -105,6 +106,52 @@ class MiniRacerAsyncTest < Minitest::Test
     JS
     err = assert_raises(RuntimeError) { context.call_async("boomRuby") }
     assert_includes err.message, "ruby boom"
+  end
+
+  def test_nested_call_async_fails_instead_of_deadlocking
+    context = MiniRacer::Context.new
+    context.attach("rubyCallsAsync", proc { context.call_async("inner") })
+    context.eval(<<~JS)
+      async function inner() {
+        await Promise.resolve();
+        return 42;
+      }
+
+      async function outer() {
+        await Promise.resolve();
+        return rubyCallsAsync();
+      }
+    JS
+
+    err =
+      assert_raises(MiniRacer::RuntimeError) do
+        Timeout.timeout(2) { context.call_async("outer") }
+      end
+    assert_includes err.message, "nested async call"
+    assert_equal 2, context.eval("1 + 1")
+  end
+
+  def test_nested_eval_async_fails_instead_of_deadlocking
+    context = MiniRacer::Context.new
+    context.attach(
+      "rubyEvalsAsync",
+      proc do
+        context.eval_async("(async () => { await Promise.resolve(); return 42 })()")
+      end
+    )
+    context.eval(<<~JS)
+      async function outer() {
+        await Promise.resolve();
+        return rubyEvalsAsync();
+      }
+    JS
+
+    err =
+      assert_raises(MiniRacer::RuntimeError) do
+        Timeout.timeout(2) { context.call_async("outer") }
+      end
+    assert_includes err.message, "nested async call"
+    assert_equal 2, context.eval("1 + 1")
   end
 
   def test_eval_async_delayed_task

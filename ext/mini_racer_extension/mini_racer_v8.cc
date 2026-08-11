@@ -94,6 +94,9 @@ struct State
     int err_reason;
     // TerminateExecution() while idle doesn't make IsExecutionTerminating() true
     std::atomic<bool> terminate_requested;
+    // Tracks reentrant call/eval dispatches so nested async calls can fail
+    // instead of deadlocking in V8's non-reentrant microtask processing.
+    int javascript_call_depth;
     bool verbose_exceptions;
     std::vector<Callback*> callbacks;
     std::unique_ptr<v8::ArrayBuffer::Allocator> allocator;
@@ -589,6 +592,24 @@ fail:
     reply_retry(st, err);
 }
 
+struct JavascriptCallScope
+{
+    int& depth;
+
+    explicit JavascriptCallScope(int& depth) : depth(depth) { depth++; }
+    ~JavascriptCallScope() { depth--; }
+};
+
+void throw_nested_async_call(State& st)
+{
+    // V8 does not run microtask checkpoints recursively. A nested async call
+    // from an attached Ruby callback can therefore deadlock, so reject it
+    // before entering JavaScript.
+    auto message = v8::String::NewFromUtf8Literal(
+        st.isolate, "nested async calls are not supported");
+    st.isolate->ThrowException(v8::Exception::Error(message));
+}
+
 // awaits |*result| if it's a promise; false means an exception is pending
 bool await_promise(State& st, v8::Local<v8::Value> *result)
 {
@@ -628,6 +649,13 @@ void v8_call_impl(State *pst, const uint8_t *p, size_t n, bool await)
     des.ReadHeader(st.context).Check();
     v8::Local<v8::Value> result;
     int cause = INTERNAL_ERROR;
+    bool nested = st.javascript_call_depth > 0;
+    JavascriptCallScope call_scope(st.javascript_call_depth);
+    if (await && nested) {
+        throw_nested_async_call(st);
+        cause = RUNTIME_ERROR;
+        goto fail;
+    }
     {
         v8::Local<v8::Value> request_v;
         if (!des.ReadValue(st.context).ToLocal(&request_v)) goto fail;
@@ -717,6 +745,13 @@ void v8_eval_impl(State *pst, const uint8_t *p, size_t n, bool await)
     des.ReadHeader(st.context).Check();
     v8::Local<v8::Value> result;
     int cause = INTERNAL_ERROR;
+    bool nested = st.javascript_call_depth > 0;
+    JavascriptCallScope call_scope(st.javascript_call_depth);
+    if (await && nested) {
+        throw_nested_async_call(st);
+        cause = RUNTIME_ERROR;
+        goto fail;
+    }
     {
         v8::Local<v8::Value> request_v;
         if (!des.ReadValue(st.context).ToLocal(&request_v)) goto fail;

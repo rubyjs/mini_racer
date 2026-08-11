@@ -375,6 +375,11 @@ A promise that never settles blocks forever, just like an infinite loop. The
 `timeout:` option and `Context#stop` both interrupt it, raising
 `MiniRacer::ScriptTerminatedError`.
 
+Calling `call_async` or `eval_async` recursively on the same context from an
+attached Ruby callback is not supported and raises `MiniRacer::RuntimeError`.
+V8 cannot run the nested microtask checkpoint needed to settle such a call.
+Synchronous nested `call` and `eval` remain supported.
+
 ### Microtask checkpoints
 
 V8 drains its microtask queue (e.g. callbacks queued via `Promise.resolve().then(...)`) automatically when script execution returns to the embedder, so most code "just works":
