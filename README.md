@@ -348,34 +348,34 @@ Performance is slightly better than running `context.eval("hello('George')")` si
 * compilation of eval'd string is avoided
 * function arguments don't need to be converted to JSON
 
-### Promises: call_async and eval_async
+### Promises: call_await and eval_await
 
-`call_async` and `eval_async` work like `call` and `eval`, but when the result is a
+`call_await` and `eval_await` work like `call` and `eval`, but when the result is a
 Promise they block until it settles and return the settled value. A rejected
 promise raises `MiniRacer::RuntimeError`, just like a synchronous `throw`:
 
 ```ruby
 context = MiniRacer::Context.new
 context.eval("async function f(x) { await Promise.resolve(); return x * 2 }")
-context.call_async("f", 21)
+context.call_await("f", 21)
 # => 42
 
-context.eval_async("(async () => 6 * 7)()")
+context.eval_await("(async () => 6 * 7)()")
 # => 42
 
 context.eval("async function boom() { throw new Error('kaboom') }")
-context.call_async("boom")
+context.call_await("boom")
 # => raises MiniRacer::RuntimeError (Error: kaboom)
 ```
 
-Non-Promise results pass through unchanged, so `call_async` is a drop-in
-superset of `call` (same for `eval_async`/`eval`).
+Non-Promise results pass through unchanged, so `call_await` is a drop-in
+superset of `call` (same for `eval_await`/`eval`).
 
 A promise that never settles blocks forever, just like an infinite loop. The
 `timeout:` option and `Context#stop` both interrupt it, raising
 `MiniRacer::ScriptTerminatedError`.
 
-Calling `call_async` or `eval_async` recursively on the same context from an
+Calling `call_await` or `eval_await` recursively on the same context from an
 attached Ruby callback is not supported and raises `MiniRacer::RuntimeError`.
 V8 cannot run the nested microtask checkpoint needed to settle such a call.
 Synchronous nested `call` and `eval` remain supported.

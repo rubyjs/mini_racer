@@ -810,9 +810,9 @@ static void dispatch1(Context *c, const uint8_t *p, size_t n)
     switch (*p) {
     case 'A': return v8_attach(c->pst, p+1, n-1);
     case 'C': return v8_timedwait(c, p+1, n-1, v8_call);
-    case 'D': return v8_timedwait(c, p+1, n-1, v8_call_async);
+    case 'D': return v8_timedwait(c, p+1, n-1, v8_call_await);
     case 'E': return v8_timedwait(c, p+1, n-1, v8_eval);
-    case 'F': return v8_timedwait(c, p+1, n-1, v8_eval_async);
+    case 'F': return v8_timedwait(c, p+1, n-1, v8_eval_await);
     case 'H': return v8_heap_snapshot(c->pst);
     case 'M': return v8_perform_microtask_checkpoint(c->pst);
     case 'P': return v8_pump_message_loop(c->pst);
@@ -1686,7 +1686,7 @@ static VALUE context_call(int argc, VALUE *argv, VALUE self)
     return context_call_common(argc, argv, self, 'C');
 }
 
-static VALUE context_call_async(int argc, VALUE *argv, VALUE self)
+static VALUE context_call_await(int argc, VALUE *argv, VALUE self)
 {
     return context_call_common(argc, argv, self, 'D');
 }
@@ -1724,7 +1724,7 @@ static VALUE context_eval(int argc, VALUE *argv, VALUE self)
     return context_eval_common(argc, argv, self, 'E');
 }
 
-static VALUE context_eval_async(int argc, VALUE *argv, VALUE self)
+static VALUE context_eval_await(int argc, VALUE *argv, VALUE self)
 {
     return context_eval_common(argc, argv, self, 'F');
 }
@@ -2169,9 +2169,9 @@ void Init_mini_racer_extension(void)
     rb_define_method(c, "dispose", context_dispose, 0);
     rb_define_method(c, "stop", context_stop, 0);
     rb_define_method(c, "call", context_call, -1);
-    rb_define_method(c, "call_async", context_call_async, -1);
+    rb_define_method(c, "call_await", context_call_await, -1);
     rb_define_method(c, "eval", context_eval, -1);
-    rb_define_method(c, "eval_async", context_eval_async, -1);
+    rb_define_method(c, "eval_await", context_eval_await, -1);
     rb_define_method(c, "heap_stats", context_heap_stats, 0);
     rb_define_method(c, "heap_snapshot", context_heap_snapshot, 0);
     rb_define_method(c, "perform_microtask_checkpoint", context_perform_microtask_checkpoint, 0);

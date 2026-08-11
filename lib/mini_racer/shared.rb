@@ -188,12 +188,12 @@ module MiniRacer
       ensure_gc_thread if @ensure_gc_after_idle
     end
 
-    def eval_async(*)
-      raise MiniRacer::Error, "eval_async is not supported on TruffleRuby"
+    def eval_await(*)
+      raise MiniRacer::Error, "eval_await is not supported on TruffleRuby"
     end
 
-    def call_async(*)
-      raise MiniRacer::Error, "call_async is not supported on TruffleRuby"
+    def call_await(*)
+      raise MiniRacer::Error, "call_await is not supported on TruffleRuby"
     end
 
     def dispose

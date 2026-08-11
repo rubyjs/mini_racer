@@ -729,7 +729,7 @@ extern "C" void v8_call(State *pst, const uint8_t *p, size_t n)
     v8_call_impl(pst, p, n, false);
 }
 
-extern "C" void v8_call_async(State *pst, const uint8_t *p, size_t n)
+extern "C" void v8_call_await(State *pst, const uint8_t *p, size_t n)
 {
     v8_call_impl(pst, p, n, true);
 }
@@ -797,7 +797,7 @@ extern "C" void v8_eval(State *pst, const uint8_t *p, size_t n)
     v8_eval_impl(pst, p, n, false);
 }
 
-extern "C" void v8_eval_async(State *pst, const uint8_t *p, size_t n)
+extern "C" void v8_eval_await(State *pst, const uint8_t *p, size_t n)
 {
     v8_eval_impl(pst, p, n, true);
 }
