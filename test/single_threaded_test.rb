@@ -51,6 +51,23 @@ class MiniRacerSingleThreadedTest < Minitest::Test
     RUBY
   end
 
+  def test_call_await_and_eval_await
+    assert_single_threaded_script <<~'RUBY'
+      context = MiniRacer::Context.new
+      context.eval("async function f(x) { await Promise.resolve(); return x * 2 }")
+      raise "bad async call" unless context.call_await("f", 21) == 42
+      raise "bad async eval" unless context.eval_await("(async () => 6 * 7)()") == 42
+
+      context = MiniRacer::Context.new(timeout: 200)
+      begin
+        context.eval_await("new Promise(() => {})")
+        raise "expected termination"
+      rescue MiniRacer::ScriptTerminatedError
+      end
+      raise "context unusable after termination" unless context.eval("1 + 1") == 2
+    RUBY
+  end
+
   def test_nested_javascript_ruby_javascript_call
     assert_single_threaded_script <<~'RUBY'
       context = MiniRacer::Context.new

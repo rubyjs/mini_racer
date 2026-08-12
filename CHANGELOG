@@ -1,4 +1,7 @@
-- Unreleased
+- 0.22.0 - 12-08-2026
+  - Add `Context#call_await` and `Context#eval_await`: like `call`/`eval` but block until a returned Promise settles and return the settled value; rejections raise `MiniRacer::RuntimeError`
+  - Fix a `call` or `eval` made from a Ruby callback taking the timeout or `stop` meant for the evaluation around it, which then kept running
+  - Fix a timeout that fires just after its own evaluation ends, where it would stop the next evaluation instead
   - Fix a race introduced in 0.21.4 where a request sent right after a nested dispatch (e.g. `perform_microtask_checkpoint` or a nested `call` from an attached callback) could be dropped, deadlocking the context
 
 - 0.21.4 - 24-06-2026

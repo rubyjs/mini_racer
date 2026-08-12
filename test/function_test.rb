@@ -47,6 +47,19 @@ class MiniRacerFunctionTest < Minitest::Test
     assert_equal "I need 1,2,3 bars", res
   end
 
+  def test_arguments_passed_exactly
+    context = MiniRacer::Context.new
+    context.eval("function count() { return arguments.length }")
+    assert_equal 2, context.call("count", 1, 2)
+    assert_equal 0, context.call("count")
+  end
+
+  def test_trailing_hash_is_positional_argument
+    context = MiniRacer::Context.new
+    context.eval("function echo(h) { return h }")
+    assert_equal({ "key" => "value" }, context.call("echo", key: "value"))
+  end
+
   def test_complex_return
     context = MiniRacer::Context.new
     context.eval("function f(x, y) { return { vx: x, vy: y, array: [x, y] } }")
