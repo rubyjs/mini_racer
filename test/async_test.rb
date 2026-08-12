@@ -211,16 +211,16 @@ class MiniRacerAsyncTest < Minitest::Test
       end
     )
 
+    source = <<~JS
+      runSlowEval();
+      (() => {
+        const start = Date.now();
+        while (Date.now() - start < 500) {}
+      })();
+    JS
+
     assert_raises(MiniRacer::ScriptTerminatedError) do
-      Timeout.timeout(2) do
-        context.eval(<<~JS)
-          runSlowEval();
-          (() => {
-            const start = Date.now();
-            while (Date.now() - start < 500) {}
-          })();
-        JS
-      end
+      Timeout.timeout(2) { context.eval(source) }
     end
     assert nested_terminated
     assert_equal 2, context.eval("1 + 1")
