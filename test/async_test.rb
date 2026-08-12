@@ -215,6 +215,64 @@ class MiniRacerAsyncTest < Minitest::Test
     assert_equal 2, context.eval("1 + 1")
   end
 
+  def test_sync_stop_does_not_leave_a_wakeup_task
+    context = MiniRacer::Context.new
+    context.attach("stopNow", proc { context.stop })
+
+    assert_raises(MiniRacer::ScriptTerminatedError) do
+      context.eval("stopNow(); 42")
+    end
+    assert_equal false, context.pump_message_loop
+    assert_equal 2, context.eval("1 + 1")
+  end
+
+  def test_eval_await_preserves_max_memory_error
+    context = MiniRacer::Context.new(max_memory: 100_000)
+    forced_gc = false
+    context.attach(
+      "forceGc",
+      proc do
+        forced_gc = true
+        context.low_memory_notification
+      end
+    )
+
+    assert_raises(MiniRacer::V8OutOfMemoryError) do
+      Timeout.timeout(2) do
+        # Trigger GC from a microtask while eval_await owns the pending promise.
+        context.eval_await(<<~JS)
+          Promise.resolve().then(() => forceGc());
+          new Promise(() => {});
+        JS
+      end
+    end
+    assert forced_gc
+    assert_equal 2, context.eval("1 + 1")
+  end
+
+  def test_late_watchdog_does_not_terminate_next_eval
+    context = MiniRacer::Context.new(timeout: 5)
+    context.eval("var values = []")
+    attempts = 0
+    200.times do
+      begin
+        context.eval(<<~JS)
+          values.push(...new Array(10000).fill(1));
+          values.length;
+        JS
+      rescue MiniRacer::ScriptTerminatedError
+        attempts += 1
+        raise if attempts > 100
+        retry
+      end
+    end
+
+    # Serializing this result outlives the watchdog after eval's final
+    # termination check. Its late timeout belongs to this eval, not the next.
+    assert_operator context.eval("values").length, :>=, 2_000_000
+    assert_equal 2, context.eval("1 + 1")
+  end
+
   def test_never_settling_promise_interrupted_by_stop
     context = MiniRacer::Context.new
     stopper =

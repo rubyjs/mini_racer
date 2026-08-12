@@ -773,7 +773,7 @@ static void *v8_watchdog(void *arg)
         if (c->wd.cancel)
             break;
         if (deadline_exceeded(deadline)) {
-            v8_terminate_execution(c->pst);
+            v8_terminate_watchdog(c->pst);
             break;
         }
     }
@@ -806,6 +806,7 @@ static void v8_timedwait(Context *c, const uint8_t *p, size_t n,
     pthread_cond_signal(&c->wd.cv);
     pthread_mutex_unlock(&c->wd.mtx);
     pthread_join(thr, NULL);
+    v8_cancel_watchdog_termination(c->pst);
     c->wd.cancel = 0;
     c->wd.active = 0;
 }

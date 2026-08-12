@@ -69,6 +69,12 @@ struct Callback
     int32_t id;
 };
 
+enum : unsigned
+{
+    NON_WATCHDOG_TERMINATION = 1,
+    WATCHDOG_TERMINATION = 2,
+};
+
 // NOTE: do *not* use thread_locals to store state. In single-threaded
 // mode, V8 runs on the same thread as Ruby and the Ruby runtime clobbers
 // thread-locals when it context-switches threads. Ruby 3.4.0 has a new
@@ -93,7 +99,10 @@ struct State
     int64_t max_memory;
     int err_reason;
     // TerminateExecution() while idle doesn't make IsExecutionTerminating() true
-    std::atomic<bool> terminate_requested;
+    std::atomic<unsigned> terminate_requested;
+    // Armed before checking terminate_requested so a concurrent terminator
+    // either gets observed or posts a task. Uses sequential consistency.
+    std::atomic<bool> waiting_for_task;
     // Tracks reentrant call/eval dispatches so nested await calls can fail
     // instead of deadlocking and nested pumps preserve outer termination.
     int javascript_call_depth;
@@ -422,6 +431,7 @@ void v8_gc_callback(v8::Isolate*, v8::GCType, v8::GCCallbackFlags, void *data)
     int64_t used_heap_size = static_cast<int64_t>(s.used_heap_size());
     if (used_heap_size > st.max_memory) {
         st.err_reason = MEMORY_ERROR;
+        st.terminate_requested.fetch_or(NON_WATCHDOG_TERMINATION);
         st.isolate->TerminateExecution();
     }
 }
@@ -627,13 +637,17 @@ bool await_promise(State& st, v8::Local<v8::Value> *result)
         case v8::Promise::kPending:
             break;
         }
-        if (st.terminate_requested.load() || st.isolate->IsExecutionTerminating())
+        st.waiting_for_task.store(true);
+        if (st.terminate_requested.load() || st.isolate->IsExecutionTerminating()) {
+            st.waiting_for_task.store(false);
             return false;
-        // blocks until the next task; v8_terminate_execution posts one to
-        // end the wait on timeout/stop/interrupt
+        }
+        // blocks until the next task; a concurrent v8_terminate_execution
+        // observes waiting_for_task and posts one to end the wait
         v8::platform::PumpMessageLoop(
             platform, st.isolate,
             v8::platform::MessageLoopBehavior::kWaitForWork);
+        st.waiting_for_task.store(false);
     }
 }
 
@@ -708,7 +722,7 @@ void v8_call_impl(State *pst, const uint8_t *p, size_t n, bool await)
     }
     cause = NO_ERROR;
 fail:
-    if (st.terminate_requested.exchange(false) ||
+    if (st.terminate_requested.exchange(0) ||
         st.isolate->IsExecutionTerminating()) {
         st.isolate->CancelTerminateExecution();
         cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
@@ -776,7 +790,7 @@ void v8_eval_impl(State *pst, const uint8_t *p, size_t n, bool await)
     }
     cause = NO_ERROR;
 fail:
-    if (st.terminate_requested.exchange(false) ||
+    if (st.terminate_requested.exchange(0) ||
         st.isolate->IsExecutionTerminating()) {
         st.isolate->CancelTerminateExecution();
         cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
@@ -891,7 +905,7 @@ extern "C" void v8_pump_message_loop(State *pst)
 fail:
     // A nested pump must leave termination active for the enclosing call/eval.
     if (!st.javascript_call_depth &&
-        (st.terminate_requested.exchange(false) ||
+        (st.terminate_requested.exchange(0) ||
          st.isolate->IsExecutionTerminating())) {
         st.isolate->CancelTerminateExecution();
         st.err_reason = NO_ERROR;
@@ -1006,7 +1020,7 @@ extern "C" void v8_snapshot(State *pst, const uint8_t *p, size_t n)
     }
     cause = NO_ERROR;
 fail:
-    if (st.terminate_requested.exchange(false) ||
+    if (st.terminate_requested.exchange(0) ||
         st.isolate->IsExecutionTerminating()) {
         st.isolate->CancelTerminateExecution();
         cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
@@ -1077,7 +1091,7 @@ extern "C" void v8_warmup(State *pst, const uint8_t *p, size_t n)
     }
     cause = NO_ERROR;
 fail:
-    if (st.terminate_requested.exchange(false) ||
+    if (st.terminate_requested.exchange(0) ||
         st.isolate->IsExecutionTerminating()) {
         st.isolate->CancelTerminateExecution();
         cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
@@ -1108,13 +1122,33 @@ struct WakeupTask : public v8::Task
 };
 
 // called from ruby or watchdog thread
+void request_termination(State *pst, unsigned request)
+{
+    pst->terminate_requested.fetch_or(request);
+    pst->isolate->TerminateExecution();
+    // Wake await_promise if it may be blocked. A racing early return can leave
+    // one harmless no-op task queued.
+    if (pst->waiting_for_task.exchange(false)) {
+        platform->GetForegroundTaskRunner(pst->isolate)
+            ->PostTask(std::make_unique<WakeupTask>());
+    }
+}
+
 extern "C" void v8_terminate_execution(State *pst)
 {
-    pst->terminate_requested.store(true);
-    pst->isolate->TerminateExecution();
-    // wake await_promise's message loop pump
-    platform->GetForegroundTaskRunner(pst->isolate)
-        ->PostTask(std::make_unique<WakeupTask>());
+    request_termination(pst, NON_WATCHDOG_TERMINATION);
+}
+
+extern "C" void v8_terminate_watchdog(State *pst)
+{
+    request_termination(pst, WATCHDOG_TERMINATION);
+}
+
+extern "C" void v8_cancel_watchdog_termination(State *pst)
+{
+    unsigned requests = pst->terminate_requested.fetch_and(~WATCHDOG_TERMINATION);
+    if (requests == WATCHDOG_TERMINATION)
+        pst->isolate->CancelTerminateExecution();
 }
 
 // called from ruby thread
@@ -1122,7 +1156,7 @@ extern "C" void v8_cancel_terminate_execution(State *pst)
 {
     // TerminateExecution can race with V8 completing and queue a termination
     // for the next entry without IsExecutionTerminating() becoming true.
-    pst->terminate_requested.store(false);
+    pst->terminate_requested.store(0);
     pst->isolate->CancelTerminateExecution();
 }
 

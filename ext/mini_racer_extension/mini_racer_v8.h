@@ -49,7 +49,9 @@ void v8_pump_message_loop(struct State *pst);
 void v8_snapshot(struct State *pst, const uint8_t *p, size_t n);
 void v8_warmup(struct State *pst, const uint8_t *p, size_t n);
 void v8_low_memory_notification(struct State *pst);
-void v8_terminate_execution(struct State *pst); // called from ruby or watchdog thread
+void v8_terminate_execution(struct State *pst); // called from ruby thread
+void v8_terminate_watchdog(struct State *pst); // called from watchdog thread
+void v8_cancel_watchdog_termination(struct State *pst); // called from v8 thread
 void v8_cancel_terminate_execution(struct State *pst); // called from ruby thread
 void v8_single_threaded_enter(struct State *pst, struct Context *c, void (*f)(struct Context *c));
 void v8_single_threaded_dispose(struct State *pst);
