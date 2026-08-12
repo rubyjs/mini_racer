@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
       - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1
@@ -40,7 +40,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
       - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1
@@ -81,7 +81,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
       - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1
@@ -139,7 +139,7 @@ jobs:
         if: ${{ matrix.libc == 'musl' }}
         run: docker exec -w "${PWD}" ${{ steps.container.outputs.container_id }} apk add --no-cache build-base bash git tzdata
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
       - name: Update Rubygems
