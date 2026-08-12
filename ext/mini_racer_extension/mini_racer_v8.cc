@@ -94,8 +94,8 @@ struct State
     int err_reason;
     // TerminateExecution() while idle doesn't make IsExecutionTerminating() true
     std::atomic<bool> terminate_requested;
-    // Tracks reentrant call/eval dispatches so nested async calls can fail
-    // instead of deadlocking in V8's non-reentrant microtask processing.
+    // Tracks reentrant call/eval dispatches so nested await calls can fail
+    // instead of deadlocking and nested pumps preserve outer termination.
     int javascript_call_depth;
     bool verbose_exceptions;
     std::vector<Callback*> callbacks;
@@ -889,8 +889,10 @@ extern "C" void v8_pump_message_loop(State *pst)
         if (try_catch.HasCaught()) goto fail;
     }
 fail:
-    if (st.terminate_requested.exchange(false) ||
-        st.isolate->IsExecutionTerminating()) {
+    // A nested pump must leave termination active for the enclosing call/eval.
+    if (!st.javascript_call_depth &&
+        (st.terminate_requested.exchange(false) ||
+         st.isolate->IsExecutionTerminating())) {
         st.isolate->CancelTerminateExecution();
         st.err_reason = NO_ERROR;
     }

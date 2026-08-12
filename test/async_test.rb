@@ -199,6 +199,22 @@ class MiniRacerAsyncTest < Minitest::Test
     assert_equal 2, context.eval("1 + 1")
   end
 
+  def test_pump_message_loop_does_not_consume_stop
+    context = MiniRacer::Context.new
+    context.attach(
+      "stopAndPump",
+      proc do
+        context.stop
+        context.pump_message_loop
+      end
+    )
+
+    assert_raises(MiniRacer::ScriptTerminatedError) do
+      context.eval("stopAndPump(); 42")
+    end
+    assert_equal 2, context.eval("1 + 1")
+  end
+
   def test_never_settling_promise_interrupted_by_stop
     context = MiniRacer::Context.new
     stopper =
