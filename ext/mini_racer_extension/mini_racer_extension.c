@@ -152,7 +152,8 @@ typedef struct Context
     struct {
         pthread_mutex_t mtx;
         pthread_cond_t cv;
-        int cancel;
+        int active; // dispatch thread only
+        int cancel; // protected by |mtx|
     } wd; // watchdog
     Barrier early_init, late_init;
 } Context;
@@ -786,8 +787,14 @@ static void v8_timedwait(Context *c, const uint8_t *p, size_t n,
     pthread_t thr;
     int r;
 
-    r = -1;
-    if (c->timeout > 0 && (r = pthread_create(&thr, NULL, v8_watchdog, c))) {
+    if (c->timeout <= 0 || c->wd.active) {
+        func(c->pst, p, n);
+        return;
+    }
+    c->wd.active = 1;
+    r = pthread_create(&thr, NULL, v8_watchdog, c);
+    if (r) {
+        c->wd.active = 0;
         fprintf(stderr, "mini_racer: watchdog: pthread_create: %s\n", strerror(r));
         fflush(stderr);
     }
@@ -800,6 +807,7 @@ static void v8_timedwait(Context *c, const uint8_t *p, size_t n,
     pthread_mutex_unlock(&c->wd.mtx);
     pthread_join(thr, NULL);
     c->wd.cancel = 0;
+    c->wd.active = 0;
 }
 
 static void dispatch1(Context *c, const uint8_t *p, size_t n)

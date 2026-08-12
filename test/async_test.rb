@@ -167,6 +167,27 @@ class MiniRacerAsyncTest < Minitest::Test
     assert_equal "timed-out", result
   end
 
+  def test_timeout_survives_nested_sync_call
+    context = MiniRacer::Context.new(timeout: 200)
+    context.attach("rubyCallsSync", proc { context.call("inner") })
+    context.eval(<<~JS)
+      function inner() {
+        return 42;
+      }
+
+      async function outer() {
+        await Promise.resolve();
+        rubyCallsSync();
+        return new Promise(() => {});
+      }
+    JS
+
+    assert_raises(MiniRacer::ScriptTerminatedError) do
+      Timeout.timeout(2) { context.call_await("outer") }
+    end
+    assert_equal 2, context.eval("1 + 1")
+  end
+
   def test_never_settling_promise_hits_timeout
     context = MiniRacer::Context.new(timeout: 200)
     start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
