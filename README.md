@@ -380,6 +380,8 @@ attached Ruby callback is not supported and raises `MiniRacer::RuntimeError`.
 V8 cannot run the nested microtask checkpoint needed to settle such a call.
 Synchronous nested `call` and `eval` remain supported.
 
+`call_await` and `eval_await` are not currently supported on TruffleRuby.
+
 ### Microtask checkpoints
 
 V8 drains its microtask queue (e.g. callbacks queued via `Promise.resolve().then(...)`) automatically when script execution returns to the embedder, so most code "just works":

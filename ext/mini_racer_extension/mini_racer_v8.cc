@@ -610,13 +610,13 @@ struct JavascriptCallScope
     ~JavascriptCallScope() { depth--; }
 };
 
-void throw_nested_async_call(State& st)
+void throw_nested_await_call(State& st)
 {
-    // V8 does not run microtask checkpoints recursively. A nested async call
+    // V8 does not run microtask checkpoints recursively. A nested await call
     // from an attached Ruby callback can therefore deadlock, so reject it
     // before entering JavaScript.
     auto message = v8::String::NewFromUtf8Literal(
-        st.isolate, "nested async calls are not supported");
+        st.isolate, "nested call_await/eval_await is not supported");
     st.isolate->ThrowException(v8::Exception::Error(message));
 }
 
@@ -651,6 +651,25 @@ bool await_promise(State& st, v8::Local<v8::Value> *result)
     }
 }
 
+// Nested calls report termination but leave it pending for the enclosing call.
+// Outermost calls consume it as before.
+bool suspend_termination(State& st, bool nested, int& cause)
+{
+    unsigned requests = nested ? st.terminate_requested.load()
+                               : st.terminate_requested.exchange(0);
+    if (!requests && !st.isolate->IsExecutionTerminating()) return false;
+    st.isolate->CancelTerminateExecution();
+    cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
+    if (!nested) st.err_reason = NO_ERROR;
+    return nested;
+}
+
+void restore_termination(State& st, bool suspended)
+{
+    if (suspended)
+        st.isolate->TerminateExecution();
+}
+
 // response is errback [result, err] array
 void v8_call_impl(State *pst, const uint8_t *p, size_t n, bool await)
 {
@@ -663,10 +682,11 @@ void v8_call_impl(State *pst, const uint8_t *p, size_t n, bool await)
     des.ReadHeader(st.context).Check();
     v8::Local<v8::Value> result;
     int cause = INTERNAL_ERROR;
+    bool preserve_termination = false;
     bool nested = st.javascript_call_depth > 0;
     JavascriptCallScope call_scope(st.javascript_call_depth);
     if (await && nested) {
-        throw_nested_async_call(st);
+        throw_nested_await_call(st);
         cause = RUNTIME_ERROR;
         goto fail;
     }
@@ -722,13 +742,11 @@ void v8_call_impl(State *pst, const uint8_t *p, size_t n, bool await)
     }
     cause = NO_ERROR;
 fail:
-    if (st.terminate_requested.exchange(0) ||
-        st.isolate->IsExecutionTerminating()) {
-        st.isolate->CancelTerminateExecution();
-        cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
-        st.err_reason = NO_ERROR;
+    preserve_termination = suspend_termination(st, nested, cause);
+    if (bubble_up_ruby_exception(st, &try_catch)) {
+        restore_termination(st, preserve_termination);
+        return;
     }
-    if (bubble_up_ruby_exception(st, &try_catch)) return;
     if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
     if (cause) result = v8::Undefined(st.isolate);
     auto err = to_error(st, &try_catch, cause);
@@ -736,6 +754,7 @@ fail:
         assert(try_catch.HasCaught());
         goto fail; // retry; can be termination exception
     }
+    restore_termination(st, preserve_termination);
 }
 
 extern "C" void v8_call(State *pst, const uint8_t *p, size_t n)
@@ -759,10 +778,11 @@ void v8_eval_impl(State *pst, const uint8_t *p, size_t n, bool await)
     des.ReadHeader(st.context).Check();
     v8::Local<v8::Value> result;
     int cause = INTERNAL_ERROR;
+    bool preserve_termination = false;
     bool nested = st.javascript_call_depth > 0;
     JavascriptCallScope call_scope(st.javascript_call_depth);
     if (await && nested) {
-        throw_nested_async_call(st);
+        throw_nested_await_call(st);
         cause = RUNTIME_ERROR;
         goto fail;
     }
@@ -790,13 +810,11 @@ void v8_eval_impl(State *pst, const uint8_t *p, size_t n, bool await)
     }
     cause = NO_ERROR;
 fail:
-    if (st.terminate_requested.exchange(0) ||
-        st.isolate->IsExecutionTerminating()) {
-        st.isolate->CancelTerminateExecution();
-        cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
-        st.err_reason = NO_ERROR;
+    preserve_termination = suspend_termination(st, nested, cause);
+    if (bubble_up_ruby_exception(st, &try_catch)) {
+        restore_termination(st, preserve_termination);
+        return;
     }
-    if (bubble_up_ruby_exception(st, &try_catch)) return;
     if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
     if (cause) result = v8::Undefined(st.isolate);
     auto err = to_error(st, &try_catch, cause);
@@ -804,6 +822,7 @@ fail:
         assert(try_catch.HasCaught());
         goto fail; // retry; can be termination exception
     }
+    restore_termination(st, preserve_termination);
 }
 
 extern "C" void v8_eval(State *pst, const uint8_t *p, size_t n)
@@ -878,6 +897,7 @@ extern "C" void v8_perform_microtask_checkpoint(State *pst)
     // Leave any termination active so the enclosing v8_call/v8_eval frame
     // surfaces OOM (set by v8_gc_callback) or watchdog termination to Ruby.
     State& st = *pst;
+    JavascriptCallScope call_scope(st.javascript_call_depth);
     v8::TryCatch try_catch(st.isolate);
     try_catch.SetVerbose(st.verbose_exceptions);
     v8::HandleScope handle_scope(st.isolate);
@@ -888,6 +908,8 @@ extern "C" void v8_perform_microtask_checkpoint(State *pst)
 extern "C" void v8_pump_message_loop(State *pst)
 {
     State& st = *pst;
+    bool nested = st.javascript_call_depth > 0;
+    JavascriptCallScope call_scope(st.javascript_call_depth);
     v8::TryCatch try_catch(st.isolate);
     try_catch.SetVerbose(st.verbose_exceptions);
     v8::HandleScope handle_scope(st.isolate);
@@ -904,7 +926,7 @@ extern "C" void v8_pump_message_loop(State *pst)
     }
 fail:
     // A nested pump must leave termination active for the enclosing call/eval.
-    if (!st.javascript_call_depth &&
+    if (!nested &&
         (st.terminate_requested.exchange(0) ||
          st.isolate->IsExecutionTerminating())) {
         st.isolate->CancelTerminateExecution();
@@ -1147,8 +1169,11 @@ extern "C" void v8_terminate_watchdog(State *pst)
 extern "C" void v8_cancel_watchdog_termination(State *pst)
 {
     unsigned requests = pst->terminate_requested.fetch_and(~WATCHDOG_TERMINATION);
-    if (requests == WATCHDOG_TERMINATION)
+    if (requests == WATCHDOG_TERMINATION) {
         pst->isolate->CancelTerminateExecution();
+        if (pst->terminate_requested.load())
+            pst->isolate->TerminateExecution();
+    }
 }
 
 // called from ruby thread

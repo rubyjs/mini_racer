@@ -127,7 +127,7 @@ class MiniRacerAsyncTest < Minitest::Test
       assert_raises(MiniRacer::RuntimeError) do
         Timeout.timeout(2) { context.call_await("outer") }
       end
-    assert_includes err.message, "nested async call"
+    assert_includes err.message, "nested call_await/eval_await"
     assert_equal 2, context.eval("1 + 1")
   end
 
@@ -152,7 +152,7 @@ class MiniRacerAsyncTest < Minitest::Test
       assert_raises(MiniRacer::RuntimeError) do
         Timeout.timeout(2) { context.call_await("outer") }
       end
-    assert_includes err.message, "nested async call"
+    assert_includes err.message, "nested call_await/eval_await"
     assert_equal 2, context.eval("1 + 1")
   end
 
@@ -165,6 +165,65 @@ class MiniRacerAsyncTest < Minitest::Test
         })()
       JS
     assert_equal "timed-out", result
+  end
+
+  def test_nested_sync_call_does_not_consume_stop
+    context = MiniRacer::Context.new
+    nested_terminated = false
+    context.eval("function inner() { return 1 }")
+    context.attach(
+      "stopAndCall",
+      proc do
+        context.stop
+        begin
+          context.call("inner")
+        rescue MiniRacer::ScriptTerminatedError
+          nested_terminated = true
+        end
+        nil
+      end
+    )
+
+    assert_raises(MiniRacer::ScriptTerminatedError) do
+      context.eval("stopAndCall(); 42")
+    end
+    assert nested_terminated
+    assert_equal 2, context.eval("1 + 1")
+  end
+
+  def test_nested_sync_eval_does_not_consume_timeout
+    context = MiniRacer::Context.new(timeout: 100)
+    nested_terminated = false
+    context.attach(
+      "runSlowEval",
+      proc do
+        begin
+          context.eval(<<~JS)
+            (() => {
+              const start = Date.now();
+              while (Date.now() - start < 400) {}
+            })();
+          JS
+        rescue MiniRacer::ScriptTerminatedError
+          nested_terminated = true
+        end
+        nil
+      end
+    )
+
+    assert_raises(MiniRacer::ScriptTerminatedError) do
+      Timeout.timeout(2) do
+        context.eval(<<~JS)
+          runSlowEval();
+          (() => {
+            const start = Date.now();
+            while (Date.now() - start < 500) {}
+          })();
+        JS
+      end
+    end
+    assert nested_terminated
+    assert_equal 2, context.eval("1 + 1")
   end
 
   def test_timeout_survives_nested_sync_call
@@ -196,6 +255,32 @@ class MiniRacerAsyncTest < Minitest::Test
     end
     elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - start
     assert_operator elapsed, :<, 5
+    assert_equal 2, context.eval("1 + 1")
+  end
+
+  def test_await_from_pumped_callback_fails_without_hanging
+    context = MiniRacer::Context.new
+    nested_error = nil
+    context.attach(
+      "nestedAwait",
+      proc do
+        context.eval_await("new Promise(() => {})")
+      rescue MiniRacer::RuntimeError => error
+        nested_error = error
+      end
+    )
+    context.eval(<<~JS)
+      const i32 = new Int32Array(new SharedArrayBuffer(4));
+      Atomics.waitAsync(i32, 0, 0, 20).value.then(() => nestedAwait());
+    JS
+
+    Timeout.timeout(2) do
+      until nested_error
+        context.pump_message_loop
+        sleep 0.01
+      end
+    end
+    assert_includes nested_error.message, "nested call_await/eval_await"
     assert_equal 2, context.eval("1 + 1")
   end
 
@@ -251,25 +336,13 @@ class MiniRacerAsyncTest < Minitest::Test
   end
 
   def test_late_watchdog_does_not_terminate_next_eval
-    context = MiniRacer::Context.new(timeout: 5)
-    context.eval("var values = []")
-    attempts = 0
-    200.times do
-      begin
-        context.eval(<<~JS)
-          values.push(...new Array(10000).fill(1));
-          values.length;
-        JS
-      rescue MiniRacer::ScriptTerminatedError
-        attempts += 1
-        raise if attempts > 100
-        retry
-      end
-    end
+    value_size = 20_000_000
+    snapshot = MiniRacer::Snapshot.new("var value = 'x'.repeat(#{value_size})")
+    context = MiniRacer::Context.new(timeout: 5, snapshot: snapshot)
 
     # Serializing this result outlives the watchdog after eval's final
     # termination check. Its late timeout belongs to this eval, not the next.
-    assert_operator context.eval("values").length, :>=, 2_000_000
+    assert_equal value_size, context.eval("value").bytesize
     assert_equal 2, context.eval("1 + 1")
   end
 

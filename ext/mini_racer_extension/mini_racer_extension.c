@@ -899,7 +899,7 @@ void v8_dispatch(Context *c)
     pthread_mutex_unlock(&c->mtx);
 }
 
-// only called when inside v8_call, v8_eval (and their async variants),
+// only called when inside v8_call, v8_eval (and their await variants),
 // or v8_pump_message_loop
 void v8_roundtrip(Context *c, const uint8_t **p, size_t *n)
 {
@@ -1677,7 +1677,7 @@ static VALUE context_call_common(int argc, VALUE *argv, VALUE self, char op)
     rb_scan_args(argc, argv, "1*", &name, &args);
     Check_Type(name, T_STRING);
     rb_ary_unshift(args, name);
-    // request is (C)all or async (D) call, [name, args...] array
+    // request is (C)all or (D) call_await, [name, args...] array
     ser_init1(&s, op);
     if (serialize(&s, args)) {
         ser_reset(&s);
@@ -1715,7 +1715,7 @@ static VALUE context_eval_common(int argc, VALUE *argv, VALUE self, char op)
     if (NIL_P(filename))
         filename = rb_str_new_cstr("<eval>");
     Check_Type(filename, T_STRING);
-    // request is (E)val or async (F) eval, [filename, source] array
+    // request is (E)val or (F) eval_await, [filename, source] array
     ser_init1(&s, op);
     ser_array_begin(&s, 2);
     add_string(&s, filename);
