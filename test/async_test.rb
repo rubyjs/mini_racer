@@ -1,3 +1,5 @@
+require "open3"
+require "rbconfig"
 require "test_helper"
 require "timeout"
 
@@ -301,14 +303,33 @@ class MiniRacerAsyncTest < Minitest::Test
   end
 
   def test_sync_stop_does_not_leave_a_wakeup_task
-    context = MiniRacer::Context.new
-    context.attach("stopNow", proc { context.stop })
+    # PumpMessageLoop can also run V8's unrelated, periodically queued tasks.
+    # Use a fresh process so accumulated work from other tests cannot make this
+    # assertion report one of those tasks as the stop wakeup under test.
+    script = <<~'RUBY'
+      require "mini_racer"
 
-    assert_raises(MiniRacer::ScriptTerminatedError) do
-      context.eval("stopNow(); 42")
-    end
-    assert_equal false, context.pump_message_loop
-    assert_equal 2, context.eval("1 + 1")
+      context = MiniRacer::Context.new
+      context.attach("stopNow", proc { context.stop })
+
+      begin
+        context.eval("stopNow(); 42")
+        abort "eval was not terminated"
+      rescue MiniRacer::ScriptTerminatedError
+      end
+
+      abort "stop left a task queued" if context.pump_message_loop
+      abort "context is unusable" unless context.eval("1 + 1") == 2
+    RUBY
+    _stdout, stderr, status =
+      Open3.capture3(
+        RbConfig.ruby,
+        "-I#{File.expand_path("../lib", __dir__)}",
+        "-e",
+        script
+      )
+
+    assert status.success?, stderr
   end
 
   def test_eval_await_preserves_max_memory_error
