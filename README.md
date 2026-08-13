@@ -60,6 +60,10 @@ puts context.eval("array_and_hash()")
 # => {"a" => 1, "b" => [1, {"a" => 1}]}
 ```
 
+Ruby `Integer` and JavaScript `BigInt` values are converted exactly up to a
+16 MiB magnitude (about 134 million bits). Larger individual values are
+rejected with a serialization error rather than truncated.
+
 ### Return binary data from Ruby to JavaScript
 
 Attached Ruby functions can return binary data as `Uint8Array` using `MiniRacer::Binary`:

@@ -244,9 +244,8 @@ static void ser_num(Ser *s, double v)
 }
 
 // ser_bigint: |p| points to |n| bytes, interpreted as little-endian
-// 64-bit words. The buffer may be backed by Ruby's unsigned long limbs or
-// V8-style uint64_t words; keep the interface byte-oriented so callers don't
-// need to agree on the concrete typedef used for a 64-bit word.
+// 64-bit words. Keep the interface byte-oriented so callers don't need to
+// expose a concrete word type.
 static void ser_bigint(Ser *s, const void *p, size_t n, int sign)
 {
     const uint8_t *bytes;
@@ -273,7 +272,9 @@ static void ser_bigint(Ser *s, const void *p, size_t n, int sign)
 
 static void ser_int(Ser *s, int64_t v)
 {
+    uint8_t bytes[8];
     uint64_t t;
+    size_t i;
     int sign;
 
     if (*s->err)
@@ -283,8 +284,10 @@ static void ser_int(Ser *s, int64_t v)
             if (v <= INT64_MAX/1024)
                 return ser_num(s, v);
         t = v < 0 ? (uint64_t)(-(v + 1)) + 1 : (uint64_t)v;
+        for (i = 0; i < sizeof(bytes); i++)
+            bytes[i] = t >> (8*i);
         sign = v < 0 ? -1 : 1;
-        ser_bigint(s, &t, sizeof(t), sign);
+        ser_bigint(s, bytes, sizeof(bytes), sign);
     } else {
         w_byte(s, 'I');
         w_zigzag(s, v);
