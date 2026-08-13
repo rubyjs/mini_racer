@@ -254,8 +254,7 @@ class MiniRacerForkSafetyTest < Minitest::Test
   end
 
   def test_fork_hooks_do_not_make_initialized_default_platform_reusable
-    _stdout, stderr =
-      assert_fork_script <<~'RUBY'
+    _stdout, stderr = assert_fork_script <<~'RUBY'
         MiniRacer.install_fork_hooks!(timeout: 1)
         context = MiniRacer::Context.new
         context.eval("var answer = 42")
@@ -297,20 +296,21 @@ class MiniRacerForkSafetyTest < Minitest::Test
   end
 
   def test_default_platform_hook_warning_is_emitted_once
-    _stdout, stderr =
-      assert_fork_script <<~'RUBY'
+    _stdout, stderr = assert_fork_script <<~'RUBY'
         MiniRacer.install_fork_hooks!(timeout: 1)
         MiniRacer.install_fork_hooks!(timeout: 2)
         raise "timeout was not updated" unless MiniRacer.fork_hook_timeout == 2.0
       RUBY
 
-    assert_equal 1, stderr.scan("Fork hooks only quiesce MiniRacer operations").length
+    assert_equal 1,
+                 stderr.scan(
+                   "Fork hooks only quiesce MiniRacer operations"
+                 ).length
     assert_includes stderr, ":single_threaded"
   end
 
   def test_initialized_default_platform_gets_stronger_hook_warning
-    _stdout, stderr =
-      assert_fork_script <<~'RUBY'
+    _stdout, stderr = assert_fork_script <<~'RUBY'
         MiniRacer::Context.new
         MiniRacer.install_fork_hooks!(timeout: 1)
       RUBY
@@ -319,8 +319,7 @@ class MiniRacerForkSafetyTest < Minitest::Test
   end
 
   def test_single_threaded_configuration_does_not_warn
-    _stdout, stderr =
-      assert_fork_script <<~'RUBY'
+    _stdout, stderr = assert_fork_script <<~'RUBY'
         MiniRacer::Platform.set_flags!(:single_threaded)
         MiniRacer.install_fork_hooks!(timeout: 1)
       RUBY

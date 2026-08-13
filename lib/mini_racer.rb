@@ -153,11 +153,11 @@ module MiniRacer
           "The default V8 platform is currently configured. "
         end
       warn "mini_racer: #{detail}" \
-           "Fork hooks only quiesce MiniRacer operations; they cannot make an " \
-           "initialized default V8 worker pool usable in a child. If forked " \
-           "children use MiniRacer, configure " \
-           "MiniRacer::Platform.set_flags!(:single_threaded) before creating " \
-           "any Context or Snapshot."
+             "Fork hooks only quiesce MiniRacer operations; they cannot make an " \
+             "initialized default V8 worker pool usable in a child. If forked " \
+             "children use MiniRacer, configure " \
+             "MiniRacer::Platform.set_flags!(:single_threaded) before creating " \
+             "any Context or Snapshot."
       @fork_hook_warning_pid = Process.pid
     end
   end
