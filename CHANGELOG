@@ -1,3 +1,8 @@
+- vNext
+  - Fix building with Clang 22+ and big-endian bigint serialization by making bigint serialization byte-oriented instead of relying on native `uint64_t`/`unsigned long` representations
+  - Fix Ruby integers at or above 512 bits being silently truncated when passed to JavaScript, and large JavaScript bigints producing an invalid internal value when returned to Ruby
+  - Support Ruby and JavaScript bigints up to a 16 MiB magnitude, using allocation-free conversion for common sizes and bounded dynamic storage for larger values
+
 - 0.22.0 - 12-08-2026
   - Add `Context#call_await` and `Context#eval_await`: like `call`/`eval` but block until a returned Promise settles and return the settled value; rejections raise `MiniRacer::RuntimeError`
   - Fix a `call` or `eval` made from a Ruby callback taking the timeout or `stop` meant for the evaluation around it, which then kept running

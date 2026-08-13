@@ -1681,6 +1681,95 @@ class MiniRacerTest < Minitest::Test
     end
   end
 
+  def test_fixnum_bigint_serialization
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    [-(2**62), (2**62) - 1].each do |integer|
+      context = MiniRacer::Context.new
+      context.attach("test", proc { integer })
+
+      assert_equal "bigint", context.eval("typeof test()")
+      assert_equal integer.to_s, context.eval("test().toString()")
+      assert_equal integer, context.eval("test()")
+    end
+  end
+
+  def test_large_bigint_serialization_uses_all_packed_limbs
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    [
+      (2**64) - 1,
+      -((2**64) - 1),
+      2**64,
+      -(2**64),
+      (2**128) + (2**64) + 12_345,
+      -((2**128) + (2**64) + 12_345),
+      2**512,
+      -((2**512) + 1),
+      (2**1024) + (2**512) + 1,
+      -((2**1024) + (2**512) + 1),
+      (2**4095) + (2**2048) + 17,
+      -((2**4095) + (2**2048) + 17),
+      (2**4096) + (2**2048) + 17,
+      -((2**4096) + (2**2048) + 17),
+      (2**32_768) + (2**16_384) + 17,
+      -((2**32_768) + (2**16_384) + 17)
+    ].each do |big_int|
+      context = MiniRacer::Context.new
+      context.attach("test", proc { big_int })
+
+      assert_equal "bigint", context.eval("typeof test()")
+      assert_equal big_int.to_s, context.eval("test().toString()")
+      assert_equal big_int, context.eval("test()")
+    end
+  end
+
+  def test_v8_bigint_deserialization_handles_zero_and_large_nested_values
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    context = MiniRacer::Context.new
+    expected = (2**32_768) + (2**16_384) + 17
+
+    assert_equal 0, context.eval("0n")
+    assert_equal((2**64) - 1, context.eval("(2n ** 64n) - 1n"))
+    assert_equal expected, context.eval("(2n ** 32768n) + (2n ** 16384n) + 17n")
+    assert_equal(
+      -expected,
+      context.eval("-((2n ** 32768n) + (2n ** 16384n) + 17n)")
+    )
+    assert_equal [expected],
+                 context.eval("[(2n ** 32768n) + (2n ** 16384n) + 17n]")
+  end
+
+  def test_bigint_bridge_rejects_values_larger_than_dynamic_limit
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    context = MiniRacer::Context.new
+    max_bigint_bytes = 16 * 1024 * 1024 # BIGINT_MAX_BYTES in the C extension
+    first_rejected_bit = max_bigint_bytes * 8
+    too_big = 1 << first_rejected_bit
+    context.attach("test", proc { too_big })
+
+    error = assert_raises(MiniRacer::InternalError) { context.eval("test()") }
+    assert_equal "bigint too big", error.message
+    assert_equal 2, context.eval("1 + 1")
+
+    error =
+      assert_raises(MiniRacer::RuntimeError) do
+        context.eval("1n << #{first_rejected_bit}n")
+      end
+    assert_equal "bigint too big", error.message
+    assert_equal 2, context.eval("1 + 1")
+  end
+
   def test_uint8array_is_converted_to_string
     context = MiniRacer::Context.new
     result = context.eval("new Uint8Array([0, 1, 2, 3])")

@@ -243,33 +243,38 @@ static void ser_num(Ser *s, double v)
     }
 }
 
-// ser_bigint: |n| is in bytes, not quadwords
-static void ser_bigint(Ser *s, const uint64_t *p, size_t n, int sign)
+// ser_bigint: |p| points to |n| bytes, interpreted as little-endian
+// 64-bit words. Keep the interface byte-oriented so callers don't need to
+// expose a concrete word type.
+static void ser_bigint(Ser *s, const void *p, size_t n, int sign)
 {
+    const uint8_t *bytes;
+
     if (*s->err)
         return;
     if (n % 8) {
         snprintf(s->err, sizeof(s->err), "bad bigint");
         return;
     }
+    bytes = p;
     w_byte(s, 'Z');
     // chop off high all-zero words
-    n /= 8;
-    while (n--)
-        if (p[n])
-            break;
-    if (n == (size_t)-1) {
+    while (n > 0 && bytes[n-1] == 0)
+        n--;
+    if (n == 0) {
         w_byte(s, 0); // normalized zero
     } else {
-        n = 8*n + 8;
+        n = (n + 7) & ~(size_t)7;
         w_varint(s, 2*n + (sign < 0));
-        w(s, p, n);
+        w(s, bytes, n);
     }
 }
 
 static void ser_int(Ser *s, int64_t v)
 {
+    uint8_t bytes[8];
     uint64_t t;
+    size_t i;
     int sign;
 
     if (*s->err)
@@ -279,8 +284,10 @@ static void ser_int(Ser *s, int64_t v)
             if (v <= INT64_MAX/1024)
                 return ser_num(s, v);
         t = v < 0 ? (uint64_t)(-(v + 1)) + 1 : (uint64_t)v;
+        for (i = 0; i < sizeof(bytes); i++)
+            bytes[i] = t >> (8*i);
         sign = v < 0 ? -1 : 1;
-        ser_bigint(s, &t, sizeof(t), sign);
+        ser_bigint(s, bytes, sizeof(bytes), sign);
     } else {
         w_byte(s, 'I');
         w_zigzag(s, v);

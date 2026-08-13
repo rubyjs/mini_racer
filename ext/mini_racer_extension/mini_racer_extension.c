@@ -62,6 +62,8 @@ static inline void rb_thread_lock_native_thread(void)
 
 #define countof(x)  (sizeof(x) / sizeof(*(x)))
 #define endof(x)    ((x) + countof(x))
+#define BIGINT_STACK_WORDS 64
+#define BIGINT_MAX_BYTES (16 * 1024 * 1024)
 
 // mostly RO: assigned once by platform_set_flag1 while holding |flags_mtx|,
 // from then on read-only and accessible without holding locks
@@ -353,33 +355,32 @@ static void des_date(void *arg, double v)
     put(arg, rb_time_new(sec, usec));
 }
 
-// note: v8 stores bigints in 1's complement, ruby in 2's complement,
-// so we have to take additional steps to ensure correct conversion
+// note: v8 stores bigints as a sign plus little-endian 64-bit magnitude words
 static void des_bigint(void *arg, const void *p, size_t n, int sign)
 {
     VALUE v;
-    size_t i;
     DesCtx *c;
-    unsigned long *a, t, limbs[65]; // +1 to suppress sign extension
+    int flags;
 
     c = arg;
     if (*c->err)
         return;
-    if (n > sizeof(limbs) - sizeof(*limbs)) {
+    if (n % sizeof(uint64_t)) {
+        snprintf(c->err, sizeof(c->err), "bad bigint");
+        return;
+    }
+    if (n > BIGINT_MAX_BYTES) {
         snprintf(c->err, sizeof(c->err), "bigint too big");
         return;
     }
-    a = limbs;
-    t = 0;
-    for (i = 0; i < n; a++, i += sizeof(*a)) {
-        memcpy(a, (char *)p + i, sizeof(*a));
-        t = *a;
+    if (n == 0) {
+        v = INT2FIX(0);
+    } else {
+        flags = INTEGER_PACK_LITTLE_ENDIAN;
+        if (sign < 0)
+            flags |= INTEGER_PACK_NEGATIVE;
+        v = rb_integer_unpack(p, n/sizeof(uint64_t), sizeof(uint64_t), 0, flags);
     }
-    if (t >> 63)
-        *a++ = 0; // suppress sign extension
-    v = rb_big_unpack(limbs, a-limbs);
-    if (sign < 0)
-        v = rb_funcall(v, rb_intern("-@"), 0);
     put(c, v);
 }
 
@@ -580,12 +581,42 @@ static void add_string(Ser *s, VALUE v)
     return ser_string(s, p, n);
 }
 
+// Keep small values allocation-free while allowing large values up to a
+// deliberate per-value limit that bounds temporary conversion storage.
+static int serialize_bigint(Ser *s, VALUE v)
+{
+    uint64_t stack_words[BIGINT_STACK_WORDS];
+    uint64_t *words;
+    size_t nwords, nbytes;
+    int packed;
+
+    nwords = rb_absint_numwords(v, 64, NULL);
+    if (nwords == (size_t)-1 || nwords > BIGINT_MAX_BYTES/sizeof(*words))
+        return bail(&s->err, "bigint too big");
+    nbytes = nwords * sizeof(*words);
+    words = stack_words;
+    if (nwords > countof(stack_words)) {
+        words = malloc(nbytes);
+        if (!words)
+            return bail(&s->err, "out of memory");
+    }
+    packed = rb_integer_pack(v, words, nwords, sizeof(*words), 0,
+                             INTEGER_PACK_LITTLE_ENDIAN);
+    if (packed < -1 || packed > 1) {
+        if (words != stack_words)
+            free(words);
+        return bail(&s->err, "bigint too big");
+    }
+    ser_bigint(s, words, nbytes, packed < 0 ? -1 : 1);
+    if (words != stack_words)
+        free(words);
+    return *s->err ? -1 : 0;
+}
+
 static int serialize1(Ser *s, VALUE refs, VALUE v)
 {
-    unsigned long limbs[64];
     VALUE a, t, id;
     size_t i, n;
-    int sign;
 
     if (*s->err)
         return -1;
@@ -670,15 +701,7 @@ static int serialize1(Ser *s, VALUE refs, VALUE v)
         ser_bool(s, 0);
         break;
     case T_BIGNUM:
-        // note: v8 stores bigints in 1's complement, ruby in 2's complement,
-        // so we have to take additional steps to ensure correct conversion
-        memset(limbs, 0, sizeof(limbs));
-        sign = rb_big_sign(v) ? 1 : -1;
-        if (sign < 0)
-            v = rb_big_mul(v, LONG2FIX(-1));
-        rb_big_pack(v, limbs, countof(limbs));
-        ser_bigint(s, limbs, countof(limbs), sign);
-        break;
+        return serialize_bigint(s, v);
     case T_FIXNUM:
         ser_int(s, FIX2LONG(v));
         break;
@@ -958,6 +981,8 @@ static VALUE deserialize1(DesCtx *d, const uint8_t *p, size_t n)
 
     if (des(&err, p, n, d))
         rb_raise(runtime_error, "%s", err);
+    if (*d->err)
+        rb_raise(runtime_error, "%s", d->err);
     if (d->tos != d->stack) // should not happen
         rb_raise(runtime_error, "parse stack not empty");
     return d->tos->a;
@@ -1020,7 +1045,7 @@ static void *rendezvous_callback(void *arg)
         goto fail;
     }
     ser_init1(&s, 'c'); // callback reply
-    if (serialize(&s, r)) { // should not happen
+    if (serialize(&s, r)) {
         c->exception = rb_exc_new_cstr(internal_error, s.err);
         ser_reset(&s);
         goto fail;
