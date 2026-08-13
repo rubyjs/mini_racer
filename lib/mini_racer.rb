@@ -49,6 +49,8 @@ module MiniRacer
   end
   class PauseTimeoutError < Error
   end
+  class ForkError < Error
+  end
 
   class EvalError < Error
   end
@@ -123,12 +125,40 @@ module MiniRacer
         end
       end
 
+      warn_about_default_fork_platform
       @fork_hook_timeout = timeout
       unless @fork_hooks_installed
         Process.singleton_class.prepend(ForkHooks)
         @fork_hooks_installed = true
       end
       true
+    end
+
+    private
+
+    def warn_about_default_fork_platform
+      return unless Platform.respond_to?(:_fork_safety_status, true)
+
+      status = Platform.__send__(:_fork_safety_status)
+      return if status == :single_threaded
+      return if @fork_hook_warning_pid == Process.pid
+
+      detail =
+        case status
+        when :default_initialized
+          "V8's default platform is already initialized in this process. "
+        when :inherited_initialization
+          "The process inherited V8 initialization that was in progress at fork. "
+        else
+          "The default V8 platform is currently configured. "
+        end
+      warn "mini_racer: #{detail}" \
+           "Fork hooks only quiesce MiniRacer operations; they cannot make an " \
+           "initialized default V8 worker pool usable in a child. If forked " \
+           "children use MiniRacer, configure " \
+           "MiniRacer::Platform.set_flags!(:single_threaded) before creating " \
+           "any Context or Snapshot."
+      @fork_hook_warning_pid = Process.pid
     end
   end
 
