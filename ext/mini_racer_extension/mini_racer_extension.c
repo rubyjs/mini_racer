@@ -1594,11 +1594,8 @@ static VALUE rendezvous1(Context *c, Buf *req, DesCtx *d)
     }
     r = rb_protect(deserialize, (VALUE)&(struct rendezvous_des){d, &res}, &exc);
     buf_reset(&res);
-    if (exc) {
-        r = rb_errinfo();
-        rb_set_errinfo(Qnil);
-        rb_exc_raise(r);
-    }
+    if (exc)
+        rb_jump_tag(exc);
     return r;
 }
 
