@@ -1754,7 +1754,8 @@ class MiniRacerTest < Minitest::Test
 
     context = MiniRacer::Context.new
     max_bigint_bytes = 16 * 1024 * 1024 # BIGINT_MAX_BYTES in the C extension
-    too_big = 2**((max_bigint_bytes * 8) + 1)
+    first_rejected_bit = max_bigint_bytes * 8
+    too_big = 1 << first_rejected_bit
     context.attach("test", proc { too_big })
 
     error = assert_raises(MiniRacer::InternalError) { context.eval("test()") }
@@ -1763,7 +1764,7 @@ class MiniRacerTest < Minitest::Test
 
     error =
       assert_raises(MiniRacer::RuntimeError) do
-        context.eval("2n ** #{(max_bigint_bytes * 8) + 1}n")
+        context.eval("1n << #{first_rejected_bit}n")
       end
     assert_equal "bigint too big", error.message
     assert_equal 2, context.eval("1 + 1")
