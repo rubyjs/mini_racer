@@ -522,6 +522,25 @@ gcc >= 12.2 and Xcode >= 13 are, at the time of writing, known to work.
 * Concurrent cause .... JRuby
 * Supports execjs
 
+## Community
+
+Libraries and integrations built with MiniRacer:
+
+- [Humid](https://github.com/thoughtbot/humid) — JavaScript server-side rendering helpers for Rails.
+- [ExecJS](https://github.com/rails/execjs) — A common interface for executing JavaScript from Ruby, with a MiniRacer runtime.
+- [Opal](https://github.com/opal/opal) — A Ruby-to-JavaScript compiler with a MiniRacer CLI runner.
+- [Handlebars::Engine](https://github.com/gi/handlebars-ruby) — A complete Ruby interface to Handlebars.js.
+- [Minibars](https://github.com/combinaut/minibars) — A lightweight Handlebars.rb replacement built on MiniRacer.
+- [Rtlcss](https://github.com/discourse/rtlcss) — Runs rtlcss from Ruby to convert stylesheets between LTR and RTL.
+- [MessageFormat](https://github.com/discourse/messageformat) — Compiles MessageFormat messages from Ruby using `@messageformat/core`.
+- [feelin](https://github.com/ekzo-dev/ruby-feelin) — Evaluates DMN FEEL expressions from Ruby.
+- [parse-css](https://github.com/camertron/parse-css) — Parses CSS, including nested CSS, through the JavaScript parse-css library.
+
+### Notable users
+
+- [Discourse](https://github.com/discourse/discourse) — A large Rails application using MiniRacer for JavaScript compilation, processing, and sandboxed evaluation.
+- [rack-mini-profiler](https://github.com/MiniProfiler/rack-mini-profiler) — Uses MiniRacer in its JavaScript build tooling.
+
 ## Contributing
 
 Bug reports and pull requests are welcome on GitHub at https://github.com/rubyjs/mini_racer. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [Contributor Covenant](http://contributor-covenant.org) code of conduct.
