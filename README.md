@@ -137,20 +137,70 @@ context.eval("bar()", filename: "a/bar.js")
 
 Some Ruby web servers employ forking (for example unicorn or puma in clustered mode). V8 is not fork safe by default and sadly Ruby does not have support for fork notifications per [#5446](https://bugs.ruby-lang.org/issues/5446).
 
-Since 0.6.1 mini_racer does support V8 single threaded platform mode which should remove most forking related issues. To enable run this before using `MiniRacer::Context`, for example in a Rails initializer:
+Since 0.6.1 mini_racer supports V8's single-threaded platform mode, which is
+required when MiniRacer is initialized before a fork and will be used in the
+child. Enable it before creating any `MiniRacer::Context` or
+`MiniRacer::Snapshot`, for example in a Rails initializer:
 
 ```ruby
 MiniRacer::Platform.set_flags!(:single_threaded)
 ```
 
+V8's default platform creates a process-global worker pool. If that platform is
+initialized before `fork`, the child inherits its synchronization state but not
+its worker threads. The child therefore cannot safely use inherited contexts or
+repair the problem by creating a new context. MiniRacer detects such use and
+raises `MiniRacer::ForkError`. Default mode remains valid when V8 is first
+initialized after the fork, or when the child never uses MiniRacer.
+
 When using pre-fork `MiniRacer::Context` objects in `:single_threaded` mode,
 ensure the process only forks while MiniRacer is quiescent: no thread may be
 evaluating JavaScript, calling into a context, disposing/freeing a context,
 running a Ruby callback from JavaScript, or otherwise using MiniRacer at the
-instant of `fork`. In multi-threaded applications, guard all MiniRacer context
-operations and the `fork` itself with the same application-level lock. Forking
-while a MiniRacer operation is in progress can leave inherited pthread mutexes
-in an unusable state in the child process.
+instant of `fork`. Forking while a MiniRacer operation is in progress can leave
+inherited pthread mutexes in an unusable state.
+
+`MiniRacer.pause(timeout:)` is a process-global quiesce gate. It prevents new
+MiniRacer operations from starting, waits for operations already in progress to
+finish, and then keeps MiniRacer paused until `MiniRacer.resume` is called.
+`timeout:` is in seconds; if MiniRacer cannot drain in time,
+`MiniRacer::PauseTimeoutError` is raised and the pause is rolled back. Omitting
+`timeout:` waits indefinitely, which is useful only when the caller knows active
+JavaScript cannot get stuck. The gate coordinates MiniRacer operations; it does
+not stop or rebuild the default platform's V8 worker pool, so a successful pause
+does not make a default platform initialized before fork reusable in the child.
+
+For pre-initialized `:single_threaded` contexts, manual coordination looks like:
+
+```ruby
+MiniRacer.pause(timeout: 5)
+begin
+  pid = fork do
+    MiniRacer.resume # child: reset inherited pause state
+    # child process work
+  end
+ensure
+  MiniRacer.resume # parent: release the pause
+end
+```
+
+For normal Ruby forks you can install an opt-in `Process._fork` hook which uses
+that same pause gate automatically. Applications that preload MiniRacer and use
+it in forked children should configure both pieces before creating contexts:
+
+```ruby
+MiniRacer::Platform.set_flags!(:single_threaded)
+MiniRacer.install_fork_hooks!(timeout: 5)
+```
+
+Installing hooks while the default platform is configured emits an advisory
+warning, because the hook alone cannot make a pre-initialized default worker pool
+safe in the child. The hook covers `Kernel#fork`, `Process.fork`, and
+`IO.popen("-")` on Rubies that expose `Process._fork`. It intentionally does not
+cover `Process.daemon` or raw native `fork(2)` calls from other C extensions.
+When the hook is installed, do not call `MiniRacer.resume` again in the child
+block; the hook already resumes in both parent and child before user child code
+runs.
 
 If you want to ensure your application does not leak memory after fork either:
 
@@ -165,6 +215,10 @@ ObjectSpace.each_object(MiniRacer::Context){|c| c.dispose}
 
 # fork here
 ```
+
+Disposing contexts does not uninitialize V8's process-global platform. If the
+default platform was already initialized, disposal avoids context leaks but does
+not permit the child to use MiniRacer; use `:single_threaded` for that case.
 
 ### Threadsafe
 

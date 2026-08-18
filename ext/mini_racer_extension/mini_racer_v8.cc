@@ -401,7 +401,7 @@ v8::Local<v8::String> to_error(State& st, v8::TryCatch *try_catch, int cause)
     return string_from_bytes(st.isolate, buf);
 }
 
-extern "C" void v8_global_init(void)
+extern "C" void v8_global_init(int platform_single_threaded)
 {
     char *p;
     size_t n;
@@ -414,7 +414,7 @@ extern "C" void v8_global_init(void)
         free(p);
     }
     v8::V8::InitializeICU();
-    if (single_threaded) {
+    if (platform_single_threaded) {
         platform = v8::platform::NewSingleThreadedDefaultPlatform().release();
     } else {
         platform = v8::platform::NewDefaultPlatform().release();
@@ -437,8 +437,9 @@ void v8_gc_callback(v8::Isolate*, v8::GCType, v8::GCCallbackFlags, void *data)
 }
 
 extern "C" State *v8_thread_init(Context *c, const uint8_t *snapshot_buf,
-                                 size_t snapshot_len, int64_t max_memory,
-                                 int verbose_exceptions)
+                                  size_t snapshot_len, int64_t max_memory,
+                                  int verbose_exceptions,
+                                  int platform_single_threaded)
 {
     State *pst = new State{};
     State& st = *pst;
@@ -485,7 +486,7 @@ extern "C" State *v8_thread_init(Context *c, const uint8_t *snapshot_buf,
             st.safe_context->UseDefaultSecurityToken();
             st.safe_context_function = v8::Local<v8::Function>::Cast(function_v);
         }
-        if (single_threaded) {
+        if (platform_single_threaded) {
             st.persistent_safe_context_function.Reset(st.isolate, st.safe_context_function);
             st.persistent_safe_context.Reset(st.isolate, st.safe_context);
             st.persistent_context.Reset(st.isolate, st.context);

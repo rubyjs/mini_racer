@@ -91,6 +91,263 @@ class MiniRacerTest < Minitest::Test
     refute_nil ::MiniRacer::VERSION
   end
 
+  def test_pause_blocks_new_operations_until_resume
+    unless MiniRacer.respond_to?(:pause)
+      skip "MiniRacer.pause is only implemented for CRuby"
+    end
+
+    context = MiniRacer::Context.new
+    paused = false
+    result = Queue.new
+    thread = nil
+
+    MiniRacer.pause(timeout: 1)
+    paused = true
+    thread = Thread.new { result << context.eval("1 + 1") }
+    sleep 0.1
+
+    assert thread.alive?, "eval should wait while MiniRacer is paused"
+    assert result.empty?, "eval should not finish while MiniRacer is paused"
+
+    MiniRacer.resume
+    paused = false
+
+    assert_equal 2, result.pop
+    assert thread.join(3), "eval did not finish after MiniRacer.resume"
+  ensure
+    begin
+      MiniRacer.resume if paused
+    rescue StandardError
+      nil
+    end
+    thread&.kill if thread&.alive?
+    thread&.join
+  end
+
+  def test_pause_times_out_while_operation_is_active
+    unless MiniRacer.respond_to?(:pause)
+      skip "MiniRacer.pause is only implemented for CRuby"
+    end
+
+    started_r, started_w = IO.pipe
+    release_r, release_w = IO.pipe
+    context = MiniRacer::Context.new
+    context.attach(
+      "block",
+      proc do
+        started_w.write("x")
+        started_w.flush
+        release_r.read(1)
+        42
+      end
+    )
+
+    worker = Thread.new { context.eval("block()") }
+    started_r.read(1)
+
+    paused = false
+    begin
+      MiniRacer.pause(timeout: 0.05)
+      paused = true
+      flunk "MiniRacer.pause should time out while an operation is active"
+    rescue MiniRacer::PauseTimeoutError
+      # expected
+    ensure
+      begin
+        MiniRacer.resume if paused
+      rescue StandardError
+        nil
+      end
+    end
+
+    release_w.write("x")
+    release_w.flush
+    assert worker.join(3), "active eval did not finish"
+    assert_equal 2, context.eval("1 + 1")
+  ensure
+    begin
+      release_w&.write("x")
+    rescue StandardError
+      nil
+    end
+    worker&.kill if worker&.alive?
+    worker&.join
+    [started_r, started_w, release_r, release_w].each do |io|
+      begin
+        io&.close
+      rescue StandardError
+        nil
+      end
+    end
+  end
+
+  def test_pause_block_resumes_after_exception
+    unless MiniRacer.respond_to?(:pause)
+      skip "MiniRacer.pause is only implemented for CRuby"
+    end
+
+    assert_raises(::RuntimeError) do
+      MiniRacer.pause(timeout: 1) { raise "boom" }
+    end
+
+    assert_equal 2, MiniRacer::Context.new.eval("1 + 1")
+  end
+
+  def test_pause_allows_reentrant_callback_work_to_drain
+    unless MiniRacer.respond_to?(:pause)
+      skip "MiniRacer.pause is only implemented for CRuby"
+    end
+
+    started_r, started_w = IO.pipe
+    release_r, release_w = IO.pipe
+    context = MiniRacer::Context.new
+    context.attach(
+      "reenter",
+      proc do
+        started_w.write("x")
+        started_w.flush
+        release_r.read(1)
+        context.eval("20 + 22")
+      end
+    )
+
+    worker = Thread.new { context.eval("reenter()") }
+    started_r.read(1)
+
+    paused = false
+    pause_thread =
+      Thread.new do
+        MiniRacer.pause(timeout: 1)
+        paused = true
+      end
+
+    sleep 0.1
+    release_w.write("x")
+    release_w.flush
+
+    assert pause_thread.join(3),
+           "pause did not wait for reentrant callback work to drain"
+    assert worker.join(3), "eval did not finish"
+    assert_equal 42, worker.value
+  ensure
+    begin
+      MiniRacer.resume if paused
+    rescue StandardError
+      nil
+    end
+    begin
+      release_w&.write("x")
+    rescue StandardError
+      nil
+    end
+    worker&.kill if worker&.alive?
+    pause_thread&.kill if pause_thread&.alive?
+    worker&.join
+    pause_thread&.join
+    [started_r, started_w, release_r, release_w].each do |io|
+      begin
+        io&.close
+      rescue StandardError
+        nil
+      end
+    end
+  end
+
+  def test_pause_block_preserves_original_exception_if_block_resumes
+    unless MiniRacer.respond_to?(:pause)
+      skip "MiniRacer.pause is only implemented for CRuby"
+    end
+
+    error =
+      assert_raises(::RuntimeError) do
+        MiniRacer.pause(timeout: 1) do
+          MiniRacer.resume
+          raise "original"
+        end
+      end
+    assert_equal "original", error.message
+  end
+
+  def test_pause_is_nested_until_all_resumes_run
+    thread = nil
+    paused = 0
+
+    unless MiniRacer.respond_to?(:pause)
+      skip "MiniRacer.pause is only implemented for CRuby"
+    end
+
+    context = MiniRacer::Context.new
+    result = Queue.new
+
+    MiniRacer.pause(timeout: 1)
+    paused += 1
+    MiniRacer.pause(timeout: 1)
+    paused += 1
+
+    thread = Thread.new { result << context.eval("20 + 22") }
+    sleep 0.1
+    assert thread.alive?, "eval should wait while nested pause is held"
+
+    MiniRacer.resume
+    paused -= 1
+    sleep 0.1
+    assert thread.alive?, "eval should still wait until the outer pause resumes"
+
+    MiniRacer.resume
+    paused -= 1
+    assert_equal 42, result.pop
+    assert thread.join(3), "eval did not finish after outer resume"
+  ensure
+    paused.times do
+      begin
+        MiniRacer.resume
+      rescue StandardError
+        nil
+      end
+    end
+    thread&.kill if thread&.alive?
+    thread&.join
+  end
+
+  def test_resume_without_pause_raises
+    unless MiniRacer.respond_to?(:pause)
+      skip "MiniRacer.pause is only implemented for CRuby"
+    end
+
+    assert_raises(MiniRacer::RuntimeError) { MiniRacer.resume }
+  end
+
+  def test_pause_rejects_invalid_timeout
+    unless MiniRacer.respond_to?(:pause)
+      skip "MiniRacer.pause is only implemented for CRuby"
+    end
+
+    assert_raises(ArgumentError) { MiniRacer.pause(timeout: -1) }
+    assert_raises(ArgumentError) { MiniRacer.pause(timeout: Float::NAN) }
+    assert_raises(ArgumentError) { MiniRacer.pause(timeout: Float::INFINITY) }
+    assert_raises(ArgumentError) { MiniRacer.pause(timeout: "5") }
+    assert_raises(ArgumentError) { MiniRacer.pause(timeout: 1e300) }
+  end
+
+  def test_fork_hooks_reject_invalid_timeout
+    unless MiniRacer.respond_to?(:install_fork_hooks!) &&
+             Process.respond_to?(:_fork, true)
+      skip "MiniRacer.install_fork_hooks! is only implemented for CRuby"
+    end
+
+    assert_raises(ArgumentError) { MiniRacer.install_fork_hooks!(timeout: -1) }
+    assert_raises(ArgumentError) do
+      MiniRacer.install_fork_hooks!(timeout: Float::NAN)
+    end
+    assert_raises(ArgumentError) do
+      MiniRacer.install_fork_hooks!(timeout: Float::INFINITY)
+    end
+    assert_raises(ArgumentError) { MiniRacer.install_fork_hooks!(timeout: "5") }
+    assert_raises(ArgumentError) do
+      MiniRacer.install_fork_hooks!(timeout: 1e300)
+    end
+  end
+
   def test_types
     context = MiniRacer::Context.new
     assert_equal 2, context.eval("2")
@@ -1610,6 +1867,8 @@ class MiniRacerTest < Minitest::Test
     sleep 1.5
     a.kill
     b.kill
+    assert a.join(3), "stop thread did not stop"
+    assert b.join(3), "heap stats thread did not stop"
   end
 
   def test_ruby_exception
