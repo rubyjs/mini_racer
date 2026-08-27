@@ -1,4 +1,4 @@
-- vNext
+- 0.22.1 - 27-08-2026
   - Fix building with Clang 22+ and big-endian bigint serialization by making bigint serialization byte-oriented instead of relying on native `uint64_t`/`unsigned long` representations
   - Fix Ruby integers at or above 512 bits being silently truncated when passed to JavaScript, and large JavaScript bigints producing an invalid internal value when returned to Ruby
   - Support Ruby and JavaScript bigints up to a 16 MiB magnitude, using allocation-free conversion for common sizes and bounded dynamic storage for larger values
