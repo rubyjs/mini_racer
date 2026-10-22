@@ -1205,6 +1205,56 @@ class MiniRacerTest < Minitest::Test
     end
   end
 
+  # Issue #447: isolate these regressions because serialization can abort Ruby.
+  def test_eval_nested_symbol_returns_serialization_error
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    assert_ruby_script <<~'RUBY'
+      context = MiniRacer::Context.new
+      [
+        '({a: Symbol("s")})',
+        '[Symbol("s")]',
+        'new Map([[Symbol("s"), 1]])',
+        'new Map([["a", Symbol("s")]])',
+        'new Map([[function key() {}, 1]])'
+      ].each do |expression|
+        result = context.eval(expression)
+        unless result.is_a?(Hash) && result["error"].is_a?(String) &&
+            result["error"].include?("could not be cloned")
+          abort "#{expression}: expected a serialization error object, got #{result.inspect}"
+        end
+        abort "Context is unusable after #{expression}" unless context.eval("1 + 1") == 2
+      end
+    RUBY
+  end
+
+  def test_call_nested_symbol_returns_serialization_error
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    assert_ruby_script <<~'RUBY'
+      context = MiniRacer::Context.new
+      [
+        '({a: Symbol("s")})',
+        '[Symbol("s")]',
+        'new Map([[Symbol("s"), 1]])',
+        'new Map([["a", Symbol("s")]])',
+        'new Map([[function key() {}, 1]])'
+      ].each do |expression|
+        context.eval("function nestedSymbol() { return #{expression}; }")
+        result = context.call("nestedSymbol")
+        unless result.is_a?(Hash) && result["error"].is_a?(String) &&
+            result["error"].include?("could not be cloned")
+          abort "#{expression}: expected a serialization error object, got #{result.inspect}"
+        end
+        abort "Context is unusable after #{expression}" unless context.eval("1 + 1") == 2
+      end
+    RUBY
+  end
+
   def test_infinite_object_js
     if RUBY_ENGINE == "truffleruby"
       skip "TruffleRuby does not yet implement marshal_stack_depth"

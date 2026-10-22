@@ -276,6 +276,8 @@ bool reply(State& st, v8::Local<v8::Value> v)
     Serialized serialized(st, v);
     if (serialized.data)
         v8_reply(st.ruby_context, serialized.data, serialized.size);
+    else
+        try_catch.ReThrow();
     return serialized.data != nullptr; // exception pending if false
 }
 
