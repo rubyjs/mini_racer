@@ -365,7 +365,7 @@ v8::Local<v8::Value> sanitize(State& st, v8::Local<v8::Value> v)
     return v;
 }
 
-v8::Local<v8::String> to_error(State& st, v8::TryCatch *try_catch, int cause)
+v8::Local<v8::Value> to_error(State& st, v8::TryCatch *try_catch, int cause)
 {
     std::vector<char> buf;
 
@@ -391,6 +391,44 @@ v8::Local<v8::String> to_error(State& st, v8::TryCatch *try_catch, int cause)
         if (try_catch->StackTrace(st.context).ToLocal(&t)) {
             v8::String::Utf8Value s(st.isolate, t);
             if (*s) {
+                if (cause == RUNTIME_ERROR) {
+                    auto exception_message = try_catch->Message();
+                    auto captured = exception_message.IsEmpty()
+                        ? v8::String::Empty(st.isolate) : exception_message->Get();
+                    v8::String::Utf8Value message(st.isolate, captured);
+                    // Use V8's captured text without calling exception.toString().
+                    const char *text = *message;
+                    size_t length = text ? message.length() : 0;
+                    static const char prefix[] = "Uncaught ";
+                    if (length >= sizeof(prefix)-1 &&
+                        !memcmp(text, prefix, sizeof(prefix)-1)) {
+                        text += sizeof(prefix)-1;
+                        length -= sizeof(prefix)-1;
+                    }
+                    size_t slen = s.length();
+                    bool matched = !exception_message.IsEmpty() && text &&
+                        slen >= length && !memcmp(*s, text, length) &&
+                        (slen == length || (*s)[length] == '\n');
+                    if (!matched) {
+                        // Custom stack headers may differ from V8's captured
+                        // text. Retain their legacy first-line formatting.
+                        const char *nl = static_cast<const char*>(memchr(*s, '\n', slen));
+                        text = *s;
+                        length = nl ? static_cast<size_t>(nl - *s) : slen;
+                    }
+                    buf.push_back(static_cast<char>(cause));
+                    append_bytes(buf, text, length);
+                    auto error = string_from_bytes(st.isolate, buf);
+                    // A matching header can contain any number of message
+                    // newlines; only the remaining stack belongs in backtrace.
+                    size_t offset = length < slen ? length + 1 : slen;
+                    buf.clear();
+                    append_bytes(buf, *s + offset, slen - offset);
+                    auto stack = string_from_bytes(st.isolate, buf);
+                    v8::Local<v8::Value> fields[] = {error, stack};
+                    v8::Context::Scope context_scope(st.safe_context);
+                    return v8::Array::New(st.isolate, fields, 2);
+                }
                 buf.push_back(static_cast<char>(cause));
                 append_utf8(buf, s);
             } else {

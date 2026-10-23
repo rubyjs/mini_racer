@@ -42,6 +42,10 @@ puts context.eval("adder(20,22)")
 # => 42
 ```
 
+`Context#load(path)` executes a JavaScript file and returns `nil`. Unlike `eval`,
+it discards the script's final value, so loading a file does not invoke getters
+while converting that value to Ruby. Script errors still propagate normally.
+
 ### Attach global Ruby functions to your JavaScript context
 
 You can attach one or many ruby proc that can be accessed via JavaScript
@@ -59,6 +63,12 @@ context.attach("array_and_hash", proc{{a: 1, b: [1, {a: 1}]}})
 puts context.eval("array_and_hash()")
 # => {"a" => 1, "b" => [1, {"a" => 1}]}
 ```
+
+Ruby `Date` and `DateTime` values, including those nested in arrays or hashes,
+are converted to JavaScript `Date` objects via `to_time`. A date-only `Date`
+therefore represents midnight in Ruby's local timezone. `DateTime` keeps its
+existing conversion, preserving its time of day and the instant defined by its
+offset. JavaScript dates are returned to Ruby as `Time` values.
 
 Ruby `Integer` and JavaScript `BigInt` values are converted exactly up to a
 16 MiB magnitude (about 134 million bits). Larger individual values are

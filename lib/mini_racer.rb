@@ -58,9 +58,8 @@ module MiniRacer
   end
 
   class RuntimeError < EvalError
-    def initialize(message)
-      message, *@frames = message.split("\n")
-      @frames.map! { "JavaScript #{_1.strip}" }
+    def initialize(message, stack = "")
+      @frames = stack.split("\n").map { "JavaScript #{_1.strip}" }
       super(message)
     end
 
@@ -98,7 +97,8 @@ module MiniRacer
 
   class Context
     def load(filename)
-      eval(File.read(filename))
+      # Discard the completion value without serializing objects or invoking getters.
+      eval(File.read(filename) + "\n;void 0;")
     end
 
     def write_heap_snapshot(file_or_io)

@@ -194,6 +194,112 @@ class MiniRacerTest < Minitest::Test
     assert_equal 2, context.eval("1+1")
   end
 
+  def test_multiline_runtime_error_preserves_message_and_backtrace
+    context = MiniRacer::Context.new
+    message = "first\n    at not a frame\nthird\x00line\n"
+    context.eval("function fail() { throw new Error(#{message.dump}); }")
+
+    error = assert_raises(MiniRacer::RuntimeError) { context.call("fail") }
+
+    assert_equal "Error: #{message}", error.message
+    refute(error.backtrace.any? { |frame| frame.include?("not a frame") })
+    assert(error.backtrace.any? { |frame| frame.include?("fail") })
+    assert_equal 2, context.eval("1 + 1")
+  ensure
+    context&.dispose
+  end
+
+  def test_multiline_thrown_string_preserves_message
+    context = MiniRacer::Context.new
+    error =
+      assert_raises(MiniRacer::RuntimeError) do
+        context.eval('throw "first\\nsecond"')
+      end
+
+    assert_equal "first\nsecond", error.message
+  ensure
+    context&.dispose
+  end
+
+  def test_error_formatting_does_not_call_overridden_to_string
+    skip "V8-specific error formatting" if RUBY_ENGINE == "truffleruby"
+
+    context = MiniRacer::Context.new
+    error = assert_raises(MiniRacer::RuntimeError) { context.eval(<<~JS) }
+        var error = new Error("first\\nsecond");
+        error.toString = () => { throw new Error("must not be called"); };
+        throw error;
+      JS
+
+    assert_equal "Error: first\nsecond", error.message
+    assert_equal 2, context.eval("1 + 1")
+  ensure
+    context&.dispose
+  end
+
+  def test_captured_error_object_preserves_multiline_message
+    skip "V8-specific stack capture" if RUBY_ENGINE == "truffleruby"
+
+    context = MiniRacer::Context.new
+    error = assert_raises(MiniRacer::RuntimeError) { context.eval(<<~JS) }
+        var error = { name: "CustomError", message: "first\\nsecond" };
+        Error.captureStackTrace(error);
+        throw error;
+      JS
+
+    assert_equal "CustomError: first\nsecond", error.message
+    refute(error.backtrace.any? { |frame| frame.include?("second") })
+  ensure
+    context&.dispose
+  end
+
+  def test_custom_error_name_and_stack_headers_keep_legacy_formatting
+    skip "V8-specific stack header formatting" if RUBY_ENGINE == "truffleruby"
+
+    context = MiniRacer::Context.new
+    [
+      [
+        'var error = new Error("boom"); Object.defineProperty(error, "name", { get() { return "CustomError"; } }); throw error;',
+        "CustomError: boom"
+      ],
+      [
+        'var error = new Error("boom"); error.stack = "Error: boom (extra)\\n    at custom"; throw error;',
+        "Error: boom (extra)"
+      ]
+    ].each do |source, message|
+      error = assert_raises(MiniRacer::RuntimeError) { context.eval(source) }
+      assert_equal message, error.message
+      refute(error.backtrace.any? { |frame| frame.include?(message) })
+    end
+  ensure
+    context&.dispose
+  end
+
+  def test_truffleruby_translation_keeps_message_separate_from_frames
+    skip "TruffleRuby-specific translation" unless RUBY_ENGINE == "truffleruby"
+
+    location =
+      Struct
+        .new(:path, :source_location) do
+          def to_s
+            "script.js:1:7:in boom"
+          end
+        end
+        .new("script.js", Struct.new(:language).new("js"))
+    error_class =
+      Class.new(StandardError) do
+        define_method(:backtrace_locations) { [location] }
+      end
+    context = MiniRacer::Context.allocate
+    error =
+      assert_raises(MiniRacer::RuntimeError) do
+        context.send(:translate) { raise error_class, "Error: first\nsecond" }
+      end
+
+    assert_equal "Error: first\nsecond", error.message
+    assert_equal "JavaScript at script.js:1:7:in boom", error.backtrace.first
+  end
+
   def test_it_can_stop
     context = MiniRacer::Context.new
     exp = nil
@@ -603,6 +709,72 @@ class MiniRacerTest < Minitest::Test
     )
   end
 
+  def test_dates_loaded_after_context_creation_are_converted
+    assert_ruby_script(<<~RUBY)
+      context = MiniRacer::Context.new
+      require "date"
+      context.eval("function isDate(value) { return value instanceof Date; }")
+      abort "Date not converted" unless context.call("isDate", Date.new(2026, 1, 2))
+      context.dispose
+    RUBY
+  end
+
+  def test_ruby_dates_convert_directly_and_in_nested_containers
+    context = MiniRacer::Context.new
+    date = Date.new(2026, 1, 2)
+    expected_millis = date.to_time.to_i * 1000
+    context.eval(<<~JS)
+      function dateInfo(value) {
+        return [value instanceof Date, value.getTime()];
+      }
+      function nestedDateInfo(value) {
+        return dateInfo(value.dates[0]);
+      }
+    JS
+
+    assert_equal [true, expected_millis], context.call("dateInfo", date)
+    assert_equal [true, expected_millis],
+                 context.call("nestedDateInfo", { dates: [date] })
+    context.attach("rubyDates", -> { { dates: [date] } })
+    assert_equal [true, expected_millis],
+                 context.eval("nestedDateInfo(rubyDates())")
+  ensure
+    context&.dispose
+  end
+
+  def test_datetime_preserves_time_offset_and_milliseconds
+    context = MiniRacer::Context.new
+    context.eval("function millis(value) { return value.getTime(); }")
+    %w[
+      2026-01-02T12:34:56.789+05:30
+      2026-01-02T23:45:12.345-07:00
+    ].each do |value|
+      datetime = DateTime.iso8601(value)
+      expected = (datetime.to_time.to_r * 1000).floor
+      assert_equal expected, context.call("millis", datetime)
+      context.attach("rubyDateTime", -> { datetime })
+      assert_equal expected, context.eval("rubyDateTime().getTime()")
+    end
+  ensure
+    context&.dispose
+  end
+
+  def test_date_subclasses_keep_their_previous_conversion_behavior
+    context = MiniRacer::Context.new
+    context.eval("function echo(value) { return value; }")
+    date = Class.new(Date).new(2026, 1, 2)
+    datetime = Class.new(DateTime).new(2026, 1, 2, 12, 34, 56, "+05:30")
+
+    assert_equal "Undefined Conversion", context.call("echo", date)
+    if RUBY_ENGINE == "truffleruby"
+      assert_equal datetime.to_time.to_i, context.call("echo", datetime).to_i
+    else
+      assert_equal "Undefined Conversion", context.call("echo", datetime)
+    end
+  ensure
+    context&.dispose
+  end
+
   def test_datetime_missing
     # NoMethodError: undefined method `source_location' for
     # #<Thread::Backtrace::Location:0x4e88>
@@ -652,7 +824,7 @@ class MiniRacerTest < Minitest::Test
 
   def test_return_unknown
     context = MiniRacer::Context.new
-    test_unknown = Date.new # hits T_DATA in convert_ruby_to_v8
+    test_unknown = Random.new # unsupported T_DATA value
     context.attach("test", proc { test_unknown })
     assert_equal("Undefined Conversion", context.eval("test()"))
 
@@ -661,7 +833,7 @@ class MiniRacerTest < Minitest::Test
     GC.start
 
     context = MiniRacer::Context.new
-    test_unknown = Date.new # hits T_DATA in convert_ruby_to_v8
+    test_unknown = Random.new # unsupported T_DATA value
     context.attach("test", proc { test_unknown })
     assert_equal("Undefined Conversion", context.eval("test()"))
   end
@@ -742,6 +914,41 @@ class MiniRacerTest < Minitest::Test
     context.load(File.dirname(__FILE__) + "/file.js")
     assert_equal "world", context.eval("hello")
     assert_raises { context.load(File.dirname(__FILE__) + "/missing.js") }
+  end
+
+  def test_load_does_not_serialize_the_completion_value
+    context = MiniRacer::Context.new
+    Tempfile.create(%w[mini_racer_load .js]) do |file|
+      file.write(<<~JS)
+        var getterCalls = 0;
+        var loaded = Object.defineProperty({}, "value", {
+          enumerable: true,
+          get() { getterCalls++; throw new Error("getter evaluated"); }
+        });
+        loaded // trailing comment
+      JS
+      file.flush
+
+      assert_nil context.load(file.path)
+      assert_equal 0, context.eval("getterCalls")
+      assert_raises(MiniRacer::RuntimeError) { context.eval("loaded") }
+      assert_operator context.eval("getterCalls"), :>, 0
+    end
+  ensure
+    context&.dispose
+  end
+
+  def test_load_still_raises_script_errors
+    context = MiniRacer::Context.new
+    Tempfile.create(%w[mini_racer_load .js]) do |file|
+      file.write('throw new Error("load failed");')
+      file.flush
+
+      error = assert_raises(MiniRacer::RuntimeError) { context.load(file.path) }
+      assert_includes error.message, "load failed"
+    end
+  ensure
+    context&.dispose
   end
 
   def test_contexts_can_be_safely_GCed

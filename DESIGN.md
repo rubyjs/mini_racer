@@ -46,10 +46,12 @@ they are almost universally:
 
 - a two or three element array (ex. `[filename, source]` for `context.eval(...)`), or
 
-- for responses, an errback-style `[response, error]` array, where `error`
-  is a multi-line string that contains the error message on the first line,
-  and, optionally, the stack trace. If not empty, the error string is turned
-  into a Ruby exception and raised.
+- for responses, an errback-style `[response, error]` array. Most errors are
+  strings containing a cause byte followed by the error text. Runtime errors
+  with a stack use `[cause_and_message, stack]` instead, so newlines in the
+  message cannot be mistaken for stack frames. A non-empty error is turned
+  into a Ruby exception and raised. Custom stack headers that do not match
+  V8's captured message retain their legacy first-line message formatting.
 
 deliberate changes & known bugs
 ===============================

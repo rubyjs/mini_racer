@@ -205,6 +205,7 @@ static VALUE snapshot_error;
 static VALUE terminated_error;
 static VALUE context_class;
 static VALUE snapshot_class;
+static VALUE date_class;
 static VALUE date_time_class;
 static VALUE binary_class;
 static VALUE js_function_class;
@@ -681,7 +682,14 @@ static int serialize1(Ser *s, VALUE refs, VALUE v, int depth)
         }
         break;
     case T_DATA:
+        // Date and DateTime may have been required after context creation.
+        if (NIL_P(date_time_class) && rb_const_defined(rb_cObject, rb_intern("DateTime")))
+            date_time_class = rb_const_get(rb_cObject, rb_intern("DateTime"));
+        if (NIL_P(date_class) && rb_const_defined(rb_cObject, rb_intern("Date")))
+            date_class = rb_const_get(rb_cObject, rb_intern("Date"));
         if (date_time_class == CLASS_OF(v)) {
+            v = rb_funcall(v, rb_intern("to_time"), 0);
+        } else if (date_class == CLASS_OF(v)) {
             v = rb_funcall(v, rb_intern("to_time"), 0);
         }
         if (rb_cTime == CLASS_OF(v)) {
@@ -1463,8 +1471,12 @@ static VALUE rendezvous(Context *c, Buf *req)
 static void raise_exception_with_message(VALUE klass, VALUE e)
 {
     long n;
-    VALUE message;
+    VALUE message, stack = Qnil;
 
+    if (RB_TYPE_P(e, T_ARRAY)) {
+        stack = rb_ary_entry(e, 1);
+        e = rb_ary_entry(e, 0);
+    }
     if (NIL_P(e))
         return;
     e = StringValue(e);
@@ -1472,22 +1484,34 @@ static void raise_exception_with_message(VALUE klass, VALUE e)
     if (n == 0 || RSTRING_PTR(e)[0] == NO_ERROR)
         return;
     message = rb_str_subseq(e, 1, n - 1);
+    if (!NIL_P(stack)) {
+        if (klass == runtime_error) {
+            VALUE args[] = {message, stack};
+            rb_exc_raise(rb_class_new_instance(2, args, klass));
+        }
+        // SnapshotError retains its existing combined message/stack format.
+        if (RSTRING_LEN(stack)) {
+            rb_str_cat_cstr(message, "\n");
+            rb_str_append(message, stack);
+        }
+    }
     rb_exc_raise(rb_exc_new_str(klass, message));
 }
 
 static void handle_exception(VALUE e)
 {
     const char *s;
-    VALUE klass;
+    VALUE klass, message;
     long n;
 
     if (NIL_P(e))
         return;
-    e = StringValue(e);
-    n = RSTRING_LEN(e);
+    message = RB_TYPE_P(e, T_ARRAY) ? rb_ary_entry(e, 0) : e;
+    message = StringValue(message);
+    n = RSTRING_LEN(message);
     if (n == 0)
         return;
-    s = RSTRING_PTR(e);
+    s = RSTRING_PTR(message);
     switch ((unsigned char)*s) {
     case NO_ERROR:
         return;
@@ -1518,16 +1542,9 @@ static VALUE context_alloc(VALUE klass)
     pthread_condattr_t cattr;
     const char *cause;
     Context *c;
-    VALUE f, a;
     int r;
 
     // Safe to lazy init because we hold the GVL
-    if (NIL_P(date_time_class)) {
-        f = rb_intern("const_defined?");
-        a = rb_str_new_cstr("DateTime");
-        if (Qtrue == rb_funcall(rb_cObject, f, 1, a))
-            date_time_class = rb_const_get(rb_cObject, rb_intern("DateTime"));
-    }
     if (NIL_P(binary_class)) {
         VALUE m = rb_const_get(rb_cObject, rb_intern("MiniRacer"));
         if (Qtrue == rb_funcall(m, rb_intern("const_defined?"), 1, rb_str_new_cstr("Binary")))
@@ -2315,6 +2332,7 @@ void Init_mini_racer_extension(void)
     c = rb_define_class_under(m, "Platform", rb_cObject);
     rb_define_singleton_method(c, "set_flags!", platform_set_flags, -1);
 
+    date_class = Qnil; // lazy init
     date_time_class = Qnil; // lazy init
     binary_class = Qnil; // lazy init
     js_function_class = rb_define_class_under(m, "JavaScriptFunction", rb_cObject);

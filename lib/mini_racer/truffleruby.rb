@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "date"
 require_relative "shared"
 
 module MiniRacer
@@ -245,19 +246,19 @@ module MiniRacer
       end
 
       if error_class == MiniRacer::RuntimeError
+        stack = ""
         bls =
           e.backtrace_locations&.select do |bl|
             bl&.source_location&.language == "js"
           end
         if bls && !bls.empty?
           if "(eval)" != bls[0].path
-            message =
-              "#{e.message}\n at #{bls[0]}\n" + bls[1..].map(&:to_s).join("\n")
+            stack = " at #{bls[0]}\n" + bls[1..].map(&:to_s).join("\n")
           else
-            message = "#{e.message}\n" + bls.map(&:to_s).join("\n")
+            stack = bls.map(&:to_s).join("\n")
           end
         end
-        raise error_class, message
+        raise error_class.new(message, stack)
       else
         raise error_class, message, e.backtrace
       end
@@ -374,6 +375,12 @@ module MiniRacer
         js_new_date(value.to_f * 1000)
       when DateTime
         js_new_date(value.to_time.to_f * 1000)
+      when Date
+        if value.instance_of?(Date)
+          js_new_date(value.to_time.to_f * 1000)
+        else
+          "Undefined Conversion"
+        end
       when MiniRacer::Binary
         @js_new_uint8array_func.call(value.data.bytes)
       else
