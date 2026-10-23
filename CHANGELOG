@@ -1,3 +1,15 @@
+- 0.22.2 - 23-10-2026
+  - Fix nested Symbols, functions, and Map keys aborting the process during `eval`/`call` serialization (#447)
+  - Fix attached callback result conversion raising inside the V8 reply path, which could hang the context; conversion errors now propagate normally
+  - Fix callback exceptions whose `to_s` raises or returns a non-string, including reentrant `to_s`, hanging the callback roundtrip
+  - Bound Ruby to JavaScript serialization depth and fix an off-by-one in the JavaScript to Ruby deserializer stack
+  - Fix termination state leaking from error formatting or serialization callbacks into subsequent evaluations
+  - Fix `Snapshot#warmup!` aborting for an empty loaded snapshot (#449)
+  - Fix `Snapshot#warmup!` aborting when warmup creates Intl objects (#450); snapshot creation now uses the same handle scoping as V8's warmup implementation
+  - Reject runtime Intl access in `Snapshot.new` scripts with `MiniRacer::SnapshotError` instead of aborting the process
+  - Validate loaded snapshot versions, headers, section offsets, and checksums, raising `MiniRacer::SnapshotError` for malformed or incompatible blobs instead of terminating the process (#448)
+  - Make `Snapshot#dump` return a copy so mutating it cannot corrupt the stored snapshot
+
 - 0.22.1 - 27-08-2026
   - Fix building with Clang 22+ and big-endian bigint serialization by making bigint serialization byte-oriented instead of relying on native `uint64_t`/`unsigned long` representations
   - Fix Ruby integers at or above 512 bits being silently truncated when passed to JavaScript, and large JavaScript bigints producing an invalid internal value when returned to Ruby
