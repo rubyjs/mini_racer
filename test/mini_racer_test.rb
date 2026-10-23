@@ -18,7 +18,7 @@ class MiniRacerTest < Minitest::Test
   # Check failed: read_only_blob_checksum_ == snapshot_checksum (<unprintable> vs. 1099685679).
   MiniRacer::Platform.set_flags! :stress_snapshot
 
-  def assert_ruby_script(script)
+  def run_ruby_script(script, timeout: 30)
     file = Tempfile.new(%w[mini_racer_test .rb])
     file.write(<<~RUBY)
       $LOAD_PATH.unshift #{File.expand_path("../lib", __dir__).inspect}
@@ -28,16 +28,69 @@ class MiniRacerTest < Minitest::Test
     RUBY
     file.close
 
-    stdout, stderr, status = Open3.capture3(RbConfig.ruby, file.path)
-    assert status.success?, <<~MSG
-      script failed with status #{status.exitstatus}
+    stdout = Tempfile.new(%w[mini_racer_test_stdout .log])
+    stderr = Tempfile.new(%w[mini_racer_test_stderr .log])
+    pid = nil
+    pid =
+      Process.spawn(
+        RbConfig.ruby,
+        file.path,
+        out: stdout.path,
+        err: stderr.path
+      )
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+    status = nil
+    loop do
+      _, status = Process.waitpid2(pid, Process::WNOHANG)
+      break if status
+
+      if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+        begin
+          Process.kill("KILL", pid)
+        rescue Errno::ESRCH
+          nil # already exited
+        end
+        begin
+          Process.waitpid(pid)
+        rescue Errno::ECHILD
+          nil # already reaped
+        end
+        status = :timeout
+        break
+      end
+      sleep 0.01
+    end
+
+    stdout.rewind
+    stderr.rewind
+    [stdout.read, stderr.read, status]
+  ensure
+    if pid && status.nil?
+      begin
+        Process.kill("KILL", pid)
+      rescue Errno::ESRCH
+        nil # already exited
+      end
+      begin
+        Process.waitpid(pid)
+      rescue Errno::ECHILD
+        nil # already reaped
+      end
+    end
+    file&.unlink
+    stdout&.close!
+    stderr&.close!
+  end
+
+  def assert_ruby_script(script, timeout: 30)
+    stdout, stderr, status = run_ruby_script(script, timeout: timeout)
+    assert status.is_a?(Process::Status) && status.success?, <<~MSG
+      script failed with #{status.is_a?(Process::Status) ? "status #{status.exitstatus}" : status}
       stdout:
       #{stdout}
       stderr:
       #{stderr}
     MSG
-  ensure
-    file&.unlink
   end
 
   def test_locale_mx
@@ -1253,6 +1306,473 @@ class MiniRacerTest < Minitest::Test
         abort "Context is unusable after #{expression}" unless context.eval("1 + 1") == 2
       end
     RUBY
+  end
+
+  def test_call_with_deep_ruby_graph_raises_depth_error
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    ctx = MiniRacer::Context.new
+    ctx.eval("function f(x) { return 1 }")
+    deep = []
+    20_000.times { deep = [deep] }
+
+    error = assert_raises(MiniRacer::RuntimeError) { ctx.call("f", deep) }
+    assert_match(/max depth exceeded/, error.message)
+    assert_equal 2, ctx.eval("1 + 1")
+  end
+
+  def test_attached_callback_result_serialization_failure_does_not_hang
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    stdout, stderr, status = run_ruby_script(<<~'RUBY', timeout: 20)
+      ctx = MiniRacer::Context.new
+      bad_time = Object.new
+      def bad_time.to_time; raise "to_time boom"; end
+      bad_binary = MiniRacer::Binary.allocate
+      bad_binary.instance_variable_set(:@data, nil)
+      bad_respond = Object.new
+      def bad_respond.respond_to?(*); raise "respond boom"; end
+      deep = []
+      20_000.times { deep = [deep] }
+
+      [
+        ["to_time", -> { bad_time }, RuntimeError, "to_time boom"],
+        ["binary", -> { bad_binary }, TypeError, "expected String"],
+        ["respond_to", -> { bad_respond }, RuntimeError, "respond boom"],
+        ["deep", -> { deep }, MiniRacer::InternalError, "max depth exceeded"]
+      ].each do |label, callback, expected_class, expected_message|
+        ctx.attach("callback_under_test", callback)
+        begin
+          ctx.eval("callback_under_test()")
+          abort "#{label}: expected an exception"
+        rescue Exception => e
+          unless e.is_a?(expected_class) && e.message.include?(expected_message)
+            abort "#{label}: unexpected #{e.class}: #{e.message}"
+          end
+        end
+        abort "#{label}: context unusable" unless ctx.eval("1 + 1") == 2
+        puts "#{label}: ok"
+      end
+    RUBY
+
+    assert status.is_a?(Process::Status) && status.success?, <<~MSG
+      callback-result serialization hung or crashed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+    assert_equal 4, stdout.lines.grep(/: ok\n\z/).length
+  end
+
+  def test_callback_internal_error_construction_failure_does_not_hang
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    stdout, stderr, status = run_ruby_script(<<~'RUBY', timeout: 20)
+      ctx = MiniRacer::Context.new
+      deep = []
+      20_000.times { deep = [deep] }
+      class MiniRacer::InternalError
+        def initialize(*)
+          raise "init boom"
+        end
+      end
+      ctx.attach("callback_under_test", proc { deep })
+      begin
+        ctx.eval("callback_under_test()")
+        abort "expected an exception"
+      rescue Exception => e
+        abort "unexpected exception: #{e.class}: #{e.message}" unless e.message.include?("init boom")
+      end
+      abort "context unusable" unless ctx.eval("1 + 1") == 2
+      puts "ok"
+    RUBY
+
+    assert status.is_a?(Process::Status) && status.success?, <<~MSG
+      callback internal-error construction hung or crashed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+    assert_equal "ok\n", stdout
+  end
+
+  def test_attached_callback_exception_formatting_failure_does_not_hang
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    stdout, stderr, status = run_ruby_script(<<~'RUBY', timeout: 20)
+      ctx = MiniRacer::Context.new
+      [
+        Class.new(StandardError) { def to_s; raise "format boom"; end },
+        Class.new(StandardError) { def to_s; :symbol; end },
+        Class.new(StandardError) { def to_s; Object.new; end }
+      ].each_with_index do |klass, index|
+        ctx.attach("callback_under_test", proc { raise klass, "ignored" })
+        begin
+          ctx.eval("callback_under_test()")
+          abort "#{index}: expected an exception"
+        rescue Exception => e
+          abort "#{index}: unexpected #{e.class}" unless e.is_a?(klass)
+        end
+        abort "#{index}: context unusable" unless ctx.eval("1 + 1") == 2
+        puts "#{index}: ok"
+      end
+    RUBY
+
+    assert status.is_a?(Process::Status) && status.success?, <<~MSG
+      callback-exception formatting hung or crashed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+    assert_equal 3, stdout.lines.grep(/: ok\n\z/).length
+  end
+
+  def test_callback_exception_formatting_reentry_preserves_exception
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    stdout, stderr, status = run_ruby_script(<<~'RUBY', timeout: 20)
+      ctx = MiniRacer::Context.new
+      klass = Class.new(StandardError) do
+        define_method(:to_s) do
+          ctx.eval("1 + 1")
+          "formatted"
+        end
+      end
+      ctx.attach("callback_under_test", proc { raise klass, "original" })
+      begin
+        ctx.eval("callback_under_test()")
+        abort "expected an exception"
+      rescue Exception => e
+        abort "lost original exception: #{e.class}" unless e.is_a?(klass)
+      end
+      abort "context unusable" unless ctx.eval("1 + 1") == 2
+      puts "ok"
+    RUBY
+
+    assert status.is_a?(Process::Status) && status.success?, <<~MSG
+      callback exception formatting reentry failed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+    assert_equal "ok\n", stdout
+  end
+
+  def test_stop_during_exception_formatting_does_not_poison_context
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    stdout, stderr, status = run_ruby_script(<<~'RUBY', timeout: 20)
+      ctx = MiniRacer::Context.new
+      ctx.attach("stop_now", proc { ctx.stop; 1 })
+      begin
+        ctx.eval("Error.prepareStackTrace = () => { stop_now(); return 'stack' }; throw new Error('boom')")
+      rescue Exception
+      end
+      abort "context poisoned" unless ctx.eval("1+1") == 2
+
+      begin
+        ctx.eval("({ get x() { stop_now(); return 1 } })")
+      rescue Exception
+      end
+      puts ctx.eval("1+1")
+    RUBY
+
+    assert status.is_a?(Process::Status) && status.success?, <<~MSG
+      context poisoned by termination during exception formatting
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+    assert_equal "2\n", stdout
+  end
+
+  def test_snapshot_new_with_intl_does_not_abort
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    stdout, stderr, status = run_ruby_script(<<~'RUBY', timeout: 20)
+      [
+        "new Intl.DateTimeFormat('en')",
+        "var x = new Intl.DateTimeFormat('en')",
+        "globalThis.x = new Intl.DateTimeFormat('en')",
+        "let x = new Intl.Collator('en')",
+        "const C = Object.getOwnPropertyDescriptor(Intl, 'DateTimeFormat').value; globalThis.x = new C('en')"
+      ].each do |source|
+        begin
+          snapshot = MiniRacer::Snapshot.new(source)
+          MiniRacer::Context.new(snapshot: snapshot)
+          abort "#{source}: expected SnapshotError"
+        rescue MiniRacer::SnapshotError
+          puts "snapshot_error"
+        end
+      end
+    RUBY
+
+    assert status.is_a?(Process::Status) && status.success?, <<~MSG
+      Snapshot.new with Intl aborted
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+    assert_equal 5, stdout.lines.grep(/\Asnapshot_error\n\z/).length
+  end
+
+  def test_snapshot_warmup_with_intl_does_not_abort
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    stdout, stderr, status = run_ruby_script(<<~'RUBY', timeout: 20)
+      [
+        "new Intl.DateTimeFormat('en')",
+        "var formatter = new Intl.DateTimeFormat('en'); f()",
+        "globalThis.formatter = new Intl.Collator('en'); f()",
+        "const C = Object.getOwnPropertyDescriptor(Intl, 'DateTimeFormat').value; var formatter = new C('en'); f()"
+      ].each do |source|
+        snapshot = MiniRacer::Snapshot.new("function f() { return 1 }")
+        snapshot.warmup!(source)
+        ctx = MiniRacer::Context.new(snapshot: snapshot)
+        abort "#{source}: bad context" unless ctx.eval("f()") == 1
+        puts "ok 1"
+      end
+    RUBY
+
+    assert status.is_a?(Process::Status) && status.success?, <<~MSG
+      Snapshot#warmup! with Intl aborted
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+    assert_equal 4, stdout.lines.grep(/\Aok 1\n\z/).length
+  end
+
+  def test_snapshot_intl_descriptor_without_getter_is_snapshot_safe
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    stdout, stderr, status = run_ruby_script(<<~'RUBY', timeout: 20)
+      snapshot = MiniRacer::Snapshot.new(
+        "globalThis.intlDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Intl')"
+      )
+      ctx = MiniRacer::Context.new(snapshot: snapshot)
+      puts ctx.eval("1 + 1")
+
+      exploit = <<~JS
+        const saved = Object.getOwnPropertyDescriptor(globalThis, "Intl");
+        Object.defineProperty(globalThis, "Intl", { value: null });
+        Object.defineProperty(Object.prototype, "get", {
+          get() {
+            globalThis.formatter = new (saved.get().DateTimeFormat)("en");
+            return undefined;
+          },
+          configurable: true
+        });
+      JS
+      snapshot = MiniRacer::Snapshot.new(exploit)
+      ctx = MiniRacer::Context.new(snapshot: snapshot)
+      puts ctx.eval("1 + 1")
+
+      snapshot = MiniRacer::Snapshot.new(
+        "Object.defineProperty(globalThis, 'Intl', { configurable: true, get() { return 123 } })"
+      )
+      ctx = MiniRacer::Context.new(snapshot: snapshot)
+      puts ctx.eval("Intl")
+    RUBY
+
+    assert status.is_a?(Process::Status) && status.success?, <<~MSG
+      Intl descriptor handling aborted snapshot creation
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+    assert_equal "2\n2\n123\n", stdout
+  end
+
+  def test_snapshot_allows_locale_builtins_without_intl_access
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    stdout, stderr, status = run_ruby_script(<<~'RUBY', timeout: 20)
+      [
+        "(1234.5).toLocaleString('en')",
+        "new Date(0).toLocaleDateString('en')",
+        "'a'.localeCompare('b', 'en')"
+      ].each do |source|
+        snapshot = MiniRacer::Snapshot.new(source)
+        ctx = MiniRacer::Context.new(snapshot: snapshot)
+        abort "#{source}: bad context" unless ctx.eval("1 + 1") == 2
+        puts "ok"
+      end
+    RUBY
+
+    assert status.is_a?(Process::Status) && status.success?, <<~MSG
+      locale builtin snapshot failed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+    assert_equal 3, stdout.lines.grep(/\Aok\n\z/).length
+  end
+
+  def test_empty_loaded_snapshot_can_be_warmed_up
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    stdout, stderr, status = run_ruby_script(<<~'RUBY', timeout: 20)
+      ctx = MiniRacer::Context.new(snapshot: MiniRacer::Snapshot.load(""))
+      abort "empty snapshot context failed" unless ctx.eval("1 + 1") == 2
+
+      snapshot = MiniRacer::Snapshot.load("")
+      snapshot.warmup!("1")
+      ctx = MiniRacer::Context.new(snapshot: snapshot)
+      puts ctx.eval("1 + 1")
+    RUBY
+
+    assert status.is_a?(Process::Status) && status.success?, <<~MSG
+      empty loaded snapshot warmup aborted
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+    assert_equal "2\n", stdout
+  end
+
+  def test_snapshot_dump_does_not_expose_internal_blob
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    stdout, stderr, status = run_ruby_script(<<~'RUBY', timeout: 20)
+      snapshot = MiniRacer::Snapshot.new("var a = 1")
+      dump = snapshot.dump
+      dump.setbyte(dump.bytesize - 1, dump.getbyte(dump.bytesize - 1) ^ 1)
+      ctx = MiniRacer::Context.new(snapshot: snapshot)
+      puts ctx.eval("1 + 1")
+    RUBY
+
+    assert status.is_a?(Process::Status) && status.success?, <<~MSG
+      mutating Snapshot#dump corrupted the snapshot
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+    assert_equal "2\n", stdout
+  end
+
+  def test_malformed_snapshot_blobs_raise_snapshot_error
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    stdout, stderr, status = run_ruby_script(<<~'RUBY', timeout: 20)
+      require "zlib"
+
+      valid = MiniRacer::Snapshot.new("var a = 1").dump.dup
+      version = valid.dup
+      version.setbyte(16, version.getbyte(16) ^ 1)
+      checksum = valid.dup
+      checksum.setbyte(checksum.bytesize - 1, checksum.getbyte(checksum.bytesize - 1) ^ 1)
+      zero_section = valid.dup
+      context_count = zero_section.byteslice(0, 4).unpack1("V")
+      startup_offset = (88 + context_count * 4 + 7) & ~7
+      zero_section[80, 4] = [startup_offset].pack("V")
+      zero_section[8, 4] = [Zlib.adler32(zero_section.byteslice(12..), 0)].pack("V")
+
+      blobs = [
+        ["version", version],
+        ["tail", valid.byteslice(0, valid.bytesize - 16)],
+        ["half", valid.byteslice(0, valid.bytesize / 2)],
+        ["random", "\xFF".b * 1000],
+        ["checksum", checksum],
+        ["zero_section", zero_section]
+      ]
+      blobs.each do |label, blob|
+        begin
+          snapshot = MiniRacer::Snapshot.load(blob)
+          MiniRacer::Context.new(snapshot: snapshot)
+          puts "#{label}: accepted"
+        rescue MiniRacer::SnapshotError
+          puts "#{label}: rejected"
+        end
+      end
+    RUBY
+
+    assert status.is_a?(Process::Status) && status.success?, <<~MSG
+      malformed snapshot aborted
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+    assert_equal 6, stdout.lines.grep(/rejected/).length, stdout
+  end
+
+  def test_single_threaded_callback_and_snapshot_faults_do_not_abort
+    if RUBY_ENGINE == "truffleruby"
+      skip "C extension is not used on TruffleRuby"
+    end
+
+    stdout, stderr, status = run_ruby_script(<<~'RUBY', timeout: 20)
+      MiniRacer::Platform.set_flags! :single_threaded
+
+      ctx = MiniRacer::Context.new
+      bad = Object.new
+      def bad.to_time; raise "boom"; end
+      ctx.attach("callback_under_test", proc { bad })
+      begin
+        ctx.eval("callback_under_test()")
+      rescue Exception
+      end
+      abort "callback context unusable" unless ctx.eval("1 + 1") == 2
+
+      begin
+        snapshot = MiniRacer::Snapshot.new("new Intl.DateTimeFormat('en')")
+        ctx = MiniRacer::Context.new(snapshot: snapshot)
+        abort "intl snapshot context failed" unless ctx.eval("1 + 1") == 2
+      rescue MiniRacer::SnapshotError
+      end
+
+      snapshot = MiniRacer::Snapshot.load("")
+      snapshot.warmup!("1")
+      ctx = MiniRacer::Context.new(snapshot: snapshot)
+      puts ctx.eval("1 + 1")
+    RUBY
+
+    assert status.is_a?(Process::Status) && status.success?, <<~MSG
+      single-threaded callback/snapshot fault
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+    assert_equal "2\n", stdout
   end
 
   def test_infinite_object_js

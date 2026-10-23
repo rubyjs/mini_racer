@@ -210,6 +210,12 @@ Snapshots can come in handy for example if you want your contexts to be pre-load
 > are fixed once the snapshot has been captured. They are no longer really random
 > nor reflect the current time.
 
+Snapshot scripts passed to `Snapshot.new` that read or write `Intl` are
+rejected with `MiniRacer::SnapshotError`: V8 cannot serialize Intl's foreign
+handles, and allowing them to reach snapshot creation aborts the process.
+`Snapshot#warmup!` may use Intl because its temporary context is discarded
+before the snapshot is created.
+
 Also note that snapshots can be warmed up, using the `warmup!` method, which allows you to call functions which are otherwise lazily compiled to get them to compile right away; any side effect of your warm up code being then dismissed. [More details on warming up here](https://github.com/electron/electron/issues/169#issuecomment-76783481), and a small example:
 
 ```ruby
@@ -242,7 +248,7 @@ context.eval("foo")
 
 Note that snapshots are architecture and V8-version specific. A snapshot created on one platform (e.g., ARM64 macOS) cannot be loaded on a different platform (e.g., x86_64 Linux). Snapshots are best used for same-machine caching or homogeneous deployment environments.
 
-**Security note:** Only load snapshots from trusted sources. V8 snapshots are not designed to be safely loaded from untrusted input—malformed or malicious snapshot data may cause crashes or memory corruption.
+**Security note:** Only load snapshots from trusted sources. V8 snapshots are not designed to be safely loaded from untrusted input—malformed or malicious snapshot data may cause crashes or memory corruption. `Snapshot.load` performs basic version, header, section-offset, and checksum validation, but this is not a sandbox.
 
 ### Garbage collection
 

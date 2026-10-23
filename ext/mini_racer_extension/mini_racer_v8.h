@@ -48,6 +48,10 @@ void v8_perform_microtask_checkpoint(struct State *pst);
 void v8_pump_message_loop(struct State *pst);
 void v8_snapshot(struct State *pst, const uint8_t *p, size_t n);
 void v8_warmup(struct State *pst, const uint8_t *p, size_t n);
+// Returns 0 for a valid blob (including an empty blob), otherwise nonzero and
+// writes a short reason to |err|. This performs header/section/checksum checks
+// before V8's fatal snapshot deserializer sees the blob.
+int v8_snapshot_validate(const uint8_t *data, size_t n, char *err, size_t errlen);
 void v8_low_memory_notification(struct State *pst);
 void v8_terminate_execution(struct State *pst); // called from ruby thread
 void v8_terminate_watchdog(struct State *pst); // called from watchdog thread

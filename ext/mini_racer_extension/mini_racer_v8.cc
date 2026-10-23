@@ -752,9 +752,34 @@ fail:
     if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
     if (cause) result = v8::Undefined(st.isolate);
     auto err = to_error(st, &try_catch, cause);
+    // Error formatting can run user JS (for example Error.prepareStackTrace)
+    // which may call Context#stop. Do not let that termination leak into the
+    // reply or the next evaluation.
+    bool terminated_during_error = false;
+    if (st.terminate_requested.load() || st.isolate->IsExecutionTerminating()) {
+        terminated_during_error = true;
+        preserve_termination =
+            suspend_termination(st, nested, cause) || preserve_termination;
+    }
+    if (terminated_during_error) {
+        result = v8::Undefined(st.isolate);
+        std::vector<char> buf;
+        set_error_message(buf, cause,
+                          cause == MEMORY_ERROR ? "out of memory" : "terminated");
+        err = string_from_bytes(st.isolate, buf);
+    }
     if (!reply(st, result, err)) {
         assert(try_catch.HasCaught());
         goto fail; // retry; can be termination exception
+    }
+    if (!nested &&
+        (st.terminate_requested.load() || st.isolate->IsExecutionTerminating())) {
+        // A callback invoked by the serializer (for example a getter) can
+        // request termination after the last suspend_termination check. Do not
+        // leak that request into the next outermost evaluation.
+        st.terminate_requested.store(0);
+        st.isolate->CancelTerminateExecution();
+        st.err_reason = NO_ERROR;
     }
     restore_termination(st, preserve_termination);
 }
@@ -820,9 +845,34 @@ fail:
     if (!cause && try_catch.HasCaught()) cause = RUNTIME_ERROR;
     if (cause) result = v8::Undefined(st.isolate);
     auto err = to_error(st, &try_catch, cause);
+    // Error formatting can run user JS (for example Error.prepareStackTrace)
+    // which may call Context#stop. Do not let that termination leak into the
+    // reply or the next evaluation.
+    bool terminated_during_error = false;
+    if (st.terminate_requested.load() || st.isolate->IsExecutionTerminating()) {
+        terminated_during_error = true;
+        preserve_termination =
+            suspend_termination(st, nested, cause) || preserve_termination;
+    }
+    if (terminated_during_error) {
+        result = v8::Undefined(st.isolate);
+        std::vector<char> buf;
+        set_error_message(buf, cause,
+                          cause == MEMORY_ERROR ? "out of memory" : "terminated");
+        err = string_from_bytes(st.isolate, buf);
+    }
     if (!reply(st, result, err)) {
         assert(try_catch.HasCaught());
         goto fail; // retry; can be termination exception
+    }
+    if (!nested &&
+        (st.terminate_requested.load() || st.isolate->IsExecutionTerminating())) {
+        // A callback invoked by the serializer (for example a getter) can
+        // request termination after the last suspend_termination check. Do not
+        // leak that request into the next outermost evaluation.
+        st.terminate_requested.store(0);
+        st.isolate->CancelTerminateExecution();
+        st.err_reason = NO_ERROR;
     }
     restore_termination(st, preserve_termination);
 }
@@ -938,6 +988,138 @@ fail:
     reply_retry(st, result);
 }
 
+static uint32_t read_le32(const uint8_t *p)
+{
+    return static_cast<uint32_t>(p[0])
+         | static_cast<uint32_t>(p[1]) << 8
+         | static_cast<uint32_t>(p[2]) << 16
+         | static_cast<uint32_t>(p[3]) << 24;
+}
+
+static bool snapshot_checksum_matches(const uint8_t *data, size_t n)
+{
+    if (n < 13)
+        return false;
+    uint32_t expected = read_le32(data + 8);
+
+    // V8 uses zlib's adler32 when built with V8_USE_ZLIB, otherwise a
+    // Fletcher-32 variant. Accept either so this check remains portable
+    // across libv8-node builds. This is a corruption check, not a sandbox:
+    // snapshots are still trusted-input-only.
+    uint32_t s1 = 0, s2 = 0;
+    for (size_t i = 12; i < n; i++) {
+        s1 = (s1 + data[i]) % 65521;
+        s2 = (s2 + s1) % 65521;
+    }
+    if ((s2 << 16 | s1) == expected)
+        return true;
+
+    s1 = s2 = 0;
+    for (size_t i = 12; i < n; i++) {
+        s1 = (s1 + data[i]) % 65535;
+        s2 = (s2 + s1) % 65535;
+    }
+    return (s2 << 16 | s1) == expected;
+}
+
+// The header/section offsets below mirror V8 13.6's SnapshotImpl. Keep them
+// in sync with libv8-node; the fallback is intentionally limited to preventing
+// V8's fatal deserializer checks, not to sandboxing untrusted snapshots.
+extern "C" int v8_snapshot_validate(const uint8_t *data, size_t n,
+                                     char *err, size_t errlen)
+{
+#define SNAPSHOT_INVALID(msg)                                           \
+    do {                                                                \
+        if (err && errlen)                                              \
+            snprintf(err, errlen, "%s", msg);                           \
+        return -1;                                                      \
+    } while (0)
+
+    if (n == 0)
+        return 0; // Snapshot.load("") means "use V8's built-in snapshot".
+    if (n > static_cast<size_t>(std::numeric_limits<int>::max()))
+        SNAPSHOT_INVALID("snapshot is too large");
+    if (n < 88)
+        SNAPSHOT_INVALID("snapshot is too short");
+
+    v8::StartupData blob{reinterpret_cast<const char*>(data),
+                         static_cast<int>(n)};
+    if (!blob.IsValid())
+        SNAPSHOT_INVALID("snapshot version mismatch");
+
+    uint32_t num_contexts = read_le32(data);
+    uint32_t rehashability = read_le32(data + 4);
+    if (rehashability > 1)
+        SNAPSHOT_INVALID("snapshot header is invalid");
+    if (num_contexts == 0)
+        SNAPSHOT_INVALID("snapshot has no contexts");
+    if (num_contexts > (n - 88) / 4)
+        SNAPSHOT_INVALID("snapshot context table is invalid");
+
+    const size_t pointer_size = sizeof(void*);
+    size_t header_size = 88 + static_cast<size_t>(num_contexts) * 4;
+    size_t startup_offset =
+        (header_size + pointer_size - 1) & ~(pointer_size - 1);
+    if (startup_offset > n)
+        SNAPSHOT_INVALID("snapshot context table is invalid");
+
+    uint32_t read_only_offset = read_le32(data + 80);
+    uint32_t shared_heap_offset = read_le32(data + 84);
+    if (read_only_offset <= startup_offset || read_only_offset > n)
+        SNAPSHOT_INVALID("snapshot read-only section is invalid");
+    if (shared_heap_offset <= read_only_offset || shared_heap_offset > n)
+        SNAPSHOT_INVALID("snapshot shared-heap section is invalid");
+
+    size_t previous_offset = shared_heap_offset;
+    for (uint32_t i = 0; i < num_contexts; i++) {
+        uint32_t offset = read_le32(data + 88 + static_cast<size_t>(i) * 4);
+        if (offset <= previous_offset || offset >= n)
+            SNAPSHOT_INVALID("snapshot context section is invalid");
+        previous_offset = offset;
+    }
+
+    if (!snapshot_checksum_matches(data, n))
+        SNAPSHOT_INVALID("snapshot checksum mismatch");
+
+    return 0;
+#undef SNAPSHOT_INVALID
+}
+
+// Keep all guard state in a JavaScript closure. The setup script returns a
+// query function to C++; do not install a native callback or External global,
+// because a retained property descriptor would otherwise make CreateBlob fail
+// with "Unknown external reference".
+static const char snapshot_intl_setup_source[] = R"js(
+;(function() {
+    const original = globalThis.Intl
+    let used = false
+    const getter = function() {
+        used = true
+        return original
+    }
+    const setter = function(value) {
+        used = true
+    }
+    if (!original) {
+        const query = function() { return used }
+        query.getter = getter
+        return query
+    }
+    Object.defineProperty(globalThis, "Intl", {
+        configurable: true,
+        enumerable: false,
+        get: getter,
+        set: setter
+    })
+    const query = function() { return used }
+    query.getter = getter
+    return query
+})()
+)js";
+
+static const char snapshot_intl_error[] =
+    "Intl is not supported in Snapshot.new scripts";
+
 int snapshot(bool is_warmup, bool verbose_exceptions,
              const v8::String::Utf8Value& code,
              v8::StartupData blob, v8::StartupData *result,
@@ -945,40 +1127,84 @@ int snapshot(bool is_warmup, bool verbose_exceptions,
 {
     // SnapshotCreator takes ownership of isolate
     v8::Isolate *isolate = v8::Isolate::Allocate();
-    v8::StartupData *existing_blob = is_warmup ? &blob : nullptr;
+    // An empty loaded snapshot means "start from V8's built-in snapshot", just
+    // like Context.new. Passing a non-null StartupData with raw_size == 0 to
+    // SnapshotCreator trips CHECK(!artifacts) during warmup.
+    v8::StartupData *existing_blob =
+        (is_warmup && blob.data && blob.raw_size > 0) ? &blob : nullptr;
     v8::SnapshotCreator snapshot_creator(isolate, nullptr, existing_blob);
     v8::Isolate::Scope isolate_scope(isolate);
-    v8::HandleScope handle_scope(isolate);
     v8::TryCatch try_catch(isolate);
     try_catch.SetVerbose(verbose_exceptions);
-    auto filename = is_warmup
-        ? v8::String::NewFromUtf8Literal(isolate, "<warmup>")
-        : v8::String::NewFromUtf8Literal(isolate, "<snapshot>");
     auto mode = is_warmup
         ? v8::SnapshotCreator::FunctionCodeHandling::kKeep
         : v8::SnapshotCreator::FunctionCodeHandling::kClear;
     int cause = INTERNAL_ERROR;
     {
+        // Keep script-created values out of the scope that is alive when
+        // CreateBlob() runs. V8's own warmup implementation uses separate
+        // scopes; sharing one scope leaves Intl foreign handles visible to the
+        // snapshot handle checker and aborts with
+        // CheckGlobalAndEternalHandles failed.
+        v8::HandleScope handle_scope(isolate);
+        auto filename = is_warmup
+            ? v8::String::NewFromUtf8Literal(isolate, "<warmup>")
+            : v8::String::NewFromUtf8Literal(isolate, "<snapshot>");
         auto context = v8::Context::New(isolate);
         v8::Context::Scope context_scope(context);
+        auto intl_key = v8::String::NewFromUtf8Literal(isolate, "Intl");
+        v8::Local<v8::Value> intl_original;
+        v8::Local<v8::Function> intl_state_fn;
+        v8::Local<v8::Function> intl_guard_getter;
+        bool intl_guarded = false;
+        if (!context->Global()->Get(context, intl_key).ToLocal(&intl_original)) {
+            set_error_message(*errbuf, INTERNAL_ERROR,
+                              "failed to inspect snapshot Intl");
+            return INTERNAL_ERROR;
+        }
+        if (!is_warmup && intl_original->IsObject()) {
+            auto intl_setup_source = v8::String::NewFromUtf8Literal(
+                isolate, snapshot_intl_setup_source);
+            v8::Local<v8::Script> intl_setup_script;
+            v8::Local<v8::Value> intl_state;
+            if (!v8::Script::Compile(context, intl_setup_source)
+                     .ToLocal(&intl_setup_script) ||
+                !intl_setup_script->Run(context).ToLocal(&intl_state) ||
+                !intl_state->IsFunction()) {
+                set_error_message(*errbuf, INTERNAL_ERROR,
+                                  "failed to initialize snapshot Intl guard");
+                return INTERNAL_ERROR;
+            }
+            intl_state_fn = intl_state.As<v8::Function>();
+            v8::Local<v8::Value> getter;
+            auto getter_key =
+                v8::String::NewFromUtf8Literal(isolate, "getter");
+            if (!intl_state_fn->Get(context, getter_key).ToLocal(&getter) ||
+                !getter->IsFunction()) {
+                set_error_message(*errbuf, INTERNAL_ERROR,
+                                  "failed to initialize snapshot Intl guard");
+                return INTERNAL_ERROR;
+            }
+            intl_guard_getter = getter.As<v8::Function>();
+            intl_guarded = true;
+        }
         v8::Local<v8::String> source;
         auto type = v8::NewStringType::kNormal;
         if (!v8::String::NewFromUtf8(isolate, *code, type, code.length()).ToLocal(&source)) {
             v8::String::Utf8Value s(isolate, try_catch.Exception());
             if (!set_error_message(*errbuf, cause, s))
                 set_error_message(*errbuf, cause, "unexpected failure");
-            goto fail;
+            return cause;
         }
         v8::ScriptOrigin origin(filename);
         v8::Local<v8::Script> script;
         cause = PARSE_ERROR;
         if (!v8::Script::Compile(context, source, &origin).ToLocal(&script)) {
-            goto err;
-        }
-        cause = RUNTIME_ERROR;
-        if (script->Run(context).IsEmpty()) {
-        err:
             auto m = try_catch.Message();
+            if (m.IsEmpty()) {
+                set_error_message(*errbuf, cause, "unexpected failure");
+                return cause;
+            }
             v8::String::Utf8Value s(isolate, m->Get());
             v8::String::Utf8Value name(isolate, m->GetScriptResourceName());
             auto line = m->GetLineNumber(context).FromMaybe(0);
@@ -993,20 +1219,105 @@ int snapshot(bool is_warmup, bool verbose_exceptions,
             } else {
                 set_error_message(*errbuf, cause, "unexpected failure");
             }
-            goto fail;
+            return cause;
         }
-        cause = INTERNAL_ERROR;
+        cause = RUNTIME_ERROR;
+        if (script->Run(context).IsEmpty()) {
+            auto m = try_catch.Message();
+            if (m.IsEmpty()) {
+                set_error_message(*errbuf, cause, "unexpected failure");
+                return cause;
+            }
+            v8::String::Utf8Value s(isolate, m->Get());
+            v8::String::Utf8Value name(isolate, m->GetScriptResourceName());
+            auto line = m->GetLineNumber(context).FromMaybe(0);
+            auto column = m->GetStartColumn(context).FromMaybe(0);
+            if (*s && *name) {
+                errbuf->clear();
+                errbuf->push_back(static_cast<char>(cause));
+                append_utf8(*errbuf, s);
+                append_literal(*errbuf, "\n");
+                append_utf8(*errbuf, name);
+                append_format(*errbuf, ":%d:%d", line, column);
+            } else {
+                set_error_message(*errbuf, cause, "unexpected failure");
+            }
+            return cause;
+        }
+        if (intl_guarded) {
+            v8::Local<v8::Value> used;
+            auto recv = v8::Undefined(isolate);
+            if (!intl_state_fn->Call(context, recv, 0, nullptr)
+                     .ToLocal(&used)) {
+                set_error_message(*errbuf, INTERNAL_ERROR,
+                                  "failed to inspect snapshot Intl guard");
+                return INTERNAL_ERROR;
+            }
+            if (used->IsTrue()) {
+                set_error_message(*errbuf, RUNTIME_ERROR, snapshot_intl_error);
+                return RUNTIME_ERROR;
+            }
+        }
+        if (intl_guarded) {
+            // Only replace our accessor. If the script deliberately replaced
+            // or deleted Intl, leave that change in the snapshot.
+            v8::Local<v8::Value> descriptor;
+            if (!context->Global()
+                     ->GetOwnPropertyDescriptor(context, intl_key)
+                     .ToLocal(&descriptor)) {
+                set_error_message(*errbuf, INTERNAL_ERROR,
+                                  "failed to inspect Intl after snapshot script");
+                return INTERNAL_ERROR;
+            }
+            bool restore_intl = false;
+            if (descriptor->IsObject()) {
+                auto get_key =
+                    v8::String::NewFromUtf8Literal(isolate, "get");
+                v8::Local<v8::Value> getter_descriptor;
+                if (!descriptor.As<v8::Object>()
+                         ->GetOwnPropertyDescriptor(context, get_key)
+                         .ToLocal(&getter_descriptor)) {
+                    set_error_message(*errbuf, INTERNAL_ERROR,
+                                      "failed to inspect Intl after snapshot script");
+                    return INTERNAL_ERROR;
+                }
+                if (getter_descriptor->IsObject()) {
+                    v8::Local<v8::Value> getter;
+                    auto value_key =
+                        v8::String::NewFromUtf8Literal(isolate, "value");
+                    if (!getter_descriptor.As<v8::Object>()
+                             ->Get(context, value_key)
+                             .ToLocal(&getter)) {
+                        set_error_message(*errbuf, INTERNAL_ERROR,
+                                          "failed to inspect Intl after snapshot script");
+                        return INTERNAL_ERROR;
+                    }
+                    restore_intl =
+                        getter->IsFunction() &&
+                        getter->SameValue(intl_guard_getter);
+                }
+            }
+            if (restore_intl &&
+                !context->Global()
+                     ->DefineOwnProperty(
+                         context, intl_key, intl_original,
+                         v8::PropertyAttribute::DontEnum)
+                     .FromMaybe(false)) {
+                set_error_message(*errbuf, INTERNAL_ERROR,
+                                  "failed to restore Intl after snapshot script");
+                return INTERNAL_ERROR;
+            }
+        }
         if (!is_warmup) snapshot_creator.SetDefaultContext(context);
     }
     if (is_warmup) {
+        v8::HandleScope handle_scope(isolate);
         isolate->ContextDisposedNotification(false);
         auto context = v8::Context::New(isolate);
         snapshot_creator.SetDefaultContext(context);
     }
     *result = snapshot_creator.CreateBlob(mode);
-    cause = NO_ERROR;
-fail:
-    return cause;
+    return NO_ERROR;
 }
 
 // response is errback [result, err] array

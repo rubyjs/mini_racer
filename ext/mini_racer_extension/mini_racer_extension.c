@@ -64,6 +64,7 @@ static inline void rb_thread_lock_native_thread(void)
 #define endof(x)    ((x) + countof(x))
 #define BIGINT_STACK_WORDS 64
 #define BIGINT_MAX_BYTES (16 * 1024 * 1024)
+#define SERIALIZE_MAX_DEPTH 512
 
 // mostly RO: assigned once by platform_set_flag1 while holding |flags_mtx|,
 // from then on read-only and accessible without holding locks
@@ -138,6 +139,7 @@ typedef struct Context
     struct State *pst; // used by v8 thread
     VALUE procs;       // array of js -> ruby callbacks
     VALUE exception;   // pending exception or Qnil
+    int pending_jump_tag; // non-exception jump to replay after the roundtrip
     Buf req, res;      // ruby->v8 request/response, mediated by |mtx| and |cv|
     Buf v8_req;        // stable v8-side copy of a request returned by v8_roundtrip
     int res_ready;     // protected by |mtx|; response may be filled before ready
@@ -289,7 +291,7 @@ static void push(DesCtx *c, VALUE v)
 {
     if (*c->err)
         return;
-    if (c->tos == endof(c->stack)) {
+    if (c->tos == endof(c->stack) - 1) {
         snprintf(c->err, sizeof(c->err), "stack overflow");
         return;
     }
@@ -613,13 +615,15 @@ static int serialize_bigint(Ser *s, VALUE v)
     return *s->err ? -1 : 0;
 }
 
-static int serialize1(Ser *s, VALUE refs, VALUE v)
+static int serialize1(Ser *s, VALUE refs, VALUE v, int depth)
 {
     VALUE a, t, id;
     size_t i, n;
 
     if (*s->err)
         return -1;
+    if (depth > SERIALIZE_MAX_DEPTH)
+        return bail(&s->err, "max depth exceeded");
     switch (TYPE(v)) {
     case T_ARRAY:
         {
@@ -631,7 +635,7 @@ static int serialize1(Ser *s, VALUE refs, VALUE v)
                 rb_hash_aset(refs, obj_id, LONG2FIX(i));
                 ser_array_begin(s, n);
                 for (i = 0; i < n; i++)
-                    if (serialize1(s, refs, rb_ary_entry(v, i)))
+                    if (serialize1(s, refs, rb_ary_entry(v, i), depth + 1))
                         return -1;
                 ser_array_end(s, n);
             } else {
@@ -662,9 +666,9 @@ static int serialize1(Ser *s, VALUE refs, VALUE v)
                 if (i == 2*n) {
                     ser_object_begin(s);
                     for (i = 0; i < 2*n; i += 2) {
-                        if (serialize1(s, refs, rb_ary_entry(a, i+0)))
+                        if (serialize1(s, refs, rb_ary_entry(a, i+0), depth + 1))
                             return -1;
-                        if (serialize1(s, refs, rb_ary_entry(a, i+1)))
+                        if (serialize1(s, refs, rb_ary_entry(a, i+1), depth + 1))
                             return -1;
                     }
                     ser_object_end(s, n);
@@ -748,7 +752,7 @@ static int serialize1(Ser *s, VALUE refs, VALUE v)
 // that will throw off the object reference count
 static int serialize(Ser *s, VALUE v)
 {
-    return serialize1(s, rb_hash_new(), v);
+    return serialize1(s, rb_hash_new(), v, 0);
 }
 
 static struct timespec deadline_ms(int ms)
@@ -1025,11 +1029,54 @@ static VALUE rendezvous_callback_do(VALUE arg)
     return rb_funcall2(func, rb_intern("call"), RARRAY_LENINT(args), RARRAY_PTR(args));
 }
 
+struct callback_serialize_args
+{
+    Ser *ser;
+    VALUE value;
+};
+
+static VALUE callback_serialize(VALUE arg)
+{
+    struct callback_serialize_args *args;
+    args = (void *)arg;
+    return INT2FIX(serialize(args->ser, args->value));
+}
+
+static VALUE callback_exception_to_s(VALUE exception)
+{
+    VALUE message;
+    message = rb_funcall(exception, rb_intern("to_s"), 0);
+    StringValue(message);
+    return message;
+}
+
+static VALUE callback_exception_from_state(int state, int *pending_jump_tag)
+{
+    VALUE exception = rb_errinfo();
+    rb_set_errinfo(Qnil);
+    if (RB_TYPE_P(exception, T_OBJECT) &&
+        rb_obj_is_kind_of(exception, rb_eException)) {
+        return exception;
+    }
+    // Thread#kill and other non-exception jumps leave a sentinel or internal
+    // throw data in errinfo; do not hand that to rb_funcall/rb_exc_raise.
+    // Replay the jump once the V8 roundtrip has fully unwound.
+    if (state && pending_jump_tag && !*pending_jump_tag)
+        *pending_jump_tag = state;
+    return Qnil;
+}
+
+static VALUE callback_internal_error(VALUE message)
+{
+    return rb_exc_new_cstr(internal_error, (const char *)message);
+}
+
 // called with |rr_mtx| and GVL held; |mtx| is unlocked
 // callback data is in |a->res|, serialized result goes in |a->req|
 static void *rendezvous_callback(void *arg)
 {
     struct rendezvous_nogvl *a;
+    struct callback_serialize_args args;
     const char *err;
     Context *c;
     int exc;
@@ -1040,13 +1087,29 @@ static void *rendezvous_callback(void *arg)
     c = a->context;
     r = rb_protect(rendezvous_callback_do, (VALUE)a, &exc);
     if (exc) {
-        c->exception = rb_errinfo();
-        rb_set_errinfo(Qnil);
+        c->exception = callback_exception_from_state(exc, &c->pending_jump_tag);
         goto fail;
     }
     ser_init1(&s, 'c'); // callback reply
-    if (serialize(&s, r)) {
-        c->exception = rb_exc_new_cstr(internal_error, s.err);
+    args.ser = &s;
+    args.value = r;
+    r = rb_protect(callback_serialize, (VALUE)&args, &exc);
+    if (exc) {
+        // A Ruby conversion hook, Check_Type(), or stack overflow escaped
+        // serialize().  Keep the V8 thread waiting for a reply and turn it
+        // into a normal callback exception instead.
+        c->exception = callback_exception_from_state(exc, &c->pending_jump_tag);
+        ser_reset(&s);
+        goto fail;
+    }
+    if (NUM2INT(r)) {
+        VALUE exception = rb_protect(callback_internal_error,
+                                     (VALUE)s.err, &exc);
+        if (exc) {
+            c->exception = callback_exception_from_state(exc, &c->pending_jump_tag);
+        } else {
+            c->exception = exception;
+        }
         ser_reset(&s);
         goto fail;
     }
@@ -1056,10 +1119,25 @@ out:
 fail:
     ser_init0(&s);   // ruby exception pending
     w_byte(&s, 'e'); // send ruby error message to v8 thread
-    r = rb_funcall(c->exception, rb_intern("to_s"), 0);
-    err = StringValuePtr(r);
-    if (err)
+    r = Qnil;
+    if (!NIL_P(c->exception)) {
+        VALUE original_exception = c->exception;
+        r = rb_protect(callback_exception_to_s, c->exception, &exc);
+        if (exc) {
+            callback_exception_from_state(exc, &c->pending_jump_tag);
+            r = Qnil;
+        }
+        // to_s can re-enter the context and consume c->exception. Keep the
+        // original callback exception for the eventual Ruby-side re-raise.
+        c->exception = original_exception;
+    }
+    if (NIL_P(r)) {
+        err = "Ruby exception";
+        w(&s, err, strlen(err));
+    } else {
+        err = RSTRING_PTR(r);
         w(&s, err, RSTRING_LEN(r));
+    }
     goto out;
 }
 
@@ -1350,6 +1428,12 @@ static VALUE rendezvous1(Context *c, Buf *req, DesCtx *d)
     int exc;
 
     rendezvous_no_des(c, req, &res); // takes ownership of |req|
+    int jump_tag = c->pending_jump_tag;
+    c->pending_jump_tag = 0;
+    if (jump_tag) {
+        buf_reset(&res);
+        rb_jump_tag(jump_tag);
+    }
     r = c->exception;
     c->exception = Qnil;
     // if js land didn't handle exception from ruby callback, re-raise it now
@@ -2146,15 +2230,22 @@ static VALUE snapshot_dump(VALUE self)
     Snapshot *ss;
 
     TypedData_Get_Struct(self, Snapshot, &snapshot_type, ss);
-    return ss->blob;
+    // Callers may mutate the returned String; never expose the blob that
+    // Context.new/snapshot_warmup later hand to V8.
+    return rb_str_dup(ss->blob);
 }
 
 static VALUE snapshot_load(VALUE klass, VALUE blob)
 {
     Snapshot *ss;
     VALUE self;
+    char err[128];
 
     Check_Type(blob, T_STRING);
+    if (v8_snapshot_validate((const uint8_t *)RSTRING_PTR(blob),
+                             (size_t)RSTRING_LEN(blob), err, sizeof(err))) {
+        rb_raise(snapshot_error, "%s", err);
+    }
     self = snapshot_alloc(klass);
     TypedData_Get_Struct(self, Snapshot, &snapshot_type, ss);
     ss->blob = rb_str_dup(blob);
