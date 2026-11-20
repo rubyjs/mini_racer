@@ -106,6 +106,8 @@ struct State
     // Tracks reentrant call/eval dispatches so nested await calls can fail
     // instead of deadlocking and nested pumps preserve outer termination.
     int javascript_call_depth;
+    // Attach getters/setters can reenter JS, but attach does not own termination.
+    int attach_depth;
     bool verbose_exceptions;
     std::vector<Callback*> callbacks;
     std::unique_ptr<v8::ArrayBuffer::Allocator> allocator;
@@ -585,10 +587,19 @@ void v8_api_callback(const v8::FunctionCallbackInfo<v8::Value>& info)
     info.GetReturnValue().Set(result);
 }
 
+struct JavascriptCallScope
+{
+    int& depth;
+
+    explicit JavascriptCallScope(int& depth) : depth(depth) { depth++; }
+    ~JavascriptCallScope() { depth--; }
+};
+
 // response is err or empty string
 extern "C" void v8_attach(State *pst, const uint8_t *p, size_t n)
 {
     State& st = *pst;
+    JavascriptCallScope call_scope(st.attach_depth);
     v8::TryCatch try_catch(st.isolate);
     try_catch.SetVerbose(st.verbose_exceptions);
     v8::HandleScope handle_scope(st.isolate);
@@ -642,14 +653,6 @@ fail:
     reply_retry(st, err);
 }
 
-struct JavascriptCallScope
-{
-    int& depth;
-
-    explicit JavascriptCallScope(int& depth) : depth(depth) { depth++; }
-    ~JavascriptCallScope() { depth--; }
-};
-
 void throw_nested_await_call(State& st)
 {
     // V8 does not run microtask checkpoints recursively. A nested await call
@@ -666,7 +669,8 @@ bool await_promise(State& st, v8::Local<v8::Value> *result)
     if (!(*result)->IsPromise()) return true;
     auto promise = result->As<v8::Promise>();
     for (;;) {
-        v8::MicrotasksScope::PerformCheckpoint(st.isolate);
+        if (!st.terminate_requested.load() && !st.isolate->IsExecutionTerminating())
+            v8::MicrotasksScope::PerformCheckpoint(st.isolate);
         switch (promise->State()) {
         case v8::Promise::kFulfilled:
             *result = promise->Result();
@@ -691,6 +695,22 @@ bool await_promise(State& st, v8::Local<v8::Value> *result)
     }
 }
 
+// Let the caller handle a pending stop before V8 runs Promise jobs. Otherwise
+// a checkpoint at the API boundary can overwrite a captured Ruby exception
+// with the termination exception before we have a chance to report it.
+template <typename Run>
+v8::MaybeLocal<v8::Value> run_with_checkpoint(State& st, bool nested, Run run)
+{
+    if (nested || st.attach_depth > 0) return run();
+    auto policy = st.isolate->GetMicrotasksPolicy();
+    st.isolate->SetMicrotasksPolicy(v8::MicrotasksPolicy::kExplicit);
+    auto result = run();
+    st.isolate->SetMicrotasksPolicy(policy);
+    if (!st.terminate_requested.load() && !st.isolate->IsExecutionTerminating())
+        v8::MicrotasksScope::PerformCheckpoint(st.isolate);
+    return result;
+}
+
 // Nested calls report termination but leave it pending for the enclosing call.
 // Outermost calls consume it as before.
 bool suspend_termination(State& st, bool nested, int& cause)
@@ -701,6 +721,17 @@ bool suspend_termination(State& st, bool nested, int& cause)
     st.isolate->CancelTerminateExecution();
     cause = st.err_reason ? st.err_reason : TERMINATED_ERROR;
     if (!nested) st.err_reason = NO_ERROR;
+    if (!nested && st.attach_depth == 0) {
+        // V8 skips its automatic checkpoint when execution terminates. Re-arm
+        // termination so queued JS cannot run unbounded during the reply. V8
+        // drops the queue once it observes the interrupt; native jobs without
+        // an interrupt check may complete first.
+        // Keep this termination out of the caller's exception handler.
+        v8::TryCatch cleanup(st.isolate);
+        st.isolate->TerminateExecution();
+        v8::MicrotasksScope::PerformCheckpoint(st.isolate);
+        st.isolate->CancelTerminateExecution();
+    }
     return nested;
 }
 
@@ -725,7 +756,7 @@ void v8_call_impl(State *pst, const uint8_t *p, size_t n, bool await)
     bool preserve_termination = false;
     bool nested = st.javascript_call_depth > 0;
     JavascriptCallScope call_scope(st.javascript_call_depth);
-    if (await && nested) {
+    if (await && (nested || st.attach_depth > 0)) {
         throw_nested_await_call(st);
         cause = RUNTIME_ERROR;
         goto fail;
@@ -774,7 +805,9 @@ void v8_call_impl(State *pst, const uint8_t *p, size_t n, bool await)
             if (!request->Get(st.context, i).ToLocal(&val)) goto fail;
             args.push_back(val);
         }
-        auto maybe_result_v = function->Call(st.context, obj, args.size(), args.data());
+        auto maybe_result_v = run_with_checkpoint(st, nested, [&] {
+            return function->Call(st.context, obj, args.size(), args.data());
+        });
         v8::Local<v8::Value> result_v;
         if (!maybe_result_v.ToLocal(&result_v)) goto fail;
         if (await && !await_promise(st, &result_v)) goto fail;
@@ -846,7 +879,7 @@ void v8_eval_impl(State *pst, const uint8_t *p, size_t n, bool await)
     bool preserve_termination = false;
     bool nested = st.javascript_call_depth > 0;
     JavascriptCallScope call_scope(st.javascript_call_depth);
-    if (await && nested) {
+    if (await && (nested || st.attach_depth > 0)) {
         throw_nested_await_call(st);
         cause = RUNTIME_ERROR;
         goto fail;
@@ -868,7 +901,9 @@ void v8_eval_impl(State *pst, const uint8_t *p, size_t n, bool await)
         if (!v8::Script::Compile(st.context, source, &origin).ToLocal(&script)) goto fail;
         v8::Local<v8::Value> result_v;
         cause = RUNTIME_ERROR;
-        auto maybe_result_v = script->Run(st.context);
+        auto maybe_result_v = run_with_checkpoint(st, nested, [&] {
+            return script->Run(st.context);
+        });
         if (!maybe_result_v.ToLocal(&result_v)) goto fail;
         if (await && !await_promise(st, &result_v)) goto fail;
         result = sanitize(st, result_v);
@@ -1016,12 +1051,8 @@ extern "C" void v8_pump_message_loop(State *pst)
     }
 fail:
     // A nested pump must leave termination active for the enclosing call/eval.
-    if (!nested &&
-        (st.terminate_requested.exchange(0) ||
-         st.isolate->IsExecutionTerminating())) {
-        st.isolate->CancelTerminateExecution();
-        st.err_reason = NO_ERROR;
-    }
+    int cause = NO_ERROR;
+    if (!nested) suspend_termination(st, false, cause);
     auto result = v8::Boolean::New(st.isolate, ran_task);
     reply_retry(st, result);
 }

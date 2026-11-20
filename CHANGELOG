@@ -1,4 +1,6 @@
 - Unreleased
+  - Fix CRuby eval and call hanging after termination when Promise jobs are queued, and preserve Ruby callback exceptions during termination cleanup
+  - Bound the rest of a CRuby `pump_message_loop` turn after a nested eval or call times out, allowing the callback to recover without hanging on queued Promise jobs
   - Preserve multiline JavaScript runtime error messages separately from backtraces (#262)
   - Convert Ruby Date values, including nested values and callback results, to JavaScript Date using to_time (#136)
   - Discard Context#load's completion value to avoid invoking getters during result conversion; load now returns nil (#197)

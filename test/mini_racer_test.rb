@@ -2160,6 +2160,181 @@ class MiniRacerTest < Minitest::Test
         JS
   end
 
+  def test_timeout_discards_queued_microtasks
+    skip "CRuby V8 termination regression" unless RUBY_ENGINE == "ruby"
+
+    assert_ruby_script(<<~'RUBY', timeout: 10)
+      context = MiniRacer::Context.new(timeout: 500)
+      begin
+        context.eval(<<~JS)
+          globalThis.jobRan = false;
+          Promise.resolve().then(function loop() {
+            globalThis.jobRan = true;
+            Promise.resolve().then(loop);
+          });
+          while (true) {}
+        JS
+        raise "expected termination"
+      rescue MiniRacer::ScriptTerminatedError
+      end
+
+      raise "queued job ran after termination" unless context.eval("jobRan") == false
+
+      context.eval("Promise.resolve().then(() => { jobRan = true; }); 0")
+      raise "new Promise job did not run" unless context.eval("jobRan") == true
+    RUBY
+  end
+
+  def test_stop_with_queued_microtask_preserves_ruby_exception
+    skip "CRuby V8 termination regression" unless RUBY_ENGINE == "ruby"
+
+    context = MiniRacer::Context.new
+    context.attach(
+      "stopAndRaise",
+      proc do
+        context.stop
+        raise ReproError.new(Response.new(404))
+      end
+    )
+
+    context.eval(<<~JS)
+      function stopWithJob() {
+        Promise.resolve().then(() => {});
+        stopAndRaise();
+      }
+      async function stopWithJobAsync() { stopWithJob(); }
+    JS
+
+    {
+      eval: "stopWithJob()",
+      call: "stopWithJob",
+      eval_await: "stopWithJobAsync()",
+      call_await: "stopWithJobAsync"
+    }.each do |method, source|
+      error = assert_raises(ReproError) { context.public_send(method, source) }
+      assert_equal "response said 404", error.message
+      assert_equal 2, context.eval("1 + 1")
+    end
+  end
+
+  def test_attach_setter_finishes_before_queued_microtask
+    skip "CRuby V8 microtask ordering regression" unless RUBY_ENGINE == "ruby"
+
+    context = MiniRacer::Context.new
+    context.attach("nestedEval", proc { context.eval("0") })
+    context.eval(<<~JS)
+      globalThis.events = [];
+      Object.defineProperty(globalThis, "hook", { set(_) {
+        Promise.resolve().then(() => events.push("job"));
+        nestedEval();
+        events.push("setter");
+      }});
+    JS
+    context.attach("hook", proc {})
+    assert_equal %w[setter job], context.eval("events")
+  end
+
+  def test_attach_setter_can_rescue_stop_from_nested_eval
+    skip "CRuby V8 termination regression" unless RUBY_ENGINE == "ruby"
+
+    context = MiniRacer::Context.new
+    context.attach("stopNow", proc { context.stop })
+    context.attach(
+      "nestedEval",
+      proc do
+        context.eval("stopNow(); 1")
+      rescue MiniRacer::ScriptTerminatedError
+        2
+      end
+    )
+    context.eval(<<~JS)
+      globalThis.events = [];
+      Object.defineProperty(globalThis, "hook", { set(_) {
+        Promise.resolve().then(() => events.push("job"));
+        events.push(nestedEval());
+      }});
+    JS
+    context.attach("hook", proc {})
+    assert_equal [2, "job"], context.eval("events")
+  end
+
+  def test_attach_setter_rejects_nested_await_before_entering_javascript
+    skip "CRuby V8 nested await regression" unless RUBY_ENGINE == "ruby"
+
+    assert_ruby_script(<<~'RUBY', timeout: 10)
+      context = MiniRacer::Context.new
+      rejected = []
+      context.attach("tryNestedAwait", proc do
+        { eval_await: "awaitTarget()", call_await: "awaitTarget" }.each do |method, source|
+          begin
+            context.public_send(method, source)
+            raise "expected #{method} to reject nested execution"
+          rescue MiniRacer::RuntimeError => error
+            raise unless error.message.include?("nested call_await/eval_await is not supported")
+            rejected << method
+          end
+        end
+        nil
+      end)
+      context.eval(<<~JS)
+        globalThis.entered = false;
+        globalThis.setterFinished = false;
+        function awaitTarget() {
+          entered = true;
+          return new Promise(() => {});
+        }
+        Object.defineProperty(globalThis, "hook", { set(_) {
+          tryNestedAwait();
+          setterFinished = true;
+        }});
+      JS
+      context.attach("hook", proc {})
+      raise "expected both nested awaits to be rejected" unless rejected == [:eval_await, :call_await]
+      raise "nested await ran JavaScript or interrupted the setter" unless context.eval("[entered, setterFinished]") == [false, true]
+    RUBY
+  end
+
+  def test_pump_recovers_after_rescued_nested_timeout
+    skip "CRuby V8 termination regression" unless RUBY_ENGINE == "ruby"
+
+    assert_ruby_script(<<~'RUBY', timeout: 10)
+      # A FIFO marker cannot protect against a runaway job already queued
+      # before the nested eval starts. Ordinary jobs must still finish.
+      [:finite, :before, :inside].each do |queued_job|
+        context = MiniRacer::Context.new(timeout: 200)
+        timed_out = false
+        context.attach("nestedEval", proc do
+          source = "while (true) {}"
+          if queued_job == :inside
+            source = "Promise.resolve().then(function loop() { Promise.resolve().then(loop); }); #{source}"
+          end
+          begin
+            context.eval(source)
+          rescue MiniRacer::ScriptTerminatedError
+            timed_out = true
+          end
+          context.eval("1 + 1")
+        end)
+        job = queued_job == :before ? "while (true) {}" : "events.push('job')"
+        context.eval(<<~JS)
+          globalThis.events = [];
+          const i32 = new Int32Array(new SharedArrayBuffer(4));
+          Atomics.waitAsync(i32, 0, 0, 20).value.then(() => {
+            Promise.resolve().then(() => { #{job}; });
+            events.push(nestedEval());
+          });
+        JS
+        until timed_out
+          context.pump_message_loop
+          sleep 0.01
+        end
+        expected = queued_job == :before ? [2] : [2, "job"]
+        raise "pump did not finish as expected" unless context.eval("events") == expected
+        raise "Promise queue unusable" unless context.eval_await("Promise.resolve().then(() => 42)") == 42
+      end
+    RUBY
+  end
+
   def test_eval_returns_unfrozen_string
     context = MiniRacer::Context.new
     result = context.eval("'Hello George!'")

@@ -156,7 +156,9 @@ typedef struct Context
     struct {
         pthread_mutex_t mtx;
         pthread_cond_t cv;
-        int active; // dispatch thread only
+        pthread_t thread;
+        bool active; // dispatch thread only
+        bool pump_recovery; // dispatch thread only
         int cancel; // protected by |mtx|
     } wd; // watchdog
     Barrier early_init, late_init;
@@ -809,41 +811,65 @@ static void *v8_watchdog(void *arg)
             break;
         if (deadline_exceeded(deadline)) {
             v8_terminate_watchdog(c->pst);
-            break;
+            pthread_mutex_unlock(&c->wd.mtx);
+            return c; // deadline expired
         }
     }
     pthread_mutex_unlock(&c->wd.mtx);
     return NULL;
 }
 
-static void v8_timedwait(Context *c, const uint8_t *p, size_t n,
-                         void (*func)(struct State *pst, const uint8_t *p, size_t n))
+static bool v8_start_watchdog(Context *c)
 {
-    pthread_t thr;
     int r;
 
-    if (c->timeout <= 0 || c->wd.active) {
-        func(c->pst, p, n);
-        return;
-    }
-    c->wd.active = 1;
-    r = pthread_create(&thr, NULL, v8_watchdog, c);
+    if (c->timeout <= 0 || c->wd.active) return false;
+    r = pthread_create(&c->wd.thread, NULL, v8_watchdog, c);
     if (r) {
-        c->wd.active = 0;
         fprintf(stderr, "mini_racer: watchdog: pthread_create: %s\n", strerror(r));
         fflush(stderr);
+        return false;
     }
-    func(c->pst, p, n);
-    if (r)
-        return;
+    c->wd.active = true;
+    return true;
+}
+
+static bool v8_join_watchdog(Context *c)
+{
+    void *expired = NULL;
+
     pthread_mutex_lock(&c->wd.mtx);
     c->wd.cancel = 1;
     pthread_cond_signal(&c->wd.cv);
     pthread_mutex_unlock(&c->wd.mtx);
-    pthread_join(thr, NULL);
+    pthread_join(c->wd.thread, &expired);
     v8_cancel_watchdog_termination(c->pst);
     c->wd.cancel = 0;
-    c->wd.active = 0;
+    c->wd.active = false;
+    return expired != NULL;
+}
+
+static void v8_timedwait(Context *c, const uint8_t *p, size_t n,
+                         void (*func)(struct State *pst, const uint8_t *p, size_t n))
+{
+    bool owns_watchdog = v8_start_watchdog(c);
+    func(c->pst, p, n);
+    if (owns_watchdog && v8_join_watchdog(c) && c->wd.pump_recovery) {
+        // Give the callback and the rest of the pump one fresh timeout window.
+        // The enclosing pump joins this watchdog, not the nested eval/call.
+        v8_start_watchdog(c);
+    }
+}
+
+static void v8_dispatch_pump(Context *c)
+{
+    bool owns_recovery = !c->wd.active && !c->wd.pump_recovery;
+    if (owns_recovery) c->wd.pump_recovery = true;
+    v8_pump_message_loop(c->pst);
+    if (owns_recovery) {
+        if (c->wd.active) v8_join_watchdog(c);
+        c->wd.pump_recovery = false;
+    }
 }
 
 static void dispatch1(Context *c, const uint8_t *p, size_t n)
@@ -859,7 +885,7 @@ static void dispatch1(Context *c, const uint8_t *p, size_t n)
     case 'F': return v8_timedwait(c, p+1, n-1, v8_eval_await);
     case 'H': return v8_heap_snapshot(c->pst);
     case 'M': return v8_perform_microtask_checkpoint(c->pst);
-    case 'P': return v8_pump_message_loop(c->pst);
+    case 'P': return v8_dispatch_pump(c);
     case 'S': return v8_heap_stats(c->pst);
     case 'T': return v8_snapshot(c->pst, p+1, n-1);
     case 'W': return v8_warmup(c->pst, p+1, n-1);
