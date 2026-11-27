@@ -25,7 +25,6 @@ struct Context;
 struct State;
 
 // defined in mini_racer_extension.c
-extern int single_threaded;
 void v8_get_flags(char **p, size_t *n);
 void v8_thread_main(struct Context *c, struct State *pst);
 void v8_dispatch(struct Context *c);
@@ -33,10 +32,11 @@ void v8_reply(struct Context *c, const uint8_t *p, size_t n);
 void v8_roundtrip(struct Context *c, const uint8_t **p, size_t *n);
 
 // defined in mini_racer_v8.cc
-void v8_global_init(void);
+void v8_global_init(int platform_single_threaded);
 struct State *v8_thread_init(struct Context *c, const uint8_t *snapshot_buf,
                              size_t snapshot_len, int64_t max_memory,
-                             int verbose_exceptions); // calls v8_thread_main
+                             int verbose_exceptions,
+                             int platform_single_threaded); // calls v8_thread_main
 void v8_attach(struct State *pst, const uint8_t *p, size_t n);
 void v8_call(struct State *pst, const uint8_t *p, size_t n);
 void v8_call_await(struct State *pst, const uint8_t *p, size_t n);
